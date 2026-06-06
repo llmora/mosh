@@ -73,6 +73,51 @@ class JsEndpointExtractorScriptTests(unittest.TestCase):
                 },
             )
 
+    def test_resolves_inline_context_constants_from_json_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            js = root / "shell.js"
+            js.write_text(
+                """
+                const API_BASE = (window.BACKOFFICE_API_BASE || '/api/private').replace(/\\/$/, '');
+                const AUTH_BASE = API_BASE;
+                const SALES_BASE = `${API_BASE}/sales`;
+
+                fetch(`${AUTH_BASE}/auth/login`, { method: 'POST' });
+                fetch(`${SALES_BASE}/customers`);
+                """,
+                encoding="utf-8",
+            )
+            payload = [
+                {
+                    "source": str(js),
+                    "page_url": "https://example.test/backoffice/",
+                    "inline_scripts": [
+                        "window.BACKOFFICE_API_BASE = 'https://api.example.test/api/private';"
+                    ],
+                }
+            ]
+
+            completed = subprocess.run(
+                ["node", str(SCRIPT_PATH), "--json"],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            output = json.loads(completed.stdout)
+            endpoints = set(output[0]["endpoints"])
+            self.assertEqual(
+                endpoints,
+                {
+                    "https://api.example.test/api/private/auth/login",
+                    "https://api.example.test/api/private/sales/customers",
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -160,14 +160,7 @@ class CrawlerAgent:
             {"tool": tool.definition.name, "url": url, "max_pages": max_pages, "max_depth": max_depth},
         )
         crawl = tool.run(url, max_pages=max_pages, max_depth=max_depth)
-        result_data: dict[str, object] = {
-            "pages": len(crawl.pages),
-            "candidates": len(crawl.candidates),
-            "out_of_scope": len(crawl.out_of_scope),
-            "failed": len(crawl.failed),
-        }
-        if crawl.failed:
-            result_data["failures"] = crawl.failed
+        result_data = _crawl_event_result_data(crawl)
         memory.record_event(
             self.name,
             "tool_result",
@@ -238,17 +231,14 @@ class CrawlerAgent:
                 "tool": tool_name,
                 "javascript_urls": len(js_urls),
                 "sample": js_urls[:5],
+                "javascript_contexts": len(_javascript_contexts(crawl)) if tool_name == "js_static_endpoint_discovery" else 0,
             },
         )
-        javascript_crawl = tool.run(crawl.start_url, js_urls)
-        result_data: dict[str, object] = {
-            "pages": len(javascript_crawl.pages),
-            "candidates": len(javascript_crawl.candidates),
-            "out_of_scope": len(javascript_crawl.out_of_scope),
-            "failed": len(javascript_crawl.failed),
-        }
-        if javascript_crawl.failed:
-            result_data["failures"] = javascript_crawl.failed
+        if tool_name == "js_static_endpoint_discovery":
+            javascript_crawl = tool.run(crawl.start_url, js_urls, _javascript_contexts(crawl))
+        else:
+            javascript_crawl = tool.run(crawl.start_url, js_urls)
+        result_data = _crawl_event_result_data(javascript_crawl)
         memory.record_event(
             self.name,
             "tool_result",
@@ -411,6 +401,45 @@ def _javascript_urls(crawl: CrawlResult) -> list[str]:
             if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
         }
     )
+
+
+def _javascript_contexts(crawl: CrawlResult) -> list[dict[str, object]]:
+    contexts: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for page in crawl.pages:
+        page_js_urls = [
+            value
+            for value in [page.url, *page.references]
+            if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
+        ]
+        for js_url in sorted(set(page_js_urls)):
+            key = (page.url, js_url)
+            if key in seen:
+                continue
+            seen.add(key)
+            contexts.append(
+                {
+                    "source": js_url,
+                    "page_url": page.url,
+                    "inline_scripts": page.inline_scripts,
+                }
+            )
+    return contexts
+
+
+def _crawl_event_result_data(crawl: CrawlResult, sample_limit: int = 20) -> dict[str, object]:
+    result_data: dict[str, object] = {
+        "pages": len(crawl.pages),
+        "page_urls": [page.url for page in crawl.pages[:sample_limit]],
+        "candidates": len(crawl.candidates),
+        "candidate_urls": [candidate.url for candidate in crawl.candidates[:sample_limit]],
+        "out_of_scope": len(crawl.out_of_scope),
+        "out_of_scope_urls": crawl.out_of_scope[:sample_limit],
+        "failed": len(crawl.failed),
+    }
+    if crawl.failed:
+        result_data["failures"] = crawl.failed
+    return result_data
 
 
 def _candidate_skip_reason(

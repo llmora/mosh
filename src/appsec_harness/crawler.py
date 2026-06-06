@@ -20,9 +20,12 @@ class LinkExtractor(HTMLParser):
         self.links: list[str] = []
         self.references: list[str] = []
         self.forms: list[str] = []
+        self.inline_scripts: list[str] = []
         self.title: str | None = None
         self._in_title = False
         self._title_parts: list[str] = []
+        self._in_inline_script = False
+        self._script_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name.lower(): value for name, value in attrs if value}
@@ -33,7 +36,13 @@ class LinkExtractor(HTMLParser):
         elif tag == "form":
             action = values.get("action") or self.base_url
             self.forms.append(self._absolute(action))
-        elif tag in {"script", "img", "iframe", "source"} and values.get("src"):
+        elif tag == "script":
+            if values.get("src"):
+                self.references.append(self._absolute(values["src"]))
+            else:
+                self._in_inline_script = True
+                self._script_parts = []
+        elif tag in {"img", "iframe", "source"} and values.get("src"):
             self.references.append(self._absolute(values["src"]))
         elif tag == "link" and values.get("href"):
             self.references.append(self._absolute(values["href"]))
@@ -43,10 +52,18 @@ class LinkExtractor(HTMLParser):
             self._in_title = False
             title = "".join(self._title_parts).strip()
             self.title = title or None
+        if tag == "script" and self._in_inline_script:
+            self._in_inline_script = False
+            script = "".join(self._script_parts).strip()
+            if script:
+                self.inline_scripts.append(script)
+            self._script_parts = []
 
     def handle_data(self, data: str) -> None:
         if self._in_title:
             self._title_parts.append(data)
+        if self._in_inline_script:
+            self._script_parts.append(data)
 
     def _absolute(self, value: str) -> str:
         return strip_fragment(urljoin(self.base_url, value))
@@ -109,6 +126,7 @@ class Crawler:
 
     def _fetch_page(self, url: str) -> CrawledPage:
         response = self._open(url)
+        final_url = strip_fragment(response.geturl() or url)
         status = response.status
         headers = dict(response.headers.items())
         content_type = response.headers.get("content-type", "")
@@ -116,19 +134,21 @@ class Crawler:
         links: list[str] = []
         references: list[str] = []
         forms: list[str] = []
+        inline_scripts: list[str] = []
         title: str | None = None
 
         if "html" in content_type.lower():
             text = body.decode(_charset_from_content_type(content_type), errors="replace")
-            parser = LinkExtractor(url)
+            parser = LinkExtractor(final_url)
             parser.feed(text)
             links = sorted(set(parser.links))
             references = sorted(set(parser.references))
             forms = sorted(set(parser.forms))
+            inline_scripts = parser.inline_scripts
             title = parser.title
 
         return CrawledPage(
-            url=url,
+            url=final_url,
             status=status,
             content_type=content_type,
             title=title,
@@ -136,6 +156,7 @@ class Crawler:
             links=links,
             references=references,
             forms=forms,
+            inline_scripts=inline_scripts,
         )
 
     def _fetch_robots(self, start_url: str) -> dict[str, object]:

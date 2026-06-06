@@ -376,9 +376,12 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent:
         appendix: list[NarrativeItem] = crewai.Field(default_factory=list)
 
     class ReportInput(crewai.BaseModel):
-        report: DiscoveryMarkdownReport = crewai.Field(
+        report: DiscoveryMarkdownReport | dict[str, Any] | str = crewai.Field(
             ...,
-            description="Structured report content. The tool renders report.md in a fixed layout from this object.",
+            description=(
+                "Structured report content. Prefer passing a JSON object. "
+                "A JSON string is accepted as a compatibility fallback."
+            ),
         )
 
     class WriteDiscoveryReportTool(crewai.BaseTool):

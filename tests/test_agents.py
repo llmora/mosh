@@ -69,8 +69,16 @@ class FakeExtractifyTool:
         self.result = result
         self.calls: list[dict[str, object]] = []
 
-    def run(self, start_url: str, js_urls: list[str]) -> CrawlResult:
-        self.calls.append({"start_url": start_url, "js_urls": js_urls})
+    def run(
+        self,
+        start_url: str,
+        js_urls: list[str],
+        contexts: list[dict[str, object]] | None = None,
+    ) -> CrawlResult:
+        call: dict[str, object] = {"start_url": start_url, "js_urls": js_urls}
+        if contexts is not None:
+            call["contexts"] = contexts
+        self.calls.append(call)
         return self.result
 
 
@@ -445,6 +453,7 @@ class AgentToolBoundaryTests(unittest.TestCase):
                             links=[],
                             references=["https://example.test/shell.js"],
                             forms=[],
+                            inline_scripts=["window.BACKOFFICE_API_BASE = 'https://api.example.test/api/private';"],
                         )
                     ],
                     out_of_scope=[],
@@ -477,7 +486,24 @@ class AgentToolBoundaryTests(unittest.TestCase):
 
             result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
 
-            self.assertEqual(js_static.calls, [{"start_url": "https://example.test/", "js_urls": ["https://example.test/shell.js"]}])
+            self.assertEqual(
+                js_static.calls,
+                [
+                    {
+                        "start_url": "https://example.test/",
+                        "js_urls": ["https://example.test/shell.js"],
+                        "contexts": [
+                            {
+                                "source": "https://example.test/shell.js",
+                                "page_url": "https://example.test/",
+                                "inline_scripts": [
+                                    "window.BACKOFFICE_API_BASE = 'https://api.example.test/api/private';"
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            )
             self.assertIn("https://api.example.test/api/private/auth/login", {page.url for page in result.pages})
 
             events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
@@ -485,6 +511,13 @@ class AgentToolBoundaryTests(unittest.TestCase):
                 any(
                     event["action"] == "tool_call"
                     and event["data"].get("tool") == "js_static_endpoint_discovery"
+                    for event in events
+                )
+            )
+            self.assertTrue(
+                any(
+                    event["action"] == "tool_result"
+                    and "https://api.example.test/api/private/auth/login" in event["data"].get("page_urls", [])
                     for event in events
                 )
             )

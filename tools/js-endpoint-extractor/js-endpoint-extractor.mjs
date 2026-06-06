@@ -184,6 +184,18 @@ function collectEnvironment(ast, env) {
   }
 }
 
+function collectInlineEnvironment(inlineScripts, env) {
+  for (const script of inlineScripts || []) {
+    if (typeof script !== 'string' || !script.trim()) continue;
+    try {
+      const ast = parseJavaScript(script, 'script');
+      collectEnvironment(ast, env);
+    } catch {
+      continue;
+    }
+  }
+}
+
 function endpointKind(node) {
   const calleeName = memberName(node.callee);
   if (calleeName === 'fetch') return { kind: 'fetch', argument: node.arguments[0] };
@@ -256,16 +268,47 @@ function groupBySource(findings) {
   }));
 }
 
+function parseSourceContexts(input) {
+  const trimmed = input.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item) => item && typeof item.source === 'string' && item.source.trim())
+          .map((item) => ({
+            source: item.source.trim(),
+            pageUrl: typeof item.page_url === 'string' ? item.page_url : typeof item.pageUrl === 'string' ? item.pageUrl : '',
+            inlineScripts: Array.isArray(item.inline_scripts)
+              ? item.inline_scripts.filter((script) => typeof script === 'string')
+              : Array.isArray(item.inlineScripts)
+                ? item.inlineScripts.filter((script) => typeof script === 'string')
+                : [],
+          }));
+      }
+    } catch {
+      // Fall through to legacy newline-separated URL parsing.
+    }
+  }
+  return input
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((source) => ({ source, pageUrl: '', inlineScripts: [] }));
+}
+
 const input = await readStdin();
-const sources = input.split(/\s+/).map((value) => value.trim()).filter(Boolean);
+const sourceContexts = parseSourceContexts(input);
 const baseEnv = await collectBaseEnvironment(baseUrl);
 const allFindings = [];
 
-for (const source of sources) {
+for (const context of sourceContexts) {
+  const source = context.source;
   try {
     const text = await readSource(source);
     const ast = parseJavaScript(text);
     const env = new Map(baseEnv);
+    collectInlineEnvironment(context.inlineScripts, env);
     collectEnvironment(ast, env);
     allFindings.push(...findEndpoints(ast, env, source));
   } catch (error) {

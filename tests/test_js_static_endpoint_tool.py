@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from appsec_harness.docker_tools import DockerToolResult
@@ -47,6 +48,26 @@ class JsStaticEndpointDockerToolTests(unittest.TestCase):
             [page.url for page in result.pages],
             ["https://api.example.test/users", "https://example.test/api/login"],
         )
+
+    def test_passes_page_contexts_to_static_endpoint_extractor(self) -> None:
+        runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="[]", stderr=""))
+        tool = JsStaticEndpointDockerTool("discovery-tools:test", runner=runner)
+        contexts = [
+            {
+                "source": "https://example.test/backoffice/shell.js",
+                "page_url": "https://example.test/backoffice/",
+                "inline_scripts": ["window.BACKOFFICE_API_BASE = 'https://api.example.test/api/private';"],
+            }
+        ]
+
+        tool.run(
+            "https://example.test/",
+            ["https://example.test/backoffice/shell.js"],
+            contexts=contexts,
+        )
+
+        payload = json.loads(runner.calls[0]["input_text"])
+        self.assertEqual(payload, contexts)
 
     def test_parses_static_endpoint_json_with_scope_filtering(self) -> None:
         output = (

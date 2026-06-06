@@ -20,6 +20,17 @@ class CrawlerTests(unittest.TestCase):
         self.assertTrue(result.robots["found"])
         self.assertEqual(result.failed, [])
 
+    def test_resolves_relative_references_against_final_redirect_url_and_keeps_inline_scripts(self) -> None:
+        with fixture_server() as url:
+            base = url.rstrip("/")
+            result = Crawler(timeout=3).crawl(f"{base}/redirect-app", max_pages=1, max_depth=0)
+
+        self.assertEqual(result.failed, [])
+        page = result.pages[0]
+        self.assertEqual(page.url, f"{base}/redirect-app/")
+        self.assertIn(f"{base}/redirect-app/shell.js", page.references)
+        self.assertTrue(any("BACKOFFICE_API_BASE" in script for script in page.inline_scripts))
+
 
 if __name__ == "__main__":
     unittest.main()

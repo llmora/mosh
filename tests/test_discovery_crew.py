@@ -7,6 +7,7 @@ from importlib import resources
 from pathlib import Path
 from unittest.mock import patch
 
+from appsec_harness.agents import SummarizerAgent
 from appsec_harness.config import AppConfig
 from appsec_harness.discovery_crew import (
     CREW_CONFIG_PACKAGE,
@@ -14,6 +15,7 @@ from appsec_harness.discovery_crew import (
     CrewAIUnavailable,
     DiscoveryCrewState,
     _build_crawler_tool,
+    _build_report_tool,
     _build_task_with_output_event,
 )
 from appsec_harness.memory import FileMemory
@@ -25,7 +27,9 @@ class FakeCrewAI:
     BaseTool = object
 
     @staticmethod
-    def Field(default, description: str = ""):
+    def Field(default=None, description: str = "", default_factory=None):
+        if default_factory is not None:
+            return default_factory()
         return default
 
 
@@ -188,6 +192,39 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             self.assertEqual(agent_output["data"]["task"], "crawl_application_task")
             self.assertEqual(agent_output["data"]["output"]["raw"], "raw task output")
             self.assertEqual(agent_output["data"]["output"]["json_dict"], {"result": "ok"})
+
+    def test_report_tool_schema_and_runner_accept_json_string_report_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            memory = FileMemory(Path(directory))
+            state = DiscoveryCrewState(
+                target_url="https://example.test",
+                report_dir=Path(directory),
+                memory=memory,
+                max_pages=5,
+                max_depth=3,
+                crawl=CrawlResult(
+                    start_url="https://example.test",
+                    pages=[],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                ),
+            )
+            tool = _build_report_tool(FakeCrewAI, state, SummarizerAgent())
+            report = {
+                "title": "Application Discovery Results",
+                "executive_summary": "Summary",
+                "application_description": "Description",
+            }
+
+            report_annotation = tool.args_schema.__annotations__["report"]
+            self.assertIn("str", str(report_annotation))
+            result = json.loads(tool._run(json.dumps(report)))
+
+            self.assertEqual(result["structured_keys"], sorted(report.keys()))
+            memory_items = json.loads((Path(directory) / "memory.json").read_text(encoding="utf-8"))
+            llm_report = next(item for item in memory_items if item["kind"] == "llm_report")
+            self.assertEqual(llm_report["content"]["structured"], report)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ class CrawledPage:
     links: list[str]
     references: list[str]
     forms: list[str]
+    inline_scripts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

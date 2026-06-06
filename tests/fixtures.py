@@ -37,6 +37,31 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._send("text/html", "<html><head><title>Search</title></head><body>Search</body></html>")
         elif self.path == "/static/jquery-3.7.1.min.js":
             self._send("application/javascript", "window.jQuery = {};")
+        elif self.path == "/redirect-app":
+            self.send_response(308)
+            self.send_header("Location", "/redirect-app/")
+            self.end_headers()
+        elif self.path == "/redirect-app/":
+            self._send(
+                "text/html; charset=utf-8",
+                """
+                <html>
+                  <head>
+                    <title>Redirect App</title>
+                    <script>
+                      window.BACKOFFICE_API_BASE = 'https://api.example.test/api/private';
+                    </script>
+                    <script type="module" src="./shell.js"></script>
+                  </head>
+                  <body>Redirect app</body>
+                </html>
+                """,
+            )
+        elif self.path == "/redirect-app/shell.js":
+            self._send(
+                "application/javascript",
+                "const API_BASE = (window.BACKOFFICE_API_BASE || '/api/private').replace(/\\/$/, '');",
+            )
         else:
             self.send_response(404)
             self.end_headers()

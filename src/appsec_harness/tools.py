@@ -198,12 +198,18 @@ class JsStaticEndpointDockerTool:
         self.runner = runner or DockerToolRunner(image)
         self.docker_timeout = docker_timeout
 
-    def run(self, start_url: str, js_urls: list[str]) -> CrawlResult:
+    def run(
+        self,
+        start_url: str,
+        js_urls: list[str],
+        contexts: list[dict[str, object]] | None = None,
+    ) -> CrawlResult:
         normalized_start_url = normalize_url(start_url)
         unique_js_urls = sorted({strip_fragment(url) for url in js_urls if url.startswith(("http://", "https://"))})
         if not unique_js_urls:
             return CrawlResult(normalized_start_url, [], [], [], None)
 
+        input_text = _js_static_input(unique_js_urls, contexts)
         result = self.runner.run(
             [
                 "js-endpoint-extractor",
@@ -211,7 +217,7 @@ class JsStaticEndpointDockerTool:
                 normalized_start_url,
                 "--json",
             ],
-            input_text="\n".join(unique_js_urls) + "\n",
+            input_text=input_text,
             timeout=self.docker_timeout,
         )
         crawl = parse_js_static_output(normalized_start_url, result.stdout)
@@ -224,6 +230,20 @@ class JsStaticEndpointDockerTool:
                 robots=None,
             )
         return crawl
+
+
+def _js_static_input(unique_js_urls: list[str], contexts: list[dict[str, object]] | None) -> str:
+    if not contexts:
+        return "\n".join(unique_js_urls) + "\n"
+    known_urls = set(unique_js_urls)
+    selected_contexts = [
+        context
+        for context in contexts
+        if isinstance(context.get("source"), str) and strip_fragment(str(context["source"])) in known_urls
+    ]
+    if not selected_contexts:
+        return "\n".join(unique_js_urls) + "\n"
+    return json.dumps(selected_contexts) + "\n"
 
 
 def parse_katana_output(start_url: str, output: str) -> CrawlResult:
