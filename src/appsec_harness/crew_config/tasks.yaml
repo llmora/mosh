@@ -1,0 +1,94 @@
+crawl_application_task:
+  description: >
+
+    Crawl the target website to discover the visible application structure and surface area.
+    The crawler should identify publicly reachable pages, routes, forms, query parameters,
+    JavaScript files, CSS files, static assets, API endpoints, redirects, linked domains,
+    cookies, response headers, authentication-related pages, and other observable behaviours.
+    The crawl must remain within the authorised scope provided by the orchestrator. It must not
+    attempt exploitation, brute forcing, destructive actions, credential attacks, bypasses, or
+    intrusive testing. The purpose of this task is discovery and mapping only.
+
+    Target URL:
+    
+    {target_url}
+
+    Scope rules:
+    - Crawl depth: {max_depth}
+    - Max pages: {max_pages}
+
+  expected_output: >
+    A structured application discovery map containing:
+    - Target URL and crawl timestamp
+    - Discovered pages and routes
+    - Discovered API endpoints
+    - HTTP methods observed or inferred
+    - Forms and input fields
+    - Query parameters
+    - JavaScript, CSS, and static assets
+    - External domains and third-party services
+    - Cookies and notable response headers
+    - Authentication, login, registration, password reset, or account-related paths
+    - Redirects and error pages
+    - Notes on crawl limitations, blocked areas, or assumptions
+    
+  agent: crawler
+
+compile_components_task:
+  description: >
+    Analyse the discovery data produced by the crawler and compile a visible software bill of
+    materials for the target application. Identify frontend frameworks, JavaScript libraries,
+    backend technology indicators, CMS platforms, analytics tools, CDN providers, payment
+    providers, authentication services, third-party scripts, API technologies, and other
+    observable components.
+
+    Findings must be based on evidence gathered during discovery, such as HTTP headers,
+    cookies, HTML source, JavaScript bundles, script references, package metadata, source maps,
+    manifest files, framework-specific routes, API patterns, CDN URLs, and other visible artefacts.
+
+    Do not guess beyond the available evidence. Where a technology is inferred rather than
+    confirmed, mark it clearly with a confidence level and explain the reason.
+  expected_output: >
+    A structured SBOM-style inventory containing:
+    - Component or technology name
+    - Component type, such as framework, library, CDN, analytics, CMS, API, authentication, payment, or hosting
+    - Version number where visible
+    - Evidence source, such as header, script URL, HTML marker, API response, cookie, or file path
+    - Confidence level: confirmed, likely, possible, or unknown
+    - Related discovered URLs or assets
+    - Notes on uncertainty or missing version information
+    - Any components that could not be identified but appear relevant
+
+  agent: sbom_compiler
+
+write_report_task:
+  description: >
+    Summarise the full application discovery results using the crawler output and the SBOM
+    compiler output. The summary should explain what the application appears to be, what was
+    discovered, which parts of the application are visible, what technologies were identified,
+    and what areas require further review in later security assessment phases.
+    The summary must clearly separate confirmed findings from inferred findings. It should avoid
+    making vulnerability claims unless they are directly supported by the discovery data. This task
+    is not responsible for exploitation, vulnerability validation, or risk scoring.
+
+    You must call the write_discovery_report tool exactly once. Pass your complete final
+    Markdown report in the markdown_report argument. That Markdown is persisted to
+    report.md, so do not rely on the final chat response as the report artifact.
+    Include optional structured report content in report_json when useful.
+    
+  expected_output: >
+    Confirmation that write_discovery_report persisted a clear application discovery
+    report in JSON and markdown. The markdown_report tool argument must contain:
+    - Executive summary
+    - Target and discovery scope
+    - High-level application description
+    - Key discovered areas of the application
+    - Important routes, endpoints, forms, and APIs
+    - Technology and SBOM summary
+    - Third-party services and external dependencies
+    - Authentication and account-related observations
+    - Discovery limitations and blind spots
+    - Confirmed findings versus inferred findings
+    - Recommended next steps for security assessment
+  
+  agent: summarizer
