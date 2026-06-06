@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 
 from appsec_harness.crawler import Crawler
 from appsec_harness.docker_tools import DockerToolRunner
-from appsec_harness.models import CrawledPage, CrawlResult
+from appsec_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
 from appsec_harness.scope import ScopePolicy, normalize_url, strip_fragment
 
 
@@ -92,6 +92,49 @@ class KatanaDockerCrawlerTool:
                 out_of_scope=crawl.out_of_scope,
                 failed=[*crawl.failed, {"url": start_url, "error": _katana_error(result.stderr, result.stdout)}],
                 robots=crawl.robots,
+            )
+        return crawl
+
+
+class DirbDockerDiscoveryTool:
+    definition = ToolDefinition(
+        name="dirb_docker_discovery",
+        description="Run Dirb inside the discovery tools container to discover additional in-scope paths from a bounded wordlist.",
+    )
+
+    def __init__(
+        self,
+        image: str,
+        runner: DockerToolRunner | None = None,
+        wordlist: str = "/usr/share/dirb/wordlists/common.txt",
+        docker_timeout: int = 120,
+    ) -> None:
+        self.runner = runner or DockerToolRunner(image)
+        self.wordlist = wordlist
+        self.docker_timeout = docker_timeout
+
+    def run(self, url: str, max_pages: int, max_depth: int) -> CrawlResult:
+        start_url = normalize_url(url)
+        result = self.runner.run(
+            [
+                "dirb",
+                start_url,
+                self.wordlist,
+                "-S",
+                "-r",
+                "-w",
+            ],
+            timeout=self.docker_timeout,
+        )
+        crawl = parse_dirb_output(start_url, result.stdout)
+        if result.exit_code != 0:
+            return CrawlResult(
+                start_url=start_url,
+                pages=crawl.pages,
+                out_of_scope=crawl.out_of_scope,
+                failed=[*crawl.failed, {"url": start_url, "error": _dirb_error(result.stderr, result.stdout)}],
+                robots=None,
+                candidates=crawl.candidates,
             )
         return crawl
 
@@ -225,6 +268,47 @@ def parse_katana_output(start_url: str, output: str) -> CrawlResult:
     )
 
 
+def parse_dirb_output(start_url: str, output: str) -> CrawlResult:
+    normalized_start_url = normalize_url(start_url)
+    scope = ScopePolicy.from_url(normalized_start_url)
+    candidates_by_url: dict[str, DiscoveryCandidate] = {}
+    out_of_scope: set[str] = set()
+
+    for parsed_line in _parse_dirb_stream(output):
+        discovered_url = parsed_line.get("url")
+        if not discovered_url:
+            continue
+        discovered_url = strip_fragment(discovered_url)
+        if not discovered_url.startswith(("http://", "https://")):
+            discovered_url = strip_fragment(urljoin(normalized_start_url, discovered_url))
+        if not scope.in_scope(discovered_url):
+            out_of_scope.add(discovered_url)
+            continue
+        if discovered_url in candidates_by_url:
+            continue
+        kind = _classify_candidate(discovered_url, bool(parsed_line.get("directory")))
+        should_crawl = _candidate_should_crawl(kind, _int_or_default(parsed_line.get("status"), 0))
+        candidates_by_url[discovered_url] = DiscoveryCandidate(
+            url=discovered_url,
+            source_tool="dirb_docker_discovery",
+            status=_int_or_default(parsed_line.get("status"), 0),
+            kind=kind,
+            confidence="confirmed" if parsed_line.get("status") else "likely",
+            reason="Dirb discovered a candidate path from the configured wordlist.",
+            evidence=[normalized_start_url],
+            should_crawl=should_crawl,
+        )
+
+    return CrawlResult(
+        start_url=normalized_start_url,
+        pages=[],
+        out_of_scope=sorted(out_of_scope),
+        failed=[],
+        robots=None,
+        candidates=sorted(candidates_by_url.values(), key=lambda candidate: candidate.url),
+    )
+
+
 def parse_extractify_output(start_url: str, output: str) -> CrawlResult:
     return _parse_endpoint_findings_output(start_url, output, "extractify")
 
@@ -318,6 +402,65 @@ def _normalize_extracted_url(candidate: str, source: str, start_url: str) -> str
     return strip_fragment(urljoin(base, candidate))
 
 
+def _parse_dirb_stream(output: str) -> list[dict[str, Any]]:
+    parsed: list[dict[str, Any]] = []
+    cleaned = _strip_terminal_sequences(output)
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.search(r"^\+\s+(\S+)\s+\(CODE:(\d+)\|", line)
+        if match:
+            parsed.append({"url": match.group(1), "status": match.group(2)})
+            continue
+        directory_match = re.search(r"^==>\s+DIRECTORY:\s+(\S+)", line)
+        if directory_match:
+            parsed.append({"url": directory_match.group(1), "status": 0, "directory": True})
+    return parsed
+
+
+def _classify_candidate(url: str, is_directory: bool) -> str:
+    path = urlparse(url).path.lower()
+    if is_directory or path.endswith("/"):
+        return "directory"
+    if any(marker in path for marker in ("/api", "/graphql", "/rest", "/v1", "/v2", "/v3")):
+        return "api"
+    if _is_static_asset_path(path):
+        return "asset"
+    return "path"
+
+
+def _candidate_should_crawl(kind: str, status: int) -> bool:
+    if kind == "asset":
+        return False
+    return status in {0, 200, 204, 301, 302, 307, 308, 401, 403}
+
+
+def _is_static_asset_path(path: str) -> bool:
+    return path.endswith(
+        (
+            ".js",
+            ".mjs",
+            ".css",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".ico",
+            ".webp",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".map",
+            ".pdf",
+            ".zip",
+            ".gz",
+        )
+    )
+
+
 def _parse_katana_stream(output: str) -> list[dict[str, Any]]:
     decoder = json.JSONDecoder()
     cleaned = _strip_terminal_sequences(output)
@@ -400,6 +543,11 @@ def _int_or_default(value: Any, default: int) -> int:
 
 def _katana_error(stderr: str, stdout: str) -> str:
     error = stderr.strip() or stdout.strip() or "katana failed"
+    return error[:2000]
+
+
+def _dirb_error(stderr: str, stdout: str) -> str:
+    error = stderr.strip() or stdout.strip() or "dirb failed"
     return error[:2000]
 
 

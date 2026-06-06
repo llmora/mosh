@@ -8,7 +8,7 @@ from pathlib import Path
 from appsec_harness.agents import CrawlerAgent, discovery_agent_definitions
 from appsec_harness.config import AppConfig
 from appsec_harness.memory import FileMemory
-from appsec_harness.models import CrawledPage, CrawlResult
+from appsec_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
 
 
 class FakeCrawlTool:
@@ -36,9 +36,29 @@ class StaticCrawlTool:
         return self.result
 
 
+class SequenceCrawlTool:
+    class definition:
+        name = "crawl_application"
+
+    def __init__(self, results: list[CrawlResult]) -> None:
+        self.results = results
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, url: str, max_pages: int, max_depth: int) -> CrawlResult:
+        self.calls.append({"url": url, "max_pages": max_pages, "max_depth": max_depth})
+        if len(self.calls) <= len(self.results):
+            return self.results[len(self.calls) - 1]
+        return self.results[-1]
+
+
 class FakeKatanaTool(StaticCrawlTool):
     class definition:
         name = "katana_docker_crawler"
+
+
+class FakeDirbTool(StaticCrawlTool):
+    class definition:
+        name = "dirb_docker_discovery"
 
 
 class FakeExtractifyTool:
@@ -192,6 +212,165 @@ class AgentToolBoundaryTests(unittest.TestCase):
             self.assertEqual(katana.calls, 0)
             self.assertEqual([page.url for page in result.pages], ["https://example.test/"])
 
+    def test_crawler_agent_runs_dirb_and_merges_discovered_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = SequenceCrawlTool(
+                [
+                    CrawlResult(
+                        start_url="https://example.test/",
+                        pages=[
+                            CrawledPage(
+                                url="https://example.test/",
+                                status=200,
+                                content_type="text/html",
+                                title="Home",
+                                headers={},
+                                links=[],
+                                references=[],
+                                forms=[],
+                            )
+                        ],
+                        out_of_scope=[],
+                        failed=[],
+                        robots=None,
+                    ),
+                    CrawlResult(
+                        start_url="https://example.test/admin",
+                        pages=[
+                            CrawledPage(
+                                url="https://example.test/admin",
+                                status=200,
+                                content_type="text/html",
+                                title="Admin",
+                                headers={},
+                                links=[],
+                                references=[],
+                                forms=[],
+                            )
+                        ],
+                        out_of_scope=[],
+                        failed=[],
+                        robots=None,
+                    ),
+                ]
+            )
+            dirb = FakeDirbTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                    candidates=[
+                        DiscoveryCandidate(
+                            url="https://example.test/admin",
+                            status=200,
+                            source_tool="dirb_docker_discovery",
+                            kind="path",
+                            confidence="confirmed",
+                            reason="Dirb found the path.",
+                            evidence=["https://example.test/"],
+                            should_crawl=True,
+                        )
+                    ],
+                )
+            )
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[dirb])
+
+            result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+
+            self.assertEqual(primary.calls[1]["url"], "https://example.test/admin")
+            self.assertEqual(dirb.calls, 1)
+            self.assertIn("https://example.test/admin", {page.url for page in result.pages})
+            self.assertIn("https://example.test/admin", {candidate.url for candidate in result.candidates})
+
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                any(
+                    event["action"] == "tool_call"
+                    and event["data"].get("tool") == "dirb_docker_discovery"
+                    for event in events
+                )
+            )
+            self.assertTrue(any(event["action"] == "candidate_selected" for event in events))
+
+            memory_items = json.loads((Path(directory) / "memory.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(item["kind"] == "discovery_candidate" for item in memory_items))
+
+    def test_crawler_agent_respects_candidate_follow_up_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = SequenceCrawlTool(
+                [
+                    CrawlResult("https://example.test/", [], [], [], None),
+                    CrawlResult(
+                        "https://example.test/one",
+                        [
+                            CrawledPage(
+                                url="https://example.test/one",
+                                status=200,
+                                content_type="text/html",
+                                title=None,
+                                headers={},
+                                links=[],
+                                references=[],
+                                forms=[],
+                            )
+                        ],
+                        [],
+                        [],
+                        None,
+                    ),
+                ]
+            )
+            dirb = FakeDirbTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                    candidates=[
+                        DiscoveryCandidate(
+                            url="https://example.test/one",
+                            source_tool="dirb_docker_discovery",
+                            status=200,
+                            kind="path",
+                            confidence="confirmed",
+                            reason="Dirb found the path.",
+                            evidence=[],
+                            should_crawl=True,
+                        ),
+                        DiscoveryCandidate(
+                            url="https://example.test/two",
+                            source_tool="dirb_docker_discovery",
+                            status=200,
+                            kind="path",
+                            confidence="confirmed",
+                            reason="Dirb found the path.",
+                            evidence=[],
+                            should_crawl=True,
+                        ),
+                    ],
+                )
+            )
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[dirb], candidate_follow_up_limit=1)
+
+            result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+
+            self.assertEqual([call["url"] for call in primary.calls], ["https://example.test", "https://example.test/one"])
+            self.assertNotIn("https://example.test/two", {page.url for page in result.pages})
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                any(
+                    event["action"] == "candidate_skipped"
+                    and event["data"]["url"] == "https://example.test/two"
+                    and event["data"]["reason"] == "follow_up_limit_reached"
+                    for event in events
+                )
+            )
+
     def test_crawler_agent_selects_extractify_for_javascript_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             primary = StaticCrawlTool(
@@ -340,6 +519,7 @@ class AgentToolBoundaryTests(unittest.TestCase):
             [
                 "crawl_application",
                 "katana_docker_crawler",
+                "dirb_docker_discovery",
                 "extractify_js_endpoint_discovery",
                 "js_static_endpoint_discovery",
             ],

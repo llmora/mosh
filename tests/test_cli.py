@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,7 +14,7 @@ from tests.fixtures import fixture_server
 
 
 class CliTests(unittest.TestCase):
-    def test_cli_writes_markdown_report_and_json_artifacts(self) -> None:
+    def test_cli_writes_markdown_report_and_runtime_json_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
@@ -23,19 +22,15 @@ class CliTests(unittest.TestCase):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main([url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
-                report_dir = Path(directory) / "report" / report_dir_name(url)
+                report_dir = Path(directory) / "report" / report_dir_name(url) / "discovery"
                 self.assertEqual(exit_code, 0)
                 self.assertIn("Report written to", stdout.getvalue())
                 self.assertTrue((report_dir / "report.md").exists())
-                self.assertTrue((report_dir / "report.json").exists())
+                self.assertFalse((report_dir / "report.json").exists())
                 self.assertTrue((report_dir / "events.json").exists())
                 self.assertTrue((report_dir / "memory.json").exists())
 
-                report = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
-                self.assertEqual(report["summary"]["pages_crawled"], 3)
-                self.assertEqual(report["summary"]["components_identified"], 0)
-                self.assertEqual(report["components"], [])
-
+                import json
                 memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
                 self.assertTrue(any(item["kind"] == "llm_report" for item in memory))
 

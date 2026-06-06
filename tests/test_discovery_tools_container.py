@@ -21,6 +21,11 @@ class DiscoveryToolsContainerTests(unittest.TestCase):
         self.assertIn("COPY tools/js-endpoint-extractor/js-endpoint-extractor.mjs", dockerfile)
         self.assertIn("/usr/local/bin/js-endpoint-extractor", dockerfile)
 
+    def test_dockerfile_installs_dirb(self) -> None:
+        dockerfile = Path("tools/Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("dirb", dockerfile)
+
 
 if __name__ == "__main__":
     unittest.main()

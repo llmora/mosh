@@ -54,13 +54,29 @@ class FakeCrewRunner:
             "failed_requests": len(crawl.failed),
         }
         memory.add_item("summary", summary, "summarizer")
-        markdown_report = (
-            f"# Application Discovery Report\n\n"
-            f"Target: {crawl.start_url}\n\n"
-            f"Pages crawled: {summary['pages_crawled']}\n"
-        )
-        memory.add_item("llm_report", {"markdown": markdown_report, "structured": {}}, "summarizer")
-        write_reports(report_dir, crawl.start_url, crawl, components, summary, markdown_report)
+        report_content = {
+            "title": "Application Discovery Report",
+            "executive_summary": f"Discovery completed for {crawl.start_url}.",
+            "application_description": "Fixture application used by the test harness.",
+            "target_scope": [
+                {
+                    "title": "Target",
+                    "detail": crawl.start_url,
+                    "confidence": "confirmed",
+                    "evidence": [crawl.start_url],
+                }
+            ],
+            "confirmed_findings": [
+                {
+                    "title": "Pages crawled",
+                    "detail": str(summary["pages_crawled"]),
+                    "confidence": "confirmed",
+                    "evidence": [page.url for page in crawl.pages],
+                }
+            ],
+        }
+        memory.add_item("llm_report", {"structured": report_content}, "summarizer")
+        write_reports(report_dir, crawl.start_url, crawl, components, summary, report_content)
         return FakeCrewResult(crawl, components, summary)
 
 

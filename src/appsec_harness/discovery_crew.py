@@ -317,59 +317,111 @@ def _build_crawler_tool(crewai: Any, state: DiscoveryCrewState, crawler_agent: C
 
 
 def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent: SummarizerAgent):
+    class NarrativeItem(crewai.BaseModel):
+        title: str = crewai.Field(..., description="Short stable item title.")
+        detail: str = crewai.Field(..., description="Concise item detail.")
+        confidence: str | None = crewai.Field(default=None, description="confirmed, likely, possible, inferred, or unknown.")
+        evidence: list[str] = crewai.Field(default_factory=list, description="Observable evidence or source URLs.")
+
+    class RouteItem(crewai.BaseModel):
+        url: str = crewai.Field(..., description="Route or URL.")
+        status: str | int | None = crewai.Field(default=None, description="Observed HTTP status when known.")
+        content_type: str | None = crewai.Field(default=None, description="Observed content type when known.")
+        notes: str | None = crewai.Field(default=None, description="Short route notes.")
+        evidence: list[str] = crewai.Field(default_factory=list, description="Evidence or source references.")
+
+    class ApiEndpointItem(crewai.BaseModel):
+        endpoint: str = crewai.Field(..., description="Endpoint URL or path.")
+        method: str | None = crewai.Field(default=None, description="Observed or inferred HTTP method.")
+        status: str | int | None = crewai.Field(default=None, description="Observed status when known.")
+        purpose: str | None = crewai.Field(default=None, description="Endpoint purpose.")
+        confidence: str | None = crewai.Field(default=None, description="confirmed, likely, possible, inferred, or unknown.")
+        evidence: list[str] = crewai.Field(default_factory=list, description="Observable evidence or source URLs.")
+
+    class FormItem(crewai.BaseModel):
+        page: str = crewai.Field(..., description="Page URL where the form was observed or inferred.")
+        type: str | None = crewai.Field(default=None, description="Form type or purpose.")
+        fields: list[str] = crewai.Field(default_factory=list, description="Observed or inferred fields.")
+        method: str | None = crewai.Field(default=None, description="Observed or inferred HTTP method.")
+        notes: str | None = crewai.Field(default=None, description="Short form notes.")
+
+    class ComponentItem(crewai.BaseModel):
+        name: str = crewai.Field(..., description="Component or service name.")
+        type: str | None = crewai.Field(default=None, description="Component category.")
+        version: str | None = crewai.Field(default=None, description="Version if visible.")
+        confidence: str | None = crewai.Field(default=None, description="confirmed, likely, possible, inferred, or unknown.")
+        evidence: list[str] = crewai.Field(default_factory=list, description="Observable evidence or source URLs.")
+
+    class NextStepItem(crewai.BaseModel):
+        priority: str = crewai.Field(..., description="Priority such as critical, high, medium, low, or informational.")
+        action: str = crewai.Field(..., description="Recommended action.")
+        rationale: str = crewai.Field(..., description="Reason for the recommendation.")
+
+    class DiscoveryMarkdownReport(crewai.BaseModel):
+        title: str = crewai.Field(..., description="Report title.")
+        executive_summary: str = crewai.Field(..., description="Short executive summary.")
+        application_description: str = crewai.Field(..., description="High-level description of what the application appears to do.")
+        target_scope: list[NarrativeItem] = crewai.Field(default_factory=list)
+        key_discovered_areas: list[NarrativeItem] = crewai.Field(default_factory=list)
+        discovered_routes: list[RouteItem] = crewai.Field(default_factory=list)
+        api_endpoints: list[ApiEndpointItem] = crewai.Field(default_factory=list)
+        forms: list[FormItem] = crewai.Field(default_factory=list)
+        technologies: list[ComponentItem] = crewai.Field(default_factory=list)
+        third_party_services: list[ComponentItem] = crewai.Field(default_factory=list)
+        authentication_observations: list[NarrativeItem] = crewai.Field(default_factory=list)
+        confirmed_findings: list[NarrativeItem] = crewai.Field(default_factory=list)
+        inferred_findings: list[NarrativeItem] = crewai.Field(default_factory=list)
+        limitations: list[NarrativeItem] = crewai.Field(default_factory=list)
+        recommended_next_steps: list[NextStepItem] = crewai.Field(default_factory=list)
+        appendix: list[NarrativeItem] = crewai.Field(default_factory=list)
+
     class ReportInput(crewai.BaseModel):
-        markdown_report: str = crewai.Field(
+        report: DiscoveryMarkdownReport = crewai.Field(
             ...,
-            description="Complete Markdown report authored by the summarizer agent. This exact content is written to report.md.",
-        )
-        report_json: Any | None = crewai.Field(
-            default=None,
-            description="Optional structured report content authored by the summarizer agent for report.json.",
+            description="Structured report content. The tool renders report.md in a fixed layout from this object.",
         )
 
     class WriteDiscoveryReportTool(crewai.BaseTool):
         name: str = "write_discovery_report"
-        description: str = "Persist the summarizer agent's Markdown report and structured JSON report artifacts."
+        description: str = "Persist the summarizer agent's structured discovery content as a stable Markdown report."
         args_schema: type[crewai.BaseModel] = ReportInput
 
-        def _run(self, markdown_report: str, report_json: Any | None = None) -> str:
+        def _run(self, report: Any) -> str:
             if not state.crawl:
                 raise RuntimeError("Crawler findings are required before writing the report.")
             state.summary = summarizer_agent.summarize(state.crawl, state.components, state.memory)
-            agent_report = _coerce_agent_report(report_json)
+            report_content = _coerce_report_content(report)
             state.memory.add_item(
                 "llm_report",
                 {
-                    "markdown": markdown_report,
-                    "structured": agent_report,
+                    "structured": report_content,
                 },
                 "summarizer",
             )
-            state.memory.record_event(
-                "summarizer",
-                "report_written",
-                "Summarizer agent wrote discovery report artifacts",
-                {
-                    "report_dir": str(state.report_dir),
-                    "markdown_bytes": len(markdown_report.encode("utf-8")),
-                    "structured_keys": sorted(agent_report.keys()),
-                },
-            )
-            write_reports(
+            markdown_report = write_reports(
                 state.report_dir,
                 state.crawl.start_url,
                 state.crawl,
                 state.components,
                 state.summary,
-                markdown_report,
-                agent_report=agent_report,
+                report_content,
+            )
+            state.memory.record_event(
+                "summarizer",
+                "report_written",
+                "Summarizer agent wrote Markdown discovery report",
+                {
+                    "report_dir": str(state.report_dir),
+                    "markdown_bytes": len(markdown_report.encode("utf-8")),
+                    "structured_keys": sorted(report_content.keys()),
+                },
             )
             return json.dumps(
                 {
                     "report_dir": str(state.report_dir),
                     "summary": state.summary,
                     "markdown_bytes": len(markdown_report.encode("utf-8")),
-                    "structured_keys": sorted(agent_report.keys()),
+                    "structured_keys": sorted(report_content.keys()),
                 },
                 sort_keys=True,
             )
@@ -436,23 +488,29 @@ def _json_safe(value: Any) -> Any:
         return str(value)
 
 
-def _coerce_agent_report(report_json: Any | None) -> dict[str, Any]:
-    if report_json is None:
+def _coerce_report_content(report: Any | None) -> dict[str, Any]:
+    if report is None:
         return {}
-    if isinstance(report_json, dict):
-        return report_json
-    if isinstance(report_json, str):
-        report_json = report_json.strip()
-        if not report_json:
+    if isinstance(report, dict):
+        return report
+    if hasattr(report, "model_dump"):
+        dumped = report.model_dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {"content": dumped}
+    if hasattr(report, "dict"):
+        dumped = report.dict()
+        return dumped if isinstance(dumped, dict) else {"content": dumped}
+    if isinstance(report, str):
+        report = report.strip()
+        if not report:
             return {}
         try:
-            parsed = json.loads(report_json)
+            parsed = json.loads(report)
         except json.JSONDecodeError:
-            return {"raw": report_json}
+            return {"executive_summary": report}
         if isinstance(parsed, dict):
             return parsed
         return {"content": parsed}
-    return {"content": report_json}
+    return {"content": report}
 
 
 def _merge_crawl_results(existing: CrawlResult | None, new: CrawlResult) -> CrawlResult:
@@ -464,6 +522,9 @@ def _merge_crawl_results(existing: CrawlResult | None, new: CrawlResult) -> Craw
         current = pages_by_url.get(page.url)
         if current is None or (current.status == 0 and page.status != 0):
             pages_by_url[page.url] = page
+    candidates_by_key = {(candidate.url, candidate.source_tool): candidate for candidate in existing.candidates}
+    for candidate in new.candidates:
+        candidates_by_key.setdefault((candidate.url, candidate.source_tool), candidate)
 
     return CrawlResult(
         start_url=existing.start_url,
@@ -471,4 +532,5 @@ def _merge_crawl_results(existing: CrawlResult | None, new: CrawlResult) -> Craw
         out_of_scope=sorted({*existing.out_of_scope, *new.out_of_scope}),
         failed=[*existing.failed, *new.failed],
         robots=existing.robots or new.robots,
+        candidates=sorted(candidates_by_key.values(), key=lambda candidate: (candidate.url, candidate.source_tool)),
     )

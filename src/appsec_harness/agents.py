@@ -5,9 +5,11 @@ from urllib.parse import urlparse
 
 from appsec_harness.config import AppConfig
 from appsec_harness.memory import FileMemory
-from appsec_harness.models import CrawledPage, CrawlResult
+from appsec_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
+from appsec_harness.scope import normalize_url
 from appsec_harness.tools import (
     CrawlApplicationTool,
+    DirbDockerDiscoveryTool,
     ExtractifyDockerTool,
     JsStaticEndpointDockerTool,
     KatanaDockerCrawlerTool,
@@ -62,6 +64,7 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
             tools=[
                 CrawlApplicationTool.definition,
                 KatanaDockerCrawlerTool.definition,
+                DirbDockerDiscoveryTool.definition,
                 ExtractifyDockerTool.definition,
                 JsStaticEndpointDockerTool.definition,
             ],
@@ -75,7 +78,7 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
         AgentDefinition(
             name="summarizer",
             role="Discovery report summarizer",
-            goal="Summarize discovery findings into Markdown and structured JSON outputs.",
+            goal="Summarize discovery findings into a stable Markdown report.",
             model=config.models.summarizer,
         ),
     ]
@@ -94,10 +97,15 @@ class CrawlerAgent:
     def __init__(
         self,
         crawl_tool: CrawlApplicationTool | None = None,
-        additional_tools: list[KatanaDockerCrawlerTool | ExtractifyDockerTool | JsStaticEndpointDockerTool] | None = None,
+        additional_tools: list[
+            KatanaDockerCrawlerTool | DirbDockerDiscoveryTool | ExtractifyDockerTool | JsStaticEndpointDockerTool
+        ]
+        | None = None,
+        candidate_follow_up_limit: int = 5,
     ) -> None:
         self.crawl_tool = crawl_tool or CrawlApplicationTool()
         self.additional_tools = additional_tools or []
+        self.candidate_follow_up_limit = candidate_follow_up_limit
 
     @property
     def available_tool_definitions(self) -> list[ToolDefinition]:
@@ -124,6 +132,10 @@ class CrawlerAgent:
                 "Keeping app-native crawler results; no strong SPA or JavaScript-heavy signal detected",
                 {"evidence": decision.evidence},
             )
+        dirb_crawl = self._run_optional_tool("dirb_docker_discovery", url, memory, max_pages, max_depth)
+        if dirb_crawl:
+            crawl = self._merge_crawls(crawl, dirb_crawl)
+            crawl = self._follow_up_discovery_candidates(crawl, memory, max_pages, max_depth)
         extractify_crawl = self._run_extractify_tool(crawl, memory)
         if extractify_crawl:
             crawl = self._merge_crawls(crawl, extractify_crawl)
@@ -135,7 +147,7 @@ class CrawlerAgent:
 
     def _run_crawl_tool(
         self,
-        tool: CrawlApplicationTool | KatanaDockerCrawlerTool,
+        tool: CrawlApplicationTool | KatanaDockerCrawlerTool | DirbDockerDiscoveryTool,
         url: str,
         memory: FileMemory,
         max_pages: int,
@@ -150,6 +162,7 @@ class CrawlerAgent:
         crawl = tool.run(url, max_pages=max_pages, max_depth=max_depth)
         result_data: dict[str, object] = {
             "pages": len(crawl.pages),
+            "candidates": len(crawl.candidates),
             "out_of_scope": len(crawl.out_of_scope),
             "failed": len(crawl.failed),
         }
@@ -230,6 +243,7 @@ class CrawlerAgent:
         javascript_crawl = tool.run(crawl.start_url, js_urls)
         result_data: dict[str, object] = {
             "pages": len(javascript_crawl.pages),
+            "candidates": len(javascript_crawl.candidates),
             "out_of_scope": len(javascript_crawl.out_of_scope),
             "failed": len(javascript_crawl.failed),
         }
@@ -247,6 +261,8 @@ class CrawlerAgent:
         memory.add_item("robots", crawl.robots or {"found": False}, self.name)
         for page in crawl.pages:
             memory.add_item("crawled_page", page.to_dict(), self.name)
+        for candidate in crawl.candidates:
+            memory.add_item("discovery_candidate", candidate.to_dict(), self.name)
         if crawl.out_of_scope:
             memory.add_item("out_of_scope", {"urls": crawl.out_of_scope}, self.name)
         if crawl.failed:
@@ -307,13 +323,72 @@ class CrawlerAgent:
                 pages_by_url[page.url] = page
             elif existing.status == 0 and page.status != 0:
                 pages_by_url[page.url] = page
+        candidates_by_key: dict[tuple[str, str], DiscoveryCandidate] = {
+            (candidate.url, candidate.source_tool): candidate for candidate in primary.candidates
+        }
+        for candidate in secondary.candidates:
+            candidates_by_key.setdefault((candidate.url, candidate.source_tool), candidate)
         return CrawlResult(
             start_url=primary.start_url,
             pages=sorted(pages_by_url.values(), key=lambda page: page.url),
             out_of_scope=sorted({*primary.out_of_scope, *secondary.out_of_scope}),
             failed=[*primary.failed, *secondary.failed],
             robots=primary.robots or secondary.robots,
+            candidates=sorted(candidates_by_key.values(), key=lambda candidate: (candidate.url, candidate.source_tool)),
         )
+
+    def _follow_up_discovery_candidates(
+        self,
+        crawl: CrawlResult,
+        memory: FileMemory,
+        max_pages: int,
+        max_depth: int,
+    ) -> CrawlResult:
+        crawled_urls = {_safe_normalize(crawl.start_url)}
+        crawled_urls.update(_safe_normalize(page.url) for page in crawl.pages)
+        selected = 0
+        aggregate = crawl
+        for candidate in crawl.candidates:
+            normalized_candidate_url = _safe_normalize(candidate.url)
+            skip_reason = _candidate_skip_reason(
+                candidate,
+                normalized_candidate_url,
+                crawled_urls,
+                selected,
+                self.candidate_follow_up_limit,
+            )
+            if skip_reason:
+                memory.record_event(
+                    self.name,
+                    "candidate_skipped",
+                    "Skipping discovery candidate follow-up crawl",
+                    {
+                        "url": candidate.url,
+                        "kind": candidate.kind,
+                        "source_tool": candidate.source_tool,
+                        "reason": skip_reason,
+                    },
+                )
+                continue
+
+            selected += 1
+            crawled_urls.add(normalized_candidate_url)
+            memory.record_event(
+                self.name,
+                "candidate_selected",
+                "Selected discovery candidate for follow-up crawl",
+                {
+                    "url": candidate.url,
+                    "kind": candidate.kind,
+                    "source_tool": candidate.source_tool,
+                    "status": candidate.status,
+                    "reason": candidate.reason,
+                },
+            )
+            follow_up = self._run_crawl_tool(self.crawl_tool, candidate.url, memory, max_pages, max_depth)
+            aggregate = self._merge_crawls(aggregate, follow_up)
+            crawled_urls.update(_safe_normalize(page.url) for page in follow_up.pages)
+        return aggregate
 
 
 @dataclass(frozen=True)
@@ -338,6 +413,29 @@ def _javascript_urls(crawl: CrawlResult) -> list[str]:
     )
 
 
+def _candidate_skip_reason(
+    candidate: DiscoveryCandidate,
+    normalized_candidate_url: str,
+    crawled_urls: set[str],
+    selected_count: int,
+    follow_up_limit: int,
+) -> str | None:
+    if not candidate.should_crawl:
+        return "not_crawlable"
+    if normalized_candidate_url in crawled_urls:
+        return "already_crawled"
+    if selected_count >= follow_up_limit:
+        return "follow_up_limit_reached"
+    return None
+
+
+def _safe_normalize(url: str) -> str:
+    try:
+        return normalize_url(url)
+    except ValueError:
+        return url
+
+
 class SbomCompilerAgent:
     name = "sbom_compiler"
 
@@ -358,6 +456,7 @@ class SummarizerAgent:
             "out_of_scope_references": len(crawl.out_of_scope),
             "components_identified": len(components),
             "failed_requests": len(crawl.failed),
+            "discovery_candidates": len(crawl.candidates),
         }
         memory.add_item("summary", summary, self.name)
         return summary
@@ -373,9 +472,15 @@ def build_discovery_agents(config: AppConfig | None = None) -> DiscoveryAgents:
                     crawl_duration=config.katana_crawl_duration,
                     docker_timeout=config.katana_docker_timeout,
                 ),
+                DirbDockerDiscoveryTool(
+                    config.tool_image,
+                    wordlist=config.dirb_wordlist,
+                    docker_timeout=config.dirb_docker_timeout,
+                ),
                 ExtractifyDockerTool(config.tool_image),
                 JsStaticEndpointDockerTool(config.tool_image),
-            ]
+            ],
+            candidate_follow_up_limit=config.candidate_follow_up_limit,
         ),
         sbom_compiler=SbomCompilerAgent(),
         summarizer=SummarizerAgent(),

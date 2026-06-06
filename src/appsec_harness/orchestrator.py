@@ -24,10 +24,10 @@ class DiscoveryOrchestrator:
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_discovery_crew_runner(config)
 
-    def run(self, url: str, max_pages: int = 25, max_depth: int | None = None) -> Path:
+    def run(self, url: str, max_pages: int = 200, max_depth: int | None = None) -> Path:
         max_depth = max_depth if max_depth is not None else self.config.max_depth
         agent_definitions = discovery_agent_definitions(self.config)
-        report_dir = self.output_root / report_dir_name(url)
+        report_dir = self.output_root / report_dir_name(url) / "discovery"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         memory.record_event(
             "orchestrator",

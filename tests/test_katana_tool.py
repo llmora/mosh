@@ -63,7 +63,7 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
         self.assertTrue(runner.calls[0]["tty"])
         self.assertEqual(result.pages[0].url, "https://example.test/app")
 
-    def test_default_depth_three_reaches_katana_command(self) -> None:
+    def test_requested_depth_reaches_katana_command(self) -> None:
         runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="", stderr=""))
         tool = KatanaDockerCrawlerTool("discovery-tools:test", runner=runner)
 

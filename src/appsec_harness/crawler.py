@@ -56,7 +56,7 @@ class Crawler:
     def __init__(self, timeout: int = 10) -> None:
         self.timeout = timeout
 
-    def crawl(self, start_url: str, max_pages: int = 25, max_depth: int = 2) -> CrawlResult:
+    def crawl(self, start_url: str, max_pages: int = 200, max_depth: int = 5) -> CrawlResult:
         normalized_start = normalize_url(start_url)
         scope = ScopePolicy.from_url(normalized_start)
         robots = self._fetch_robots(normalized_start)

@@ -19,7 +19,10 @@ class AppConfig:
     tool_image: str = "appsec-harness-discovery-tools:latest"
     katana_crawl_duration: str = "270s"
     katana_docker_timeout: int = 300
-    max_depth: int = 3
+    dirb_wordlist: str = "/usr/share/dirb/wordlists/common.txt"
+    dirb_docker_timeout: int = 120
+    candidate_follow_up_limit: int = 5
+    max_depth: int = 5
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -27,5 +30,8 @@ class AppConfig:
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
             katana_crawl_duration=os.getenv("APPSEC_HARNESS_KATANA_CRAWL_DURATION", "270s"),
             katana_docker_timeout=int(os.getenv("APPSEC_HARNESS_KATANA_DOCKER_TIMEOUT", "300")),
-            max_depth=int(os.getenv("APPSEC_HARNESS_MAX_DEPTH", "3")),
+            dirb_wordlist=os.getenv("APPSEC_HARNESS_DIRB_WORDLIST", "/usr/share/dirb/wordlists/common.txt"),
+            dirb_docker_timeout=int(os.getenv("APPSEC_HARNESS_DIRB_DOCKER_TIMEOUT", "120")),
+            candidate_follow_up_limit=int(os.getenv("APPSEC_HARNESS_CANDIDATE_FOLLOW_UP_LIMIT", "5")),
+            max_depth=int(os.getenv("APPSEC_HARNESS_MAX_DEPTH", "5")),
         )

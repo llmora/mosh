@@ -75,16 +75,17 @@ External tools must not be installed on the host. They should run in Docker cont
 Use a Docker image called the discovery tools container for discovery-related external tools.
 
 The current discovery tools container starts from Debian and includes Katana,
-Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system
-Chromium for JavaScript-aware discovery. Katana must use the bundled system
-browser rather than downloading a browser during each tool execution. Extractify
-is available for extracting endpoints, URLs, and other entry points from
-JavaScript and text assets. The static JavaScript endpoint extractor uses AST
-analysis to resolve common endpoint construction patterns such as constants,
-aliases, string concatenation, template literals, and simple browser-global API
-base values. The container should also include Katana form-fill defaults for
-common login fields, so headless crawling can submit unauthenticated forms and
-observe resulting XHR/fetch endpoints.
+Dirb, Extractify, a static JavaScript endpoint extractor, Node.js, npm, and
+system Chromium for JavaScript-aware discovery. Katana must use the bundled
+system browser rather than downloading a browser during each tool execution.
+Dirb is available for bounded wordlist-based path discovery. Extractify is
+available for extracting endpoints, URLs, and other entry points from JavaScript
+and text assets. The static JavaScript endpoint extractor uses AST analysis to
+resolve common endpoint construction patterns such as constants, aliases, string
+concatenation, template literals, and simple browser-global API base values. The
+container should also include Katana form-fill defaults for common login fields,
+so headless crawling can submit unauthenticated forms and observe resulting
+XHR/fetch endpoints.
 
 The intended Docker interaction is:
 
@@ -121,16 +122,19 @@ Shared memory must be file-backed.
 
 Agents can read from and add to shared memory. Memory writes must be recorded as observable events.
 
-The current output directory format is:
+The current discovery crew output directory format is:
 
 ```text
-report/<host>/
+report/<host>/discovery/
 ```
 
 Use the host only for the report directory name. For example:
 
-- `https://www.test.com/path` -> `report/www.test.com/`
-- `http://127.0.0.1:8080/` -> `report/127.0.0.1_8080/`
+- `https://www.test.com/path` -> `report/www.test.com/discovery/`
+- `http://127.0.0.1:8080/` -> `report/127.0.0.1_8080/discovery/`
+
+The host directory is reserved for multiple crew outputs. Future crews should
+write to their own subdirectories under `report/<host>/`.
 
 ## Real-Time Visibility
 
@@ -153,29 +157,28 @@ All observable activity must also be stored in JSON format as part of the output
 
 ## Output
 
-The first prototype should write all output under:
+The first prototype should write discovery output under:
 
 ```text
-report/<host>/
+report/<host>/discovery/
 ```
 
 Required outputs:
 
 - Markdown final report
-- JSON final report
 - JSON event log
 - JSON shared memory
 
 The final report should summarize the discovery activities and findings.
 
-The final Markdown report is authored by the summarizer agent and persisted through
-the summarizer-owned report-writing tool. The application should not regenerate the
-Markdown from a deterministic Python report template.
+The final Markdown report is rendered by the summarizer-owned report-writing tool
+from structured content authored by the summarizer agent. The report-writing tool
+owns the Markdown section order and formatting so repeated runs remain comparable,
+while the summarizer agent owns the observations, narrative content, confidence
+levels, evidence, and recommendations.
 
-The JSON final report should include operational metadata, crawler findings,
-component inventory, and the summarizer agent's structured report content when the
-agent provides it. The summarizer's authored Markdown should also be retained in
-the JSON report so the artifact can be audited later.
+The application should not write a final `report.json` artifact. Structured
+runtime data remains available through `events.json` and `memory.json`.
 
 Observable agent report output should be stored in shared memory or events. CrewAI
 final chat/task responses are not sufficient by themselves unless the application
@@ -206,6 +209,7 @@ The crawler agent may have multiple crawler tools. Current crawler-owned tools a
 
 - application-native crawler tool
 - Katana Docker crawler tool, run through the discovery tools container
+- Dirb Docker discovery tool, run through the discovery tools container for bounded path discovery
 - Extractify Docker tool, run through the discovery tools container for JavaScript endpoint and URL extraction
 - static JavaScript endpoint discovery tool, run through the discovery tools container for AST-based endpoint resolution
 
@@ -258,6 +262,17 @@ The crawler agent should discover:
 - forms
 
 The crawler can be implemented inside the application. External crawler tools, such as Katana, must run through Docker and still be invoked as crawler agent tools. Katana should run with headless browser execution enabled, system Chromium selected, Chrome sandboxing disabled for root execution, XHR extraction enabled, and automatic form fill enabled for unauthenticated discovery.
+
+Dirb should run as a crawler-owned Docker tool for additional path discovery.
+The initial Dirb integration should use a bounded wordlist, a bounded Docker
+timeout, and non-recursive execution. Dirb findings are discovery candidates,
+not crawled pages. Each candidate should include URL, source tool, status, kind,
+confidence, reason, evidence, and whether it should be crawled. Candidates
+should be scope-filtered, linked back to the crawl root as evidence, and merged
+into the aggregate crawl state. The crawler agent should process a bounded
+follow-up crawl queue for crawl-worthy candidates. Dirb should discover
+candidate paths; it should not replace the crawler or perform vulnerability
+testing.
 
 The crawler agent should keep a per-run registry of URLs that have already been
 crawled. Before invoking a crawler tool, the crawler agent should check this

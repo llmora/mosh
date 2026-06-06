@@ -21,6 +21,7 @@ crawl_application_task:
     A structured application discovery map containing:
     - Target URL and crawl timestamp
     - Discovered pages and routes
+    - Discovered candidates and candidate follow-up crawl decisions
     - Discovered API endpoints
     - HTTP methods observed or inferred
     - Forms and input fields
@@ -71,14 +72,35 @@ write_report_task:
     making vulnerability claims unless they are directly supported by the discovery data. This task
     is not responsible for exploitation, vulnerability validation, or risk scoring.
 
-    You must call the write_discovery_report tool exactly once. Pass your complete final
-    Markdown report in the markdown_report argument. That Markdown is persisted to
-    report.md, so do not rely on the final chat response as the report artifact.
-    Include optional structured report content in report_json when useful.
+    You must call the write_discovery_report tool exactly once. Do not write
+    free-form Markdown yourself. Instead, pass a complete structured report in
+    the report argument. The report-writing tool renders report.md from that
+    structure using a fixed section order so repeated runs remain comparable.
+
+    The report argument must contain these keys:
+    - title: string
+    - executive_summary: string
+    - application_description: string
+    - target_scope: list of objects with title, detail, confidence, evidence
+    - key_discovered_areas: list of objects with title, detail, confidence, evidence
+    - discovered_routes: list of objects with url, status, content_type, notes, evidence
+    - api_endpoints: list of objects with endpoint, method, status, purpose, confidence, evidence
+    - forms: list of objects with page, type, fields, method, notes
+    - technologies: list of objects with name, type, version, confidence, evidence
+    - third_party_services: list of objects with name, type, version, confidence, evidence
+    - authentication_observations: list of objects with title, detail, confidence, evidence
+    - confirmed_findings: list of objects with title, detail, confidence, evidence
+    - inferred_findings: list of objects with title, detail, confidence, evidence
+    - limitations: list of objects with title, detail, confidence, evidence
+    - recommended_next_steps: list of objects with priority, action, rationale
+    - appendix: list of objects with title, detail, confidence, evidence
+
+    Use empty lists when a section has no entries. Keep headings implicit by
+    using the keys above; the report-writing tool controls Markdown headings.
     
   expected_output: >
-    Confirmation that write_discovery_report persisted a clear application discovery
-    report in JSON and markdown. The markdown_report tool argument must contain:
+    Confirmation that write_discovery_report persisted a clear Markdown
+    application discovery report. The report tool argument must contain content for:
     - Executive summary
     - Target and discovery scope
     - High-level application description

@@ -11,6 +11,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         chromium \
+        dirb \
         fonts-liberation \
         nodejs \
         npm \

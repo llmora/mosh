@@ -13,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
     config = AppConfig.from_env()
     parser = argparse.ArgumentParser(prog="appsec-harness")
     parser.add_argument("url", help="Target application URL to discover")
-    parser.add_argument("--max-pages", type=int, default=25, help=argparse.SUPPRESS)
+    parser.add_argument("--max-pages", type=int, default=200, help=argparse.SUPPRESS)
     parser.add_argument("--max-depth", type=int, default=config.max_depth, help=argparse.SUPPRESS)
     parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
