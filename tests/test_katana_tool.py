@@ -11,8 +11,14 @@ class FakeDockerRunner:
         self.result = result
         self.calls: list[dict[str, object]] = []
 
-    def run(self, args: list[str], input_text: str | None = None, timeout: int = 60) -> DockerToolResult:
-        self.calls.append({"args": args, "input_text": input_text, "timeout": timeout})
+    def run(
+        self,
+        args: list[str],
+        input_text: str | None = None,
+        timeout: int = 60,
+        tty: bool = False,
+    ) -> DockerToolResult:
+        self.calls.append({"args": args, "input_text": input_text, "timeout": timeout, "tty": tty})
         return self.result
 
 
@@ -46,7 +52,15 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
         self.assertIn("4", args)
         self.assertIn("-ct", args)
         self.assertIn("270s", args)
+        self.assertIn("-headless", args)
+        self.assertIn("-system-chrome", args)
+        self.assertEqual(args[args.index("-system-chrome-path") + 1], "/usr/bin/chromium")
+        self.assertIn("-no-sandbox", args)
+        self.assertIn("-xhr", args)
+        self.assertIn("-aff", args)
+        self.assertEqual(args[args.index("-headless-options") + 1], "--disable-dev-shm-usage,--disable-gpu")
         self.assertEqual(runner.calls[0]["timeout"], 300)
+        self.assertTrue(runner.calls[0]["tty"])
         self.assertEqual(result.pages[0].url, "https://example.test/app")
 
     def test_default_depth_three_reaches_katana_command(self) -> None:

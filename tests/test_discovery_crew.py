@@ -80,7 +80,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(CrewAIUnavailable, "OPENROUTER_API_KEY"):
                 runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
-    def test_builds_crawler_agent_with_configured_katana_tool(self) -> None:
+    def test_builds_crawler_agent_with_configured_discovery_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
             runner = CrewAIDiscoveryCrewRunner(AppConfig(openrouter_api_key="test-key"))
@@ -93,10 +93,10 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             from appsec_harness.agents import build_discovery_agents
 
             agents = build_discovery_agents(AppConfig(openrouter_api_key="test-key"))
-            self.assertIn(
-                "katana_docker_crawler",
-                [tool.name for tool in agents.crawler.available_tool_definitions],
-            )
+            tool_names = [tool.name for tool in agents.crawler.available_tool_definitions]
+            self.assertIn("katana_docker_crawler", tool_names)
+            self.assertIn("extractify_js_endpoint_discovery", tool_names)
+            self.assertIn("js_static_endpoint_discovery", tool_names)
 
     def test_crewai_yaml_config_files_are_packaged(self) -> None:
         agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("agents.yaml")

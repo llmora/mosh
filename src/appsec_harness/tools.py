@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from appsec_harness.crawler import Crawler
 from appsec_harness.docker_tools import DockerToolRunner
@@ -60,6 +61,15 @@ class KatanaDockerCrawlerTool:
                 str(max_pages),
                 "-ct",
                 self.crawl_duration,
+                "-headless",
+                "-system-chrome",
+                "-system-chrome-path",
+                "/usr/bin/chromium",
+                "-no-sandbox",
+                "-headless-options",
+                "--disable-dev-shm-usage,--disable-gpu",
+                "-xhr",
+                "-aff",
                 "-jc",
                 "-jsl",
                 "-kf",
@@ -72,6 +82,7 @@ class KatanaDockerCrawlerTool:
                 "-silent",
             ],
             timeout=self.docker_timeout,
+            tty=True,
         )
         crawl = parse_katana_output(start_url, result.stdout)
         if result.exit_code != 0:
@@ -81,6 +92,93 @@ class KatanaDockerCrawlerTool:
                 out_of_scope=crawl.out_of_scope,
                 failed=[*crawl.failed, {"url": start_url, "error": _katana_error(result.stderr, result.stdout)}],
                 robots=crawl.robots,
+            )
+        return crawl
+
+
+class ExtractifyDockerTool:
+    definition = ToolDefinition(
+        name="extractify_js_endpoint_discovery",
+        description="Run Extractify inside the discovery tools container to extract endpoints and URLs from JavaScript assets.",
+    )
+
+    def __init__(
+        self,
+        image: str,
+        runner: DockerToolRunner | None = None,
+        docker_timeout: int = 120,
+    ) -> None:
+        self.runner = runner or DockerToolRunner(image)
+        self.docker_timeout = docker_timeout
+
+    def run(self, start_url: str, js_urls: list[str]) -> CrawlResult:
+        normalized_start_url = normalize_url(start_url)
+        unique_js_urls = sorted({strip_fragment(url) for url in js_urls if url.startswith(("http://", "https://"))})
+        if not unique_js_urls:
+            return CrawlResult(normalized_start_url, [], [], [], None)
+
+        result = self.runner.run(
+            [
+                "extractify",
+                "-ee",
+                "-eu",
+                "-json",
+                "-dedup",
+            ],
+            input_text="\n".join(unique_js_urls) + "\n",
+            timeout=self.docker_timeout,
+        )
+        crawl = parse_extractify_output(normalized_start_url, result.stdout)
+        if result.exit_code != 0:
+            return CrawlResult(
+                start_url=normalized_start_url,
+                pages=crawl.pages,
+                out_of_scope=crawl.out_of_scope,
+                failed=[*crawl.failed, {"url": normalized_start_url, "error": _extractify_error(result.stderr, result.stdout)}],
+                robots=None,
+            )
+        return crawl
+
+
+class JsStaticEndpointDockerTool:
+    definition = ToolDefinition(
+        name="js_static_endpoint_discovery",
+        description="Run static JavaScript AST analysis in the discovery tools container to resolve constructed API endpoints.",
+    )
+
+    def __init__(
+        self,
+        image: str,
+        runner: DockerToolRunner | None = None,
+        docker_timeout: int = 120,
+    ) -> None:
+        self.runner = runner or DockerToolRunner(image)
+        self.docker_timeout = docker_timeout
+
+    def run(self, start_url: str, js_urls: list[str]) -> CrawlResult:
+        normalized_start_url = normalize_url(start_url)
+        unique_js_urls = sorted({strip_fragment(url) for url in js_urls if url.startswith(("http://", "https://"))})
+        if not unique_js_urls:
+            return CrawlResult(normalized_start_url, [], [], [], None)
+
+        result = self.runner.run(
+            [
+                "js-endpoint-extractor",
+                "--base-url",
+                normalized_start_url,
+                "--json",
+            ],
+            input_text="\n".join(unique_js_urls) + "\n",
+            timeout=self.docker_timeout,
+        )
+        crawl = parse_js_static_output(normalized_start_url, result.stdout)
+        if result.exit_code != 0:
+            return CrawlResult(
+                start_url=normalized_start_url,
+                pages=crawl.pages,
+                out_of_scope=crawl.out_of_scope,
+                failed=[*crawl.failed, {"url": normalized_start_url, "error": _js_static_error(result.stderr, result.stdout)}],
+                robots=None,
             )
         return crawl
 
@@ -125,6 +223,99 @@ def parse_katana_output(start_url: str, output: str) -> CrawlResult:
         failed=failed,
         robots=None,
     )
+
+
+def parse_extractify_output(start_url: str, output: str) -> CrawlResult:
+    return _parse_endpoint_findings_output(start_url, output, "extractify")
+
+
+def parse_js_static_output(start_url: str, output: str) -> CrawlResult:
+    return _parse_endpoint_findings_output(start_url, output, "js static endpoint extractor")
+
+
+def _parse_endpoint_findings_output(start_url: str, output: str, tool_name: str) -> CrawlResult:
+    normalized_start_url = normalize_url(start_url)
+    scope = ScopePolicy.from_url(normalized_start_url)
+    pages_by_url: dict[str, CrawledPage] = {}
+    out_of_scope: set[str] = set()
+    failed: list[dict[str, str]] = []
+
+    try:
+        findings = json.loads(output or "[]")
+    except json.JSONDecodeError as exc:
+        return CrawlResult(
+            start_url=normalized_start_url,
+            pages=[],
+            out_of_scope=[],
+            failed=[{"url": normalized_start_url, "error": f"{tool_name} returned invalid JSON: {exc}"}],
+            robots=None,
+        )
+    if not isinstance(findings, list):
+        return CrawlResult(
+            start_url=normalized_start_url,
+            pages=[],
+            out_of_scope=[],
+            failed=[{"url": normalized_start_url, "error": f"{tool_name} returned non-list JSON"}],
+            robots=None,
+        )
+
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        source = finding.get("source") if isinstance(finding.get("source"), str) else normalized_start_url
+        candidates = _endpoint_candidates(finding)
+        for candidate in candidates:
+            discovered_url = _normalize_extracted_url(candidate, source, normalized_start_url)
+            if not discovered_url:
+                continue
+            if not scope.in_scope(discovered_url):
+                out_of_scope.add(discovered_url)
+                continue
+            page = pages_by_url.get(discovered_url)
+            if page:
+                continue
+            references = [source] if source.startswith(("http://", "https://")) and source != discovered_url else []
+            pages_by_url[discovered_url] = CrawledPage(
+                url=discovered_url,
+                status=0,
+                content_type="",
+                title=None,
+                headers={},
+                links=[],
+                references=references,
+                forms=[],
+            )
+
+    return CrawlResult(
+        start_url=normalized_start_url,
+        pages=sorted(pages_by_url.values(), key=lambda page: page.url),
+        out_of_scope=sorted(out_of_scope),
+        failed=failed,
+        robots=None,
+    )
+
+
+def _endpoint_candidates(finding: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for key in ("urls", "endpoints"):
+        values = finding.get(key)
+        if isinstance(values, list):
+            candidates.extend(value for value in values if isinstance(value, str))
+    return candidates
+
+
+def _normalize_extracted_url(candidate: str, source: str, start_url: str) -> str | None:
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+    if candidate.startswith(("javascript:", "mailto:", "tel:", "data:")):
+        return None
+    if candidate.startswith("//"):
+        return strip_fragment(f"{urlparse(start_url).scheme}:{candidate}")
+    if candidate.startswith(("http://", "https://")):
+        return strip_fragment(candidate)
+    base = source if source.startswith(("http://", "https://")) else start_url
+    return strip_fragment(urljoin(base, candidate))
 
 
 def _parse_katana_stream(output: str) -> list[dict[str, Any]]:
@@ -212,7 +403,16 @@ def _katana_error(stderr: str, stdout: str) -> str:
     return error[:2000]
 
 
+def _extractify_error(stderr: str, stdout: str) -> str:
+    error = stderr.strip() or stdout.strip() or "extractify failed"
+    return error[:2000]
+
+
+def _js_static_error(stderr: str, stdout: str) -> str:
+    error = stderr.strip() or stdout.strip() or "js static endpoint extractor failed"
+    return error[:2000]
+
+
 def _strip_terminal_sequences(output: str) -> str:
     output = output.replace("\r", "\n")
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
-

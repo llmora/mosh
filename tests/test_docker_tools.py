@@ -8,7 +8,7 @@ from appsec_harness.docker_tools import DockerToolRunner
 
 
 class DockerToolRunnerTests(unittest.TestCase):
-    def test_runs_container_with_interactive_tty(self) -> None:
+    def test_runs_container_without_tty_by_default(self) -> None:
         runner = DockerToolRunner("image:test")
 
         with patch("appsec_harness.docker_tools.subprocess.run") as run:
@@ -17,6 +17,26 @@ class DockerToolRunnerTests(unittest.TestCase):
             run.return_value.stderr = ""
 
             result = runner.run(["tool", "--flag"], timeout=30)
+
+        run.assert_called_once_with(
+            ["docker", "run", "--rm", "-i", "image:test", "tool", "--flag"],
+            input=None,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.stdout, "ok")
+
+    def test_can_run_container_with_interactive_tty(self) -> None:
+        runner = DockerToolRunner("image:test")
+
+        with patch("appsec_harness.docker_tools.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "ok"
+            run.return_value.stderr = ""
+
+            result = runner.run(["tool", "--flag"], timeout=30, tty=True)
 
         run.assert_called_once_with(
             ["docker", "run", "--rm", "-i", "-t", "image:test", "tool", "--flag"],

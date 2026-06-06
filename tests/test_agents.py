@@ -41,6 +41,24 @@ class FakeKatanaTool(StaticCrawlTool):
         name = "katana_docker_crawler"
 
 
+class FakeExtractifyTool:
+    class definition:
+        name = "extractify_js_endpoint_discovery"
+
+    def __init__(self, result: CrawlResult) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, start_url: str, js_urls: list[str]) -> CrawlResult:
+        self.calls.append({"start_url": start_url, "js_urls": js_urls})
+        return self.result
+
+
+class FakeJsStaticTool(FakeExtractifyTool):
+    class definition:
+        name = "js_static_endpoint_discovery"
+
+
 class AgentToolBoundaryTests(unittest.TestCase):
     def test_crawler_agent_invokes_its_owned_tool_and_writes_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -101,13 +119,34 @@ class AgentToolBoundaryTests(unittest.TestCase):
                     robots=None,
                 )
             )
+            extractify = FakeExtractifyTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://api.example.test/v1/users",
+                            status=0,
+                            content_type="",
+                            title=None,
+                            headers={},
+                            links=[],
+                            references=["https://example.test/static/js/main.chunk.js"],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
             memory = FileMemory(Path(directory))
-            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[katana])
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[katana, extractify])
 
             result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
 
             self.assertEqual(primary.calls, 1)
             self.assertEqual(katana.calls, 1)
+            self.assertEqual(extractify.calls[0]["js_urls"], ["https://example.test/static/js/main.chunk.js"])
             self.assertIn("https://api.example.test/v1/users", {page.url for page in result.pages})
             self.assertEqual(result.out_of_scope, ["https://outside.test/api"])
 
@@ -153,6 +192,124 @@ class AgentToolBoundaryTests(unittest.TestCase):
             self.assertEqual(katana.calls, 0)
             self.assertEqual([page.url for page in result.pages], ["https://example.test/"])
 
+    def test_crawler_agent_selects_extractify_for_javascript_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = StaticCrawlTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://example.test/",
+                            status=200,
+                            content_type="text/html",
+                            title="App",
+                            headers={},
+                            links=[],
+                            references=["https://example.test/app.js"],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            extractify = FakeExtractifyTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://example.test/api/login",
+                            status=0,
+                            content_type="",
+                            title=None,
+                            headers={},
+                            links=[],
+                            references=["https://example.test/app.js"],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[extractify])
+
+            result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+
+            self.assertEqual(extractify.calls, [{"start_url": "https://example.test/", "js_urls": ["https://example.test/app.js"]}])
+            self.assertIn("https://example.test/api/login", {page.url for page in result.pages})
+
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                any(
+                    event["action"] == "tool_call"
+                    and event["data"].get("tool") == "extractify_js_endpoint_discovery"
+                    for event in events
+                )
+            )
+
+    def test_crawler_agent_selects_static_js_analysis_for_javascript_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = StaticCrawlTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://example.test/",
+                            status=200,
+                            content_type="text/html",
+                            title="App",
+                            headers={},
+                            links=[],
+                            references=["https://example.test/shell.js"],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            js_static = FakeJsStaticTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://api.example.test/api/private/auth/login",
+                            status=0,
+                            content_type="",
+                            title=None,
+                            headers={},
+                            links=[],
+                            references=["https://example.test/shell.js"],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[js_static])
+
+            result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+
+            self.assertEqual(js_static.calls, [{"start_url": "https://example.test/", "js_urls": ["https://example.test/shell.js"]}])
+            self.assertIn("https://api.example.test/api/private/auth/login", {page.url for page in result.pages})
+
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                any(
+                    event["action"] == "tool_call"
+                    and event["data"].get("tool") == "js_static_endpoint_discovery"
+                    for event in events
+                )
+            )
+
     def test_crawler_agent_tool_result_includes_failure_details(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             primary = StaticCrawlTool(
@@ -178,8 +335,15 @@ class AgentToolBoundaryTests(unittest.TestCase):
     def test_discovery_agent_definitions_include_agent_owned_tools(self) -> None:
         definitions = {definition.name: definition for definition in discovery_agent_definitions(AppConfig())}
 
-        self.assertEqual(definitions["crawler"].tools[0].name, "crawl_application")
-        self.assertEqual(definitions["crawler"].tools[1].name, "katana_docker_crawler")
+        self.assertEqual(
+            [tool.name for tool in definitions["crawler"].tools],
+            [
+                "crawl_application",
+                "katana_docker_crawler",
+                "extractify_js_endpoint_discovery",
+                "js_static_endpoint_discovery",
+            ],
+        )
         self.assertIsNone(definitions["sbom_compiler"].tools)
         self.assertIsNone(definitions["summarizer"].tools)
 

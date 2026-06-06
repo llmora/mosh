@@ -74,7 +74,17 @@ External tools must not be installed on the host. They should run in Docker cont
 
 Use a Docker image called the discovery tools container for discovery-related external tools.
 
-The current discovery tools container starts from Ubuntu and includes Katana for JavaScript-aware crawling, jsluice parsing, and endpoint discovery.
+The current discovery tools container starts from Debian and includes Katana,
+Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system
+Chromium for JavaScript-aware discovery. Katana must use the bundled system
+browser rather than downloading a browser during each tool execution. Extractify
+is available for extracting endpoints, URLs, and other entry points from
+JavaScript and text assets. The static JavaScript endpoint extractor uses AST
+analysis to resolve common endpoint construction patterns such as constants,
+aliases, string concatenation, template literals, and simple browser-global API
+base values. The container should also include Katana form-fill defaults for
+common login fields, so headless crawling can submit unauthenticated forms and
+observe resulting XHR/fetch endpoints.
 
 The intended Docker interaction is:
 
@@ -196,6 +206,8 @@ The crawler agent may have multiple crawler tools. Current crawler-owned tools a
 
 - application-native crawler tool
 - Katana Docker crawler tool, run through the discovery tools container
+- Extractify Docker tool, run through the discovery tools container for JavaScript endpoint and URL extraction
+- static JavaScript endpoint discovery tool, run through the discovery tools container for AST-based endpoint resolution
 
 The SBOM/component inventory agent currently performs its analysis through the
 CrewAI task context and its LLM output. It should read crawler findings and
@@ -245,7 +257,7 @@ The crawler agent should discover:
 - files
 - forms
 
-The crawler can be implemented inside the application. External crawler tools, such as Katana, must run through Docker and still be invoked as crawler agent tools.
+The crawler can be implemented inside the application. External crawler tools, such as Katana, must run through Docker and still be invoked as crawler agent tools. Katana should run with headless browser execution enabled, system Chromium selected, Chrome sandboxing disabled for root execution, XHR extraction enabled, and automatic form fill enabled for unauthenticated discovery.
 
 The crawler agent should keep a per-run registry of URLs that have already been
 crawled. Before invoking a crawler tool, the crawler agent should check this
@@ -253,6 +265,20 @@ registry. If the requested URL has already been crawled, it should skip the
 duplicate tool call, record the skip decision in `events.json`, and return the
 current crawl findings to the agent. Distinct crawl roots discovered during the
 run should be merged into the aggregate crawl state for later agents.
+
+When the crawler discovers JavaScript assets, it may invoke Extractify to extract
+additional endpoints and URLs from those JavaScript files. Extractify findings
+should be scope-filtered, linked back to the JavaScript source as evidence, and
+merged into the aggregate crawl state.
+
+When JavaScript assets are discovered, the crawler should also have access to a
+static JavaScript endpoint discovery tool. This tool should complement Katana and
+Extractify: Katana observes runtime browser and XHR/fetch behavior, Extractify
+finds broad URL-like strings, and the static analyzer resolves common JavaScript
+construction patterns that produce API paths from constants, aliases, base URL
+globals, concatenation, and template literals. Static findings must be
+scope-filtered, linked back to the JavaScript source as evidence, and merged into
+the aggregate crawl state.
 
 ## Future Scope
 

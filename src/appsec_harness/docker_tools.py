@@ -15,8 +15,17 @@ class DockerToolRunner:
     def __init__(self, image: str) -> None:
         self.image = image
 
-    def run(self, args: list[str], input_text: str | None = None, timeout: int = 60) -> DockerToolResult:
-        command = ["docker", "run", "--rm", "-i", "-t", self.image, *args]
+    def run(
+        self,
+        args: list[str],
+        input_text: str | None = None,
+        timeout: int = 60,
+        tty: bool = False,
+    ) -> DockerToolResult:
+        command = ["docker", "run", "--rm", "-i"]
+        if tty:
+            command.append("-t")
+        command.extend([self.image, *args])
         try:
             completed = subprocess.run(
                 command,

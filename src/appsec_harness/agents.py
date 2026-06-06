@@ -8,6 +8,8 @@ from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawledPage, CrawlResult
 from appsec_harness.tools import (
     CrawlApplicationTool,
+    ExtractifyDockerTool,
+    JsStaticEndpointDockerTool,
     KatanaDockerCrawlerTool,
     ToolDefinition,
 )
@@ -57,7 +59,12 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
             role="Application surface crawler",
             goal="Discover in-scope pages, links, URLs, paths, references, and files.",
             model=config.models.crawler,
-            tools=[CrawlApplicationTool.definition, KatanaDockerCrawlerTool.definition],
+            tools=[
+                CrawlApplicationTool.definition,
+                KatanaDockerCrawlerTool.definition,
+                ExtractifyDockerTool.definition,
+                JsStaticEndpointDockerTool.definition,
+            ],
         ),
         AgentDefinition(
             name="sbom_compiler",
@@ -87,7 +94,7 @@ class CrawlerAgent:
     def __init__(
         self,
         crawl_tool: CrawlApplicationTool | None = None,
-        additional_tools: list[KatanaDockerCrawlerTool] | None = None,
+        additional_tools: list[KatanaDockerCrawlerTool | ExtractifyDockerTool | JsStaticEndpointDockerTool] | None = None,
     ) -> None:
         self.crawl_tool = crawl_tool or CrawlApplicationTool()
         self.additional_tools = additional_tools or []
@@ -117,6 +124,12 @@ class CrawlerAgent:
                 "Keeping app-native crawler results; no strong SPA or JavaScript-heavy signal detected",
                 {"evidence": decision.evidence},
             )
+        extractify_crawl = self._run_extractify_tool(crawl, memory)
+        if extractify_crawl:
+            crawl = self._merge_crawls(crawl, extractify_crawl)
+        js_static_crawl = self._run_js_static_tool(crawl, memory)
+        if js_static_crawl:
+            crawl = self._merge_crawls(crawl, js_static_crawl)
         self._store_crawl(memory, crawl)
         return crawl
 
@@ -168,6 +181,67 @@ class CrawlerAgent:
             )
             return None
         return self._run_crawl_tool(tool, url, memory, max_pages, max_depth)
+
+    def _run_extractify_tool(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
+        return self._run_javascript_asset_tool(
+            "extractify_js_endpoint_discovery",
+            "Invoking extractify_js_endpoint_discovery",
+            crawl,
+            memory,
+        )
+
+    def _run_js_static_tool(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
+        return self._run_javascript_asset_tool(
+            "js_static_endpoint_discovery",
+            "Invoking js_static_endpoint_discovery",
+            crawl,
+            memory,
+        )
+
+    def _run_javascript_asset_tool(
+        self,
+        tool_name: str,
+        message: str,
+        crawl: CrawlResult,
+        memory: FileMemory,
+    ) -> CrawlResult | None:
+        js_urls = _javascript_urls(crawl)
+        if not js_urls:
+            return None
+        tool = next((candidate for candidate in self.additional_tools if candidate.definition.name == tool_name), None)
+        if not tool:
+            memory.record_event(
+                self.name,
+                "tool_unavailable",
+                f"{tool_name} is not available to the crawler agent",
+                {"tool": tool_name},
+            )
+            return None
+        memory.record_event(
+            self.name,
+            "tool_call",
+            message,
+            {
+                "tool": tool_name,
+                "javascript_urls": len(js_urls),
+                "sample": js_urls[:5],
+            },
+        )
+        javascript_crawl = tool.run(crawl.start_url, js_urls)
+        result_data: dict[str, object] = {
+            "pages": len(javascript_crawl.pages),
+            "out_of_scope": len(javascript_crawl.out_of_scope),
+            "failed": len(javascript_crawl.failed),
+        }
+        if javascript_crawl.failed:
+            result_data["failures"] = javascript_crawl.failed
+        memory.record_event(
+            self.name,
+            "tool_result",
+            f"{tool_name} completed",
+            result_data,
+        )
+        return javascript_crawl
 
     def _store_crawl(self, memory: FileMemory, crawl: CrawlResult) -> None:
         memory.add_item("robots", crawl.robots or {"found": False}, self.name)
@@ -253,6 +327,17 @@ def _looks_like_javascript_reference(reference: str) -> bool:
     return path.endswith(".js") or path.endswith(".mjs") or path.endswith(".jsx") or ".js?" in reference.lower()
 
 
+def _javascript_urls(crawl: CrawlResult) -> list[str]:
+    return sorted(
+        {
+            value
+            for page in crawl.pages
+            for value in [page.url, *page.references]
+            if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
+        }
+    )
+
+
 class SbomCompilerAgent:
     name = "sbom_compiler"
 
@@ -287,7 +372,9 @@ def build_discovery_agents(config: AppConfig | None = None) -> DiscoveryAgents:
                     config.tool_image,
                     crawl_duration=config.katana_crawl_duration,
                     docker_timeout=config.katana_docker_timeout,
-                )
+                ),
+                ExtractifyDockerTool(config.tool_image),
+                JsStaticEndpointDockerTool(config.tool_image),
             ]
         ),
         sbom_compiler=SbomCompilerAgent(),

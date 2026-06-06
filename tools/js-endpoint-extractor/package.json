@@ -1,0 +1,9 @@
+{
+  "name": "appsec-harness-js-endpoint-extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "acorn": "^8.15.0"
+  }
+}
