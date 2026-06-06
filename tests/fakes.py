@@ -28,15 +28,24 @@ class FakeCrewRunner:
             }
         )
         from appsec_harness.crawler import Crawler
-        from appsec_harness.components import compile_component_inventory
 
         crawl = Crawler(timeout=3).crawl(target_url, max_pages=max_pages, max_depth=max_depth)
         memory.record_event("crawler", "task_received", "Crawl the target and discover app surface")
         memory.add_item("robots", crawl.robots or {"found": False}, "crawler")
         for page in crawl.pages:
             memory.add_item("crawled_page", page.to_dict(), "crawler")
-        components = compile_component_inventory(crawl)
-        memory.add_item("component_inventory", {"components": components}, "sbom_compiler")
+        components: list[dict[str, str]] = []
+        memory.record_event(
+            "sbom_compiler",
+            "agent_output",
+            "sbom_compiler completed compile_components_task",
+            {
+                "task": "compile_components_task",
+                "output": {
+                    "text": "SBOM analysis is produced by the SBOM agent without a deterministic component tool.",
+                },
+            },
+        )
         summary = {
             "pages_crawled": len(crawl.pages),
             "in_scope_references": sum(len(page.links) + len(page.references) + len(page.forms) for page in crawl.pages),

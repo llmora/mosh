@@ -26,7 +26,8 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
             memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
 
             self.assertTrue(any(event["action"] == "start" and event["agent"] == "orchestrator" for event in events))
-            self.assertTrue(any(item["kind"] == "component_inventory" for item in memory))
+            self.assertTrue(any(event["action"] == "agent_output" and event["agent"] == "sbom_compiler" for event in events))
+            self.assertFalse(any(item["kind"] == "component_inventory" for item in memory))
             self.assertEqual(crew_runner.calls[0]["target_url"], url)
 
 

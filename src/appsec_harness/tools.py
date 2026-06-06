@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from appsec_harness.components import compile_component_inventory
 from appsec_harness.crawler import Crawler
 from appsec_harness.docker_tools import DockerToolRunner
 from appsec_harness.models import CrawledPage, CrawlResult
@@ -217,12 +216,3 @@ def _strip_terminal_sequences(output: str) -> str:
     output = output.replace("\r", "\n")
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
 
-
-class CompileComponentInventoryTool:
-    definition = ToolDefinition(
-        name="compile_component_inventory",
-        description="Compile an observable remote component inventory from crawler findings.",
-    )
-
-    def run(self, crawl: CrawlResult) -> list[dict[str, str]]:
-        return compile_component_inventory(crawl)

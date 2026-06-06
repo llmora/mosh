@@ -7,7 +7,6 @@ from appsec_harness.config import AppConfig
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawledPage, CrawlResult
 from appsec_harness.tools import (
-    CompileComponentInventoryTool,
     CrawlApplicationTool,
     KatanaDockerCrawlerTool,
     ToolDefinition,
@@ -65,7 +64,6 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
             role="Remote component inventory compiler",
             goal="Identify observable libraries, servers, frameworks, and application components.",
             model=config.models.sbom_compiler,
-            tools=[CompileComponentInventoryTool.definition],
         ),
         AgentDefinition(
             name="summarizer",
@@ -257,31 +255,6 @@ def _looks_like_javascript_reference(reference: str) -> bool:
 
 class SbomCompilerAgent:
     name = "sbom_compiler"
-
-    def __init__(self, component_tool: CompileComponentInventoryTool | None = None) -> None:
-        self.component_tool = component_tool or CompileComponentInventoryTool()
-
-    def compile_inventory(self, crawl: CrawlResult, memory: FileMemory) -> list[dict[str, str]]:
-        memory.record_event(
-            self.name,
-            "task_received",
-            "Compile remote component inventory from crawler findings",
-        )
-        memory.record_event(
-            self.name,
-            "tool_call",
-            f"Invoking {self.component_tool.definition.name}",
-            {"tool": self.component_tool.definition.name, "pages": len(crawl.pages)},
-        )
-        components = self.component_tool.run(crawl)
-        memory.add_item("component_inventory", {"components": components}, self.name)
-        memory.record_event(
-            self.name,
-            "tool_result",
-            f"{self.component_tool.definition.name} completed",
-            {"components": len(components)},
-        )
-        return components
 
 
 class SummarizerAgent:

@@ -33,7 +33,8 @@ class CliTests(unittest.TestCase):
 
                 report = json.loads((report_dir / "report.json").read_text(encoding="utf-8"))
                 self.assertEqual(report["summary"]["pages_crawled"], 3)
-                self.assertGreaterEqual(report["summary"]["components_identified"], 1)
+                self.assertEqual(report["summary"]["components_identified"], 0)
+                self.assertEqual(report["components"], [])
 
                 memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
                 self.assertTrue(any(item["kind"] == "llm_report" for item in memory))

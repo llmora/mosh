@@ -135,6 +135,7 @@ Show events such as:
 - findings
 - shared memory writes
 - handoffs between agents
+- final observable output from each agent task
 
 Private chain-of-thought is not required. For now, use observable agent activity and decisions instead.
 
@@ -196,7 +197,10 @@ The crawler agent may have multiple crawler tools. Current crawler-owned tools a
 - application-native crawler tool
 - Katana Docker crawler tool, run through the discovery tools container
 
-The component inventory functionality is a tool owned by the SBOM/component inventory agent. The orchestrator must not call it directly.
+The SBOM/component inventory agent currently performs its analysis through the
+CrewAI task context and its LLM output. It should read crawler findings and
+produce an evidence-based SBOM-style analysis as agent output. There is no
+deterministic component inventory tool in the current implementation.
 
 The summarizer agent owns summarization behavior and the report-writing tool. The
 orchestrator may request reporting, but it must not synthesize the final report by
@@ -243,6 +247,13 @@ The crawler agent should discover:
 
 The crawler can be implemented inside the application. External crawler tools, such as Katana, must run through Docker and still be invoked as crawler agent tools.
 
+The crawler agent should keep a per-run registry of URLs that have already been
+crawled. Before invoking a crawler tool, the crawler agent should check this
+registry. If the requested URL has already been crawled, it should skip the
+duplicate tool call, record the skip decision in `events.json`, and return the
+current crawl findings to the agent. Distinct crawl roots discovered during the
+run should be merged into the aggregate crawl state for later agents.
+
 ## Future Scope
 
 Future versions may add:
@@ -272,7 +283,7 @@ At minimum, tests should cover:
 - report generation
 - agent-owned tool invocation
 - crawler behavior against a fixture app
-- component inventory behavior
+- SBOM agent output recording
 
 # Roadmap
 

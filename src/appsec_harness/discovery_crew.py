@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any, Protocol
 
-from appsec_harness.agents import CrawlerAgent, SbomCompilerAgent, SummarizerAgent, build_discovery_agents
+from appsec_harness.agents import CrawlerAgent, SummarizerAgent, build_discovery_agents
 from appsec_harness.config import AppConfig
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawlResult
 from appsec_harness.reporting import write_reports
+from appsec_harness.scope import normalize_url
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -25,7 +26,8 @@ class DiscoveryCrewState:
     max_pages: int
     max_depth: int
     crawl: CrawlResult | None = None
-    components: list[dict[str, str]] | None = None
+    crawl_results: dict[str, CrawlResult] = field(default_factory=dict)
+    components: list[dict[str, str]] = field(default_factory=list)
     summary: dict[str, int] | None = None
 
 
@@ -85,7 +87,6 @@ class CrewAIDiscoveryCrewRunner:
 
         discovery_agents = build_discovery_agents(self.config)
         crawler_agent = discovery_agents.crawler
-        sbom_agent = discovery_agents.sbom_compiler
         summarizer_agent = discovery_agents.summarizer
 
         crew = _build_yaml_discovery_crew(
@@ -93,7 +94,6 @@ class CrewAIDiscoveryCrewRunner:
             config=self.config,
             state=state,
             crawler_agent=crawler_agent,
-            sbom_agent=sbom_agent,
             summarizer_agent=summarizer_agent,
         )
         crew.crew().kickoff(
@@ -106,8 +106,6 @@ class CrewAIDiscoveryCrewRunner:
 
         if not state.crawl:
             raise RuntimeError("CrewAI crawler agent did not produce crawl findings.")
-        if state.components is None:
-            raise RuntimeError("CrewAI SBOM/component agent did not produce component findings.")
         if state.summary is None:
             raise RuntimeError("CrewAI summarizer agent did not write the report.")
 
@@ -166,11 +164,9 @@ def _build_yaml_discovery_crew(
     config: AppConfig,
     state: DiscoveryCrewState,
     crawler_agent: CrawlerAgent,
-    sbom_agent: SbomCompilerAgent,
     summarizer_agent: SummarizerAgent,
 ):
     crawler_tool = _build_crawler_tool(crewai, state, crawler_agent)
-    component_tool = _build_component_tool(crewai, state, sbom_agent)
     report_tool = _build_report_tool(crewai, state, summarizer_agent)
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("tasks.yaml"))
@@ -194,7 +190,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["sbom_compiler"],
                 llm=_llm(crewai, config.models.sbom_compiler, config.openrouter_api_key),
-                tools=[component_tool],
+                tools=[],
                 allow_delegation=False,
             )
 
@@ -209,15 +205,36 @@ def _build_yaml_discovery_crew(
 
         @crewai.task
         def crawl_application_task(self):
-            return crewai.Task(config=self.tasks_config["crawl_application_task"], agent=self.crawler())
+            return _build_task_with_output_event(
+                crewai,
+                state,
+                config=self.tasks_config["crawl_application_task"],
+                agent=self.crawler(),
+                agent_name="crawler",
+                task_name="crawl_application_task",
+            )
 
         @crewai.task
         def compile_components_task(self):
-            return crewai.Task(config=self.tasks_config["compile_components_task"], agent=self.sbom_compiler())
+            return _build_task_with_output_event(
+                crewai,
+                state,
+                config=self.tasks_config["compile_components_task"],
+                agent=self.sbom_compiler(),
+                agent_name="sbom_compiler",
+                task_name="compile_components_task",
+            )
 
         @crewai.task
         def write_report_task(self):
-            return crewai.Task(config=self.tasks_config["write_report_task"], agent=self.summarizer())
+            return _build_task_with_output_event(
+                crewai,
+                state,
+                config=self.tasks_config["write_report_task"],
+                agent=self.summarizer(),
+                agent_name="summarizer",
+                task_name="write_report_task",
+            )
 
         @crewai.crew
         def crew(self):
@@ -242,13 +259,51 @@ def _build_crawler_tool(crewai: Any, state: DiscoveryCrewState, crawler_agent: C
 
         def _run(self, target_url: str) -> str:
             try:
-                state.crawl = crawler_agent.discover(
+                canonical_url = normalize_url(target_url)
+                if canonical_url in state.crawl_results:
+                    state.memory.record_event(
+                        "crawler",
+                        "tool_skip",
+                        "Skipping crawl_application_surface because URL was already crawled",
+                        {
+                            "url": target_url,
+                            "canonical_url": canonical_url,
+                            "crawled_urls": sorted(state.crawl_results.keys()),
+                        },
+                    )
+                    return json.dumps(
+                        {
+                            "skipped": True,
+                            "reason": "already_crawled",
+                            "canonical_url": canonical_url,
+                            "crawled_urls": sorted(state.crawl_results.keys()),
+                            "crawl": state.crawl.to_dict() if state.crawl else state.crawl_results[canonical_url].to_dict(),
+                        },
+                        sort_keys=True,
+                    )
+
+                crawl = crawler_agent.discover(
                     target_url,
                     state.memory,
                     max_pages=state.max_pages,
                     max_depth=state.max_depth,
                 )
-                return json.dumps(state.crawl.to_dict(), sort_keys=True)
+                state.crawl_results[canonical_url] = crawl
+                state.crawl = _merge_crawl_results(state.crawl, crawl)
+                state.memory.add_item(
+                    "crawl_registry",
+                    {"urls": sorted(state.crawl_results.keys())},
+                    "crawler",
+                )
+                return json.dumps(
+                    {
+                        "skipped": False,
+                        "canonical_url": canonical_url,
+                        "crawled_urls": sorted(state.crawl_results.keys()),
+                        "crawl": state.crawl.to_dict(),
+                    },
+                    sort_keys=True,
+                )
             except Exception as exc:
                 state.memory.record_event(
                     "crawler",
@@ -259,24 +314,6 @@ def _build_crawler_tool(crewai: Any, state: DiscoveryCrewState, crawler_agent: C
                 raise
 
     return DiscoveryCrawlerTool()
-
-
-def _build_component_tool(crewai: Any, state: DiscoveryCrewState, sbom_agent: SbomCompilerAgent):
-    class ComponentInput(crewai.BaseModel):
-        reason: str = crewai.Field(..., description="Why component inventory is being compiled.")
-
-    class ComponentInventoryTool(crewai.BaseTool):
-        name: str = "compile_component_inventory"
-        description: str = "Compile observable remote component inventory from crawler findings."
-        args_schema: type[crewai.BaseModel] = ComponentInput
-
-        def _run(self, reason: str) -> str:
-            if not state.crawl:
-                raise RuntimeError("Crawler findings are required before component inventory.")
-            state.components = sbom_agent.compile_inventory(state.crawl, state.memory)
-            return json.dumps({"components": state.components, "reason": reason}, sort_keys=True)
-
-    return ComponentInventoryTool()
 
 
 def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent: SummarizerAgent):
@@ -298,8 +335,7 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent:
         def _run(self, markdown_report: str, report_json: Any | None = None) -> str:
             if not state.crawl:
                 raise RuntimeError("Crawler findings are required before writing the report.")
-            components = state.components or []
-            state.summary = summarizer_agent.summarize(state.crawl, components, state.memory)
+            state.summary = summarizer_agent.summarize(state.crawl, state.components, state.memory)
             agent_report = _coerce_agent_report(report_json)
             state.memory.add_item(
                 "llm_report",
@@ -323,7 +359,7 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent:
                 state.report_dir,
                 state.crawl.start_url,
                 state.crawl,
-                components,
+                state.components,
                 state.summary,
                 markdown_report,
                 agent_report=agent_report,
@@ -345,6 +381,61 @@ def _openrouter_model(model: str) -> str:
     return model if model.startswith("openrouter/") else f"openrouter/{model}"
 
 
+def _build_task_with_output_event(
+    crewai: Any,
+    state: DiscoveryCrewState,
+    *,
+    config: dict[str, Any],
+    agent: Any,
+    agent_name: str,
+    task_name: str,
+):
+    callback = _agent_output_callback(state, agent_name, task_name)
+    try:
+        return crewai.Task(config=config, agent=agent, callback=callback)
+    except TypeError as exc:
+        if "callback" not in str(exc):
+            raise
+        state.memory.record_event(
+            "orchestrator",
+            "agent_output_capture_unavailable",
+            "CrewAI Task does not accept callback; agent output capture is unavailable",
+            {"agent": agent_name, "task": task_name},
+        )
+        return crewai.Task(config=config, agent=agent)
+
+
+def _agent_output_callback(state: DiscoveryCrewState, agent_name: str, task_name: str):
+    def callback(output: Any) -> None:
+        state.memory.record_event(
+            agent_name,
+            "agent_output",
+            f"{agent_name} completed {task_name}",
+            {
+                "task": task_name,
+                "output": _serialize_agent_output(output),
+            },
+        )
+
+    return callback
+
+
+def _serialize_agent_output(output: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {"text": str(output)}
+    for attr in ("raw", "json_dict", "pydantic"):
+        if hasattr(output, attr):
+            data[attr] = _json_safe(getattr(output, attr))
+    return data
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
 def _coerce_agent_report(report_json: Any | None) -> dict[str, Any]:
     if report_json is None:
         return {}
@@ -362,3 +453,22 @@ def _coerce_agent_report(report_json: Any | None) -> dict[str, Any]:
             return parsed
         return {"content": parsed}
     return {"content": report_json}
+
+
+def _merge_crawl_results(existing: CrawlResult | None, new: CrawlResult) -> CrawlResult:
+    if existing is None:
+        return new
+
+    pages_by_url = {page.url: page for page in existing.pages}
+    for page in new.pages:
+        current = pages_by_url.get(page.url)
+        if current is None or (current.status == 0 and page.status != 0):
+            pages_by_url[page.url] = page
+
+    return CrawlResult(
+        start_url=existing.start_url,
+        pages=sorted(pages_by_url.values(), key=lambda page: page.url),
+        out_of_scope=sorted({*existing.out_of_scope, *new.out_of_scope}),
+        failed=[*existing.failed, *new.failed],
+        robots=existing.robots or new.robots,
+    )

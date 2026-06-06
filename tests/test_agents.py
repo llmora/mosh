@@ -180,7 +180,7 @@ class AgentToolBoundaryTests(unittest.TestCase):
 
         self.assertEqual(definitions["crawler"].tools[0].name, "crawl_application")
         self.assertEqual(definitions["crawler"].tools[1].name, "katana_docker_crawler")
-        self.assertEqual(definitions["sbom_compiler"].tools[0].name, "compile_component_inventory")
+        self.assertIsNone(definitions["sbom_compiler"].tools)
         self.assertIsNone(definitions["summarizer"].tools)
 
 
