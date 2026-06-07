@@ -13,6 +13,7 @@ class AgentModelConfig:
     security_test_planner: str = "deepseek/deepseek-v4-flash"
     security_test_critic: str = "openai/gpt-5.2"
     security_test_finalizer: str = "deepseek/deepseek-v4-flash"
+    engagement_template_refiner: str = "deepseek/deepseek-v4-flash"
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class AppConfig:
     candidate_follow_up_limit: int = 5
     max_depth: int = 5
     planning_max_revisions: int = 1
+    refine_engagement_template_with_llm: bool = True
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -38,5 +40,13 @@ class AppConfig:
             dirb_docker_timeout=int(os.getenv("APPSEC_HARNESS_DIRB_DOCKER_TIMEOUT", "120")),
             candidate_follow_up_limit=int(os.getenv("APPSEC_HARNESS_CANDIDATE_FOLLOW_UP_LIMIT", "5")),
             max_depth=int(os.getenv("APPSEC_HARNESS_MAX_DEPTH", "5")),
-            planning_max_revisions=int(os.getenv("APPSEC_HARNESS_PLANNING_MAX_REVISIONS", "2")),
+            planning_max_revisions=int(os.getenv("APPSEC_HARNESS_PLANNING_MAX_REVISIONS", "1")),
+            refine_engagement_template_with_llm=_env_bool("APPSEC_HARNESS_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM", True),
         )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}

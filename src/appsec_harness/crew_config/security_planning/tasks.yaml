@@ -92,6 +92,12 @@ critique_security_test_plan_task:
     Planner/critic iteration:
     {iteration} of {max_attempts}
 
+    Structured security test plan JSON submitted by the planner:
+    {security_test_plan}
+
+    Review this JSON plan. Do not review the planner's prose summary or status
+    message if it differs from the structured JSON.
+
     You must call submit_security_test_plan_critique exactly once. The review
     argument must be a structured object or JSON string with:
     - accepted: boolean
@@ -142,3 +148,34 @@ write_security_test_plan_task:
   expected_output: >
     Confirmation that write_security_test_plan persisted security_test_plan.md.
   agent: security_test_finalizer
+
+refine_engagement_template_task:
+  description: >
+    Refine the deterministic engagement template for the target.
+
+    Target URL:
+    {target_url}
+
+    Final security test plan JSON:
+    {security_test_plan}
+
+    Deterministic engagement template JSON:
+    {engagement_template}
+
+    You must call write_refined_engagement_template exactly once with a
+    structured object or JSON string.
+
+    Rules:
+    - Do not invent credentials, hosts, tokens, contact details, or safe test data.
+    - Authorization is assumed true for owned applications.
+    - Keep production targets as defaults.
+    - Keep alternative targets optional. If an alternative target is absent, testing uses production.
+    - Classify credentials and safe test data as required, useful, optional, or deferred.
+    - Do not block unauthenticated or passive tests just because credentials would help with comparison.
+    - Reduce duplicate questions.
+    - Keep all required schema keys:
+      engagement, targets, contacts, limits, credentials, safe_test_data, required_answers.
+    - You may add execution_readiness if helpful, but do not remove required keys.
+  expected_output: >
+    Confirmation that write_refined_engagement_template persisted engagement_template.yaml.
+  agent: engagement_template_refiner

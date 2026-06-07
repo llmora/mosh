@@ -5,15 +5,21 @@ import tempfile
 import unittest
 from importlib import resources
 from pathlib import Path
+from unittest.mock import patch
 
 from appsec_harness.config import AppConfig
 from appsec_harness.discovery_crew import CREW_CONFIG_PACKAGE
+from appsec_harness.engagement import build_engagement_template, load_engagement_file, resolve_target_mapping
 from appsec_harness.memory import FileMemory
 from appsec_harness.scope import report_dir_name
 from appsec_harness.security_planning_crew import (
+    CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
     SecurityTestPlanningState,
+    _build_write_refined_engagement_template_tool,
     _build_write_security_test_plan_tool,
+    _select_yaml_top_level_blocks,
+    _write_security_planning_subset_configs,
     load_discovery_context,
 )
 from appsec_harness.security_test_planning_reporting import render_security_test_plan, write_security_test_plan
@@ -27,6 +33,96 @@ class FakeCrewAI:
     @staticmethod
     def Field(default=None, description: str = ""):
         return default
+
+
+class FakeRuntimeCrewAI(FakeCrewAI):
+    critic_inputs: dict[str, object] | None = None
+
+    class Process:
+        sequential = "sequential"
+
+    class LLM:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class Agent:
+        def __init__(self, config, llm, tools, allow_delegation) -> None:
+            self.config = config
+            self.llm = llm
+            self.tools = tools
+            self.allow_delegation = allow_delegation
+
+    class Task:
+        def __init__(self, config, agent, callback=None) -> None:
+            self.config = config
+            self.agent = agent
+            self.callback = callback
+
+    class Crew:
+        def __init__(self, agents, tasks, process, verbose) -> None:
+            self.agents = agents
+            self.tasks = tasks
+            self.process = process
+            self.verbose = verbose
+
+        def kickoff(self, inputs):
+            for task in self.tasks:
+                for tool in task.agent.tools:
+                    if tool.name == "submit_security_test_plan":
+                        tool._run(_plan())
+                    elif tool.name == "submit_security_test_plan_critique":
+                        FakeRuntimeCrewAI.critic_inputs = inputs
+                        submitted_plan = json.loads(inputs["security_test_plan"])
+                        tool._run(
+                            {
+                                "accepted": bool(submitted_plan.get("test_hypotheses")),
+                                "summary": "Reviewed structured security_test_plan JSON.",
+                            }
+                        )
+                    elif tool.name == "write_security_test_plan":
+                        tool._run(
+                            json.loads(inputs["security_test_plan"]),
+                            json.loads(inputs["critic_review"]),
+                        )
+                        raise RuntimeError("finalizer post-processing failed")
+            return None
+
+    @staticmethod
+    def CrewBase(cls):
+        if isinstance(getattr(cls, "agents_config", None), str):
+            cls.agents_config = FakeRuntimeCrewAI._load_config_blocks(cls.agents_config)
+        if isinstance(getattr(cls, "tasks_config", None), str):
+            cls.tasks_config = FakeRuntimeCrewAI._load_config_blocks(cls.tasks_config)
+        return cls
+
+    @staticmethod
+    def _load_config_blocks(path: str) -> dict[str, str]:
+        blocks: dict[str, list[str]] = {}
+        current_key: str | None = None
+        current_block: list[str] = []
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if line and not line[0].isspace() and line.rstrip().endswith(":"):
+                if current_key is not None:
+                    blocks[current_key] = current_block
+                current_key = line.rstrip()[:-1]
+                current_block = []
+            elif current_key is not None:
+                current_block.append(line)
+        if current_key is not None:
+            blocks[current_key] = current_block
+        return {key: "\n".join(value) for key, value in blocks.items()}
+
+    @staticmethod
+    def agent(func):
+        return func
+
+    @staticmethod
+    def task(func):
+        return func
+
+    @staticmethod
+    def crew(func):
+        return func
 
 
 def _plan() -> dict[str, object]:
@@ -160,6 +256,35 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertIn("Planner/critic accepted: `true`", markdown)
             self.assertIn("- Summary: Accepted.", markdown)
 
+    def test_refined_engagement_template_tool_rejects_invented_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir)
+            deterministic = build_engagement_template("https://example.test", _plan())
+            state = SecurityTestPlanningState(
+                target_url="https://example.test",
+                discovery_dir=report_dir / "discovery",
+                report_dir=report_dir,
+                memory=memory,
+                discovery_context={},
+                current_plan=_plan(),
+                current_review={"accepted": True, "summary": "Accepted."},
+                accepted=True,
+                iterations=1,
+            )
+            tool = _build_write_refined_engagement_template_tool(FakeCrewAI, state, deterministic)
+            candidate = json.loads(json.dumps(deterministic))
+            role = next(iter(candidate["credentials"]))
+            candidate["credentials"][role]["username"] = "invented-user"
+
+            result = json.loads(tool._run(candidate))
+
+            self.assertTrue(result["fallback_used"])
+            template = load_engagement_file(report_dir / "engagement_template.yaml")
+            self.assertIsNone(template["credentials"][role]["username"])
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "refinement_rejected" for event in events))
+
     def test_load_discovery_context_reads_discovery_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             discovery_dir = Path(directory)
@@ -192,9 +317,73 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
             self.assertEqual(report_dir.name, "security-test-planning")
             self.assertTrue((report_dir / "security_test_plan.md").exists())
+            self.assertTrue((report_dir / "engagement_template.yaml").exists())
             self.assertEqual(runner.calls[0]["discovery_dir"], str(discovery_dir))
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "start" for event in events))
+
+    def test_engagement_template_contains_alternative_target_overrides_and_credential_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            discovery_dir = output_root / report_dir_name(target_url) / "discovery"
+            discovery_dir.mkdir(parents=True)
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+
+            report_dir = SecurityTestPlanningOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=FakeSecurityPlanningRunner(),
+            ).run(target_url)
+
+            template = load_engagement_file(report_dir / "engagement_template.yaml")
+            self.assertIn("alternative", template["targets"])
+            self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
+            self.assertIsNone(template["targets"]["alternative"]["website"])
+            self.assertIn("authenticated_user", template["credentials"])
+            self.assertTrue(template["engagement"]["authorization_confirmed"])
+
+            template["targets"]["alternative"]["api"] = "https://staging-api.example.test/api/private"
+            resolved = resolve_target_mapping(template)
+            self.assertEqual(resolved["api"], "https://staging-api.example.test/api/private")
+            self.assertEqual(resolved["website"], "https://example.test")
+
+    def test_engagement_template_ignores_regex_strings_that_look_like_urls(self) -> None:
+        plan = json.loads(json.dumps(_plan()))
+        plan["test_hypotheses"][0]["tools_expected"].append(
+            r"Sentry DSN regex: https://[a-f0-9]{32}@[a-f0-9]{16}.ingest.sentry.io/[0-9]+"
+        )
+
+        template = build_engagement_template("https://example.test", plan)
+
+        self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
+
+    def test_crewai_runner_writes_engagement_template_before_finalizer_returns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            FakeRuntimeCrewAI.critic_inputs = None
+            report_dir = Path(directory) / "security-test-planning"
+            discovery_dir = Path(directory) / "discovery"
+            discovery_dir.mkdir()
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            memory = FileMemory(report_dir)
+            runner = CrewAISecurityTestPlanningCrewRunner(
+                AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
+            )
+
+            with patch("appsec_harness.security_planning_crew._load_crewai", return_value=FakeRuntimeCrewAI):
+                with self.assertRaisesRegex(RuntimeError, "finalizer post-processing failed"):
+                    runner.run("https://example.test", discovery_dir, report_dir, memory)
+
+            self.assertTrue((report_dir / "engagement_template.yaml").exists())
+            self.assertIsNotNone(FakeRuntimeCrewAI.critic_inputs)
+            critic_plan = json.loads(FakeRuntimeCrewAI.critic_inputs["security_test_plan"])
+            self.assertEqual(critic_plan["test_hypotheses"][0]["id"], "API-001")
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "engagement_template_written" for event in events))
 
     def test_missing_discovery_directory_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -212,9 +401,11 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("security_test_planner:", agents)
         self.assertIn("security_test_critic:", agents)
         self.assertIn("security_test_finalizer:", agents)
+        self.assertIn("engagement_template_refiner:", agents)
         self.assertIn("draft_security_test_plan_task:", tasks)
         self.assertIn("critique_security_test_plan_task:", tasks)
         self.assertIn("write_security_test_plan_task:", tasks)
+        self.assertIn("refine_engagement_template_task:", tasks)
 
     def test_security_planning_yaml_prioritizes_business_risk(self) -> None:
         agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml").read_text(
@@ -230,6 +421,33 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("deferred_test_opportunities", tasks)
         self.assertIn("requirements_to_proceed", tasks)
         self.assertIn("generic security checklist", tasks)
+        self.assertIn("{security_test_plan}", tasks)
+        self.assertIn("Do not review the planner's prose summary", tasks)
+
+    def test_security_planning_runtime_config_subsets_only_include_relevant_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agents_path, tasks_path = _write_security_planning_subset_configs(
+                Path(directory),
+                "cycle",
+                agent_keys=["security_test_planner", "security_test_critic"],
+                task_keys=["draft_security_test_plan_task", "critique_security_test_plan_task"],
+            )
+
+            agents = Path(agents_path).read_text(encoding="utf-8")
+            tasks = Path(tasks_path).read_text(encoding="utf-8")
+
+        self.assertTrue(Path(agents_path).is_absolute())
+        self.assertTrue(Path(tasks_path).is_absolute())
+        self.assertIn("security_test_planner:", agents)
+        self.assertIn("security_test_critic:", agents)
+        self.assertNotIn("engagement_template_refiner:", agents)
+        self.assertIn("draft_security_test_plan_task:", tasks)
+        self.assertIn("critique_security_test_plan_task:", tasks)
+        self.assertNotIn("refine_engagement_template_task:", tasks)
+
+    def test_security_planning_yaml_subset_reports_missing_blocks(self) -> None:
+        with self.assertRaisesRegex(KeyError, "missing_agent"):
+            _select_yaml_top_level_blocks("security_test_planner:\n  role: Planner\n", ["missing_agent"])
 
 
 if __name__ == "__main__":

@@ -119,6 +119,8 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
         self.assertIn("draft_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
         self.assertIn("security_test_finalizer:", planning_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("write_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("engagement_template_refiner:", planning_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("refine_engagement_template_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
 
     def test_crawler_tool_skips_previously_crawled_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

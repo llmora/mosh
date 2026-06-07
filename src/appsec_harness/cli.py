@@ -7,7 +7,9 @@ from pathlib import Path
 from appsec_harness.config import AppConfig
 from appsec_harness.models import Event
 from appsec_harness.orchestrator import DiscoveryOrchestrator
+from appsec_harness.scope import report_dir_name
 from appsec_harness.security_planning_crew import SecurityTestPlanningOrchestrator
+from appsec_harness.security_testing_crew import SecurityTestingOrchestrator
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,12 +28,19 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("url", help="Target application URL to plan from")
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    test_parser = subcommands.add_parser("test-security", help="Run security testing preflight from a security plan")
+    test_parser.add_argument("url", help="Target application URL to test")
+    test_parser.add_argument("--engagement-file", help="Path to the engagement YAML file")
+    test_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+
     args = parser.parse_args(argv)
 
     if args.command == "discover":
         return _run_discovery(config, args)
     if args.command == "plan-security":
         return _run_security_test_planning(config, args)
+    if args.command == "test-security":
+        return _run_security_testing(config, args)
     parser.error(f"Unsupported command: {args.command}")
     return 2
 
@@ -66,11 +75,32 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
     return 0
 
 
+def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    engagement_file = (
+        Path(args.engagement_file)
+        if args.engagement_file
+        else output_root / report_dir_name(args.url) / "security-test-planning" / "engagement_template.yaml"
+    )
+    orchestrator = SecurityTestingOrchestrator(
+        config,
+        output_root=output_root,
+        event_sink=_print_event,
+    )
+    try:
+        report_dir = orchestrator.run(args.url, engagement_file=engagement_file)
+    except Exception as exc:
+        print(f"appsec-harness failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Security testing preflight written to {report_dir}")
+    return 0
+
+
 def _normalize_legacy_args(argv: list[str] | None) -> list[str]:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         return args
-    commands = {"discover", "plan-security"}
+    commands = {"discover", "plan-security", "test-security"}
     if args[0] in commands or args[0].startswith("-"):
         return args
     return ["discover", *args]

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from appsec_harness.cli import main
+from appsec_harness.engagement import write_engagement_template
 from appsec_harness.scope import report_dir_name
 from tests.fakes import FakeCrewRunner, FakeSecurityPlanningRunner
 from tests.fixtures import fixture_server
@@ -68,6 +70,90 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("Security test plan written to", stdout.getvalue())
             self.assertTrue((report_dir / "security_test_plan.md").exists())
+
+    def test_cli_test_security_subcommand_writes_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            planning_dir = output_root / report_dir_name(target_url) / "security-test-planning"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "HDR-001",
+                        "title": "Security headers are present",
+                        "priority": "medium",
+                        "surface": "headers",
+                        "requirements": ["No credentials required."],
+                        "tools_expected": ["HTTP client"],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, plan)
+            engagement_file.write_text(
+                (Path(directory) / "engagement_template.yaml")
+                .read_text(encoding="utf-8")
+                .replace("authorization_confirmed: false", "authorization_confirmed: true"),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "test-security",
+                        target_url,
+                        "--output-root",
+                        str(output_root),
+                        "--engagement-file",
+                        str(engagement_file),
+                    ]
+                )
+
+            report_dir = output_root / report_dir_name(target_url) / "security-testing"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security testing preflight written to", stdout.getvalue())
+            self.assertTrue((report_dir / "preflight.md").exists())
+
+    def test_cli_test_security_subcommand_uses_default_engagement_template(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            planning_dir = output_root / report_dir_name(target_url) / "security-test-planning"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "HDR-001",
+                        "title": "Security headers are present",
+                        "priority": "medium",
+                        "surface": "headers",
+                        "requirements": ["No credentials required."],
+                        "tools_expected": ["HTTP client"],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template(planning_dir, target_url, plan)
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["test-security", target_url, "--output-root", str(output_root)])
+
+            report_dir = output_root / report_dir_name(target_url) / "security-testing"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security testing preflight written to", stdout.getvalue())
+            self.assertTrue((report_dir / "preflight.md").exists())
 
 
 if __name__ == "__main__":
