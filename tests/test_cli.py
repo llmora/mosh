@@ -11,7 +11,7 @@ from unittest.mock import patch
 from appsec_harness.cli import main
 from appsec_harness.engagement import write_engagement_template
 from appsec_harness.scope import report_dir_name
-from tests.fakes import FakeCrewRunner, FakeSecurityPlanningRunner
+from tests.fakes import FakeCrewRunner, FakeSecurityPlanningRunner, FakeSecurityTestingRunner
 from tests.fixtures import fixture_server
 
 
@@ -104,17 +104,21 @@ class CliTests(unittest.TestCase):
             )
             stdout = io.StringIO()
 
-            with contextlib.redirect_stdout(stdout):
-                exit_code = main(
-                    [
-                        "test-security",
-                        target_url,
-                        "--output-root",
-                        str(output_root),
-                        "--engagement-file",
-                        str(engagement_file),
-                    ]
-                )
+            with patch(
+                "appsec_harness.security_testing_crew.build_security_testing_crew_runner",
+                return_value=FakeSecurityTestingRunner(),
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "test-security",
+                            target_url,
+                            "--output-root",
+                            str(output_root),
+                            "--engagement-file",
+                            str(engagement_file),
+                        ]
+                    )
 
             report_dir = output_root / report_dir_name(target_url) / "security-testing"
             self.assertEqual(exit_code, 0)
@@ -147,8 +151,12 @@ class CliTests(unittest.TestCase):
             write_engagement_template(planning_dir, target_url, plan)
             stdout = io.StringIO()
 
-            with contextlib.redirect_stdout(stdout):
-                exit_code = main(["test-security", target_url, "--output-root", str(output_root)])
+            with patch(
+                "appsec_harness.security_testing_crew.build_security_testing_crew_runner",
+                return_value=FakeSecurityTestingRunner(),
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["test-security", target_url, "--output-root", str(output_root)])
 
             report_dir = output_root / report_dir_name(target_url) / "security-testing"
             self.assertEqual(exit_code, 0)

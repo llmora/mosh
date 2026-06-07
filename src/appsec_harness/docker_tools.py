@@ -21,10 +21,16 @@ class DockerToolRunner:
         input_text: str | None = None,
         timeout: int = 60,
         tty: bool = False,
+        volumes: list[tuple[str, str]] | None = None,
+        workdir: str | None = None,
     ) -> DockerToolResult:
         command = ["docker", "run", "--rm", "-i"]
         if tty:
             command.append("-t")
+        for source, target in volumes or []:
+            command.extend(["-v", f"{source}:{target}"])
+        if workdir:
+            command.extend(["-w", workdir])
         command.extend([self.image, *args])
         try:
             completed = subprocess.run(

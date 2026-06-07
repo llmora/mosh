@@ -14,6 +14,9 @@ class AgentModelConfig:
     security_test_critic: str = "openai/gpt-5.2"
     security_test_finalizer: str = "deepseek/deepseek-v4-flash"
     engagement_template_refiner: str = "deepseek/deepseek-v4-flash"
+    security_test_executor: str = "deepseek/deepseek-v4-flash"
+    security_test_reviewer: str = "deepseek/deepseek-v4-flash"
+    security_test_reporter: str = "deepseek/deepseek-v4-flash"
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,9 @@ class AppConfig:
     openrouter_api_key: str | None = None
     models: AgentModelConfig = field(default_factory=AgentModelConfig)
     tool_image: str = "appsec-harness-discovery-tools:latest"
+    security_tool_image: str = "appsec-harness-security-tools:latest"
+    security_command_timeout: int = 300
+    security_execution_max_revisions: int = 2
     katana_crawl_duration: str = "270s"
     katana_docker_timeout: int = 300
     dirb_wordlist: str = "/usr/share/dirb/wordlists/common.txt"
@@ -34,6 +40,9 @@ class AppConfig:
     def from_env(cls) -> "AppConfig":
         return cls(
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
+            security_tool_image=os.getenv("APPSEC_HARNESS_SECURITY_TOOL_IMAGE", "appsec-harness-security-tools:latest"),
+            security_command_timeout=int(os.getenv("APPSEC_HARNESS_SECURITY_COMMAND_TIMEOUT", "300")),
+            security_execution_max_revisions=int(os.getenv("APPSEC_HARNESS_SECURITY_EXECUTION_MAX_REVISIONS", "2")),
             katana_crawl_duration=os.getenv("APPSEC_HARNESS_KATANA_CRAWL_DURATION", "270s"),
             katana_docker_timeout=int(os.getenv("APPSEC_HARNESS_KATANA_DOCKER_TIMEOUT", "300")),
             dirb_wordlist=os.getenv("APPSEC_HARNESS_DIRB_WORDLIST", "/usr/share/dirb/wordlists/common.txt"),

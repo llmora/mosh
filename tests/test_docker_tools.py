@@ -48,6 +48,44 @@ class DockerToolRunnerTests(unittest.TestCase):
         )
         self.assertEqual(result.stdout, "ok")
 
+    def test_can_mount_workspace_and_set_workdir(self) -> None:
+        runner = DockerToolRunner("image:test")
+
+        with patch("appsec_harness.docker_tools.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "ok"
+            run.return_value.stderr = ""
+
+            result = runner.run(
+                ["bash", "-lc", "pwd"],
+                timeout=30,
+                volumes=[("/host/workspace", "/work")],
+                workdir="/work",
+            )
+
+        run.assert_called_once_with(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "-v",
+                "/host/workspace:/work",
+                "-w",
+                "/work",
+                "image:test",
+                "bash",
+                "-lc",
+                "pwd",
+            ],
+            input=None,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.stdout, "ok")
+
     def test_returns_timeout_result_instead_of_raising(self) -> None:
         runner = DockerToolRunner("image:test")
 

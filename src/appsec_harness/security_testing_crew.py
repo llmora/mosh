@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
+from urllib.parse import urlparse
 
 from appsec_harness.config import AppConfig
+from appsec_harness.discovery_crew import CREW_CONFIG_PACKAGE, CrewAIUnavailable, _build_task_with_output_event, _llm, _load_crewai
+from appsec_harness.docker_tools import DockerToolResult, DockerToolRunner
 from appsec_harness.engagement import load_engagement_file, resolve_target_mapping
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import Event
@@ -20,16 +24,49 @@ class SecurityTestPreflightResult:
     targets: dict[str, str]
 
 
+@dataclass
+class SecurityTestExecutionState:
+    target_url: str
+    report_dir: Path
+    workspace_dir: Path
+    memory: FileMemory
+    hypothesis: dict[str, Any]
+    engagement: dict[str, Any]
+    targets: dict[str, str]
+    executed_report_path: Path
+    revision: int = 1
+    evidence: dict[str, Any] | None = None
+    review: dict[str, Any] | None = None
+    report_written: bool = False
+    commands: list[dict[str, Any]] = field(default_factory=list)
+
+
+class SecurityTestingCrewRunner(Protocol):
+    def run(
+        self,
+        target_url: str,
+        report_dir: Path,
+        memory: FileMemory,
+        plan: dict[str, Any],
+        engagement: dict[str, Any],
+        preflight: SecurityTestPreflightResult,
+        ready_pending: list[dict[str, Any]],
+    ) -> None:
+        pass
+
+
 class SecurityTestingOrchestrator:
     def __init__(
         self,
         config: AppConfig,
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
+        crew_runner: SecurityTestingCrewRunner | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
+        self.crew_runner = crew_runner or build_security_testing_crew_runner(config)
 
     def run(self, url: str, engagement_file: Path) -> Path:
         domain_dir = self.output_root / report_dir_name(url)
@@ -47,26 +84,583 @@ class SecurityTestingOrchestrator:
         result = run_security_testing_preflight(plan, engagement)
         markdown = render_preflight_report(url, engagement_file, result)
         (report_dir / "preflight.md").write_text(markdown, encoding="utf-8")
+        ready_pending = _ready_pending_hypotheses(plan, result, report_dir)
         memory.add_item(
             "security_testing_preflight",
             {
                 "ready": result.ready,
                 "blocked": result.blocked,
                 "targets": result.targets,
+                "ready_pending": [_hypothesis_id(item) for item in ready_pending],
             },
             "security_test_coordinator",
         )
+        if ready_pending:
+            memory.record_event(
+                "orchestrator",
+                "execution_start",
+                "Starting security test execution",
+                {"tests": [_hypothesis_id(item) for item in ready_pending]},
+            )
+            self.crew_runner.run(url, report_dir, memory, plan, engagement, result, ready_pending)
+        else:
+            memory.record_event(
+                "orchestrator",
+                "execution_skipped",
+                "No ready pending security tests to execute",
+                {"ready": len(result.ready), "already_executed": sorted(_executed_test_ids(report_dir))},
+            )
         memory.record_event(
             "orchestrator",
             "complete",
-            "Security testing preflight completed",
+            "Security testing completed",
             {
                 "ready": len(result.ready),
                 "blocked": len(result.blocked),
+                "executed": len(ready_pending),
                 "report_dir": str(report_dir),
             },
         )
         return report_dir
+
+
+def build_security_testing_crew_runner(config: AppConfig) -> SecurityTestingCrewRunner:
+    return CrewAISecurityTestingCrewRunner(config)
+
+
+class CrewAISecurityTestingCrewRunner:
+    def __init__(self, config: AppConfig) -> None:
+        self.config = config
+
+    def run(
+        self,
+        target_url: str,
+        report_dir: Path,
+        memory: FileMemory,
+        plan: dict[str, Any],
+        engagement: dict[str, Any],
+        preflight: SecurityTestPreflightResult,
+        ready_pending: list[dict[str, Any]],
+    ) -> None:
+        if not self.config.openrouter_api_key:
+            raise CrewAIUnavailable("OPENROUTER_API_KEY is not set.")
+        crewai = _load_crewai()
+        for hypothesis in ready_pending:
+            _run_one_security_test(
+                crewai=crewai,
+                config=self.config,
+                target_url=target_url,
+                report_dir=report_dir,
+                memory=memory,
+                hypothesis=hypothesis,
+                engagement=engagement,
+                targets=preflight.targets,
+            )
+
+
+def _run_one_security_test(
+    crewai: Any,
+    config: AppConfig,
+    target_url: str,
+    report_dir: Path,
+    memory: FileMemory,
+    hypothesis: dict[str, Any],
+    engagement: dict[str, Any],
+    targets: dict[str, str],
+) -> None:
+    test_id = _hypothesis_id(hypothesis)
+    workspace_dir = report_dir / "workspaces" / _safe_test_id(test_id)
+    executed_report_path = report_dir / "executed_tests" / f"{_safe_test_id(test_id)}.md"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    executed_report_path.parent.mkdir(parents=True, exist_ok=True)
+    state = SecurityTestExecutionState(
+        target_url=target_url,
+        report_dir=report_dir,
+        workspace_dir=workspace_dir,
+        memory=memory,
+        hypothesis=hypothesis,
+        engagement=engagement,
+        targets=targets,
+        executed_report_path=executed_report_path,
+    )
+    previous_review: dict[str, Any] | None = None
+    max_attempts = config.security_execution_max_revisions + 1
+    for revision in range(1, max_attempts + 1):
+        state.revision = revision
+        state.evidence = None
+        state.review = None
+        executor_crew = _build_security_test_executor_crew(crewai, config, state)
+        _kickoff_capturing_tool_state(
+            executor_crew,
+            state,
+            agent_name="security_test_executor",
+            task_name="execute_security_test_task",
+            captured=lambda: state.evidence is not None or bool(state.commands),
+            inputs={
+                "target_url": target_url,
+                "test_id": test_id,
+                "revision": revision,
+                "max_attempts": max_attempts,
+                "hypothesis": json.dumps(hypothesis, sort_keys=True),
+                "engagement": json.dumps(engagement, sort_keys=True),
+                "targets": json.dumps(targets, sort_keys=True),
+                "previous_review": json.dumps(previous_review or {}, sort_keys=True),
+            },
+        )
+        if state.evidence is None:
+            state.evidence = _fallback_executor_evidence(state)
+            memory.add_item(
+                "security_test_execution_evidence",
+                {
+                    "test_id": test_id,
+                    "revision": revision,
+                    "structured": state.evidence,
+                    "fallback": True,
+                },
+                "security_test_executor",
+            )
+        reviewer_crew = _build_security_test_reviewer_crew(crewai, config, state)
+        _kickoff_capturing_tool_state(
+            reviewer_crew,
+            state,
+            agent_name="security_test_reviewer",
+            task_name="review_security_test_evidence_task",
+            captured=lambda: state.review is not None,
+            inputs={
+                "target_url": target_url,
+                "test_id": test_id,
+                "revision": revision,
+                "max_attempts": max_attempts,
+                "hypothesis": json.dumps(hypothesis, sort_keys=True),
+                "targets": json.dumps(targets, sort_keys=True),
+                "evidence": json.dumps(state.evidence or {}, sort_keys=True),
+            },
+        )
+        if state.review is None:
+            state.review = {
+                "accepted": False,
+                "summary": "Reviewer did not submit a review.",
+                "requested_changes": ["Submit a structured review."],
+            }
+        previous_review = state.review
+        if state.review.get("accepted"):
+            break
+
+    reporter_crew = _build_security_test_reporter_crew(crewai, config, state)
+    _kickoff_capturing_tool_state(
+        reporter_crew,
+        state,
+        agent_name="security_test_reporter",
+        task_name="write_executed_security_test_report_task",
+        captured=lambda: state.report_written,
+        inputs={
+            "target_url": target_url,
+            "test_id": test_id,
+            "hypothesis": json.dumps(hypothesis, sort_keys=True),
+            "targets": json.dumps(targets, sort_keys=True),
+            "evidence": json.dumps(state.evidence or {}, sort_keys=True),
+            "review": json.dumps(state.review or {}, sort_keys=True),
+            "commands": json.dumps(state.commands, sort_keys=True),
+        },
+    )
+    if not state.report_written:
+        markdown = render_executed_test_report(
+            target_url=target_url,
+            hypothesis=hypothesis,
+            targets=targets,
+            evidence=state.evidence or {},
+            review=state.review or {},
+            commands=state.commands,
+        )
+        state.executed_report_path.write_text(markdown, encoding="utf-8")
+        memory.record_event(
+            "security_test_reporter",
+            "report_fallback_written",
+            "Wrote fallback executed test report",
+            {"test_id": test_id, "path": str(state.executed_report_path)},
+        )
+
+
+def _kickoff_capturing_tool_state(
+    crew_instance: Any,
+    state: SecurityTestExecutionState,
+    *,
+    agent_name: str,
+    task_name: str,
+    captured: Callable[[], bool],
+    inputs: dict[str, Any],
+) -> None:
+    try:
+        crew_instance.crew().kickoff(inputs=inputs)
+    except Exception as exc:
+        if not captured():
+            raise
+        state.memory.record_event(
+            agent_name,
+            "crew_post_tool_failure_ignored",
+            f"{task_name} failed after structured tool output was captured",
+            {
+                "task": task_name,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            },
+        )
+
+
+def _fallback_executor_evidence(state: SecurityTestExecutionState) -> dict[str, Any]:
+    if state.commands:
+        return {
+            "status": "inconclusive",
+            "summary": "Executor ran commands but did not submit structured evidence.",
+            "observations": state.commands,
+            "result": "Review the recorded command outputs; the executor did not provide a final supported conclusion.",
+            "safety_notes": "Commands were captured by the security command tool and redacted before persistence.",
+            "follow_up": "Reviewer should request a focused re-run if the command outputs are insufficient.",
+            "commands": state.commands,
+        }
+    return {
+        "status": "failed",
+        "summary": "Executor did not submit structured evidence.",
+        "observations": [],
+        "result": "No executable evidence was captured for this hypothesis.",
+        "safety_notes": "No command evidence was recorded.",
+        "follow_up": "Re-run the test or simplify the hypothesis execution steps.",
+        "commands": [],
+    }
+
+
+def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+    command_tool = _build_run_security_command_tool(crewai, config, state)
+    evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
+    agents_path, tasks_path = _write_security_testing_subset_configs(
+        state.report_dir,
+        f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_executor",
+        agent_keys=["security_test_executor"],
+        task_keys=["execute_security_test_task"],
+    )
+
+    @crewai.CrewBase
+    class SecurityTestExecutorCrew:
+        agents_config = agents_path
+        tasks_config = tasks_path
+
+        @crewai.agent
+        def security_test_executor(self):
+            return crewai.Agent(
+                config=self.agents_config["security_test_executor"],
+                llm=_llm(crewai, config.models.security_test_executor, config.openrouter_api_key),
+                tools=[command_tool, evidence_tool],
+                allow_delegation=False,
+            )
+
+        @crewai.task
+        def execute_security_test_task(self):
+            return _build_task_with_output_event(
+                crewai,
+                state,
+                config=self.tasks_config["execute_security_test_task"],
+                agent=self.security_test_executor(),
+                agent_name="security_test_executor",
+                task_name="execute_security_test_task",
+            )
+
+        @crewai.crew
+        def crew(self):
+            return crewai.Crew(
+                agents=[self.security_test_executor()],
+                tasks=[self.execute_security_test_task()],
+                process=crewai.Process.sequential,
+                verbose=True,
+            )
+
+    return SecurityTestExecutorCrew()
+
+
+def _build_security_test_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+    review_tool = _build_submit_execution_review_tool(crewai, state)
+    agents_path, tasks_path = _write_security_testing_subset_configs(
+        state.report_dir,
+        f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_reviewer",
+        agent_keys=["security_test_reviewer"],
+        task_keys=["review_security_test_evidence_task"],
+    )
+
+    @crewai.CrewBase
+    class SecurityTestReviewerCrew:
+        agents_config = agents_path
+        tasks_config = tasks_path
+
+        @crewai.agent
+        def security_test_reviewer(self):
+            return crewai.Agent(
+                config=self.agents_config["security_test_reviewer"],
+                llm=_llm(crewai, config.models.security_test_reviewer, config.openrouter_api_key),
+                tools=[review_tool],
+                allow_delegation=False,
+            )
+
+        @crewai.task
+        def review_security_test_evidence_task(self):
+            return _build_task_with_output_event(
+                crewai,
+                state,
+                config=self.tasks_config["review_security_test_evidence_task"],
+                agent=self.security_test_reviewer(),
+                agent_name="security_test_reviewer",
+                task_name="review_security_test_evidence_task",
+            )
+
+        @crewai.crew
+        def crew(self):
+            return crewai.Crew(
+                agents=[self.security_test_reviewer()],
+                tasks=[self.review_security_test_evidence_task()],
+                process=crewai.Process.sequential,
+                verbose=True,
+            )
+
+    return SecurityTestReviewerCrew()
+
+
+def _build_security_test_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+    report_tool = _build_write_executed_test_report_tool(crewai, state)
+    agents_path, tasks_path = _write_security_testing_subset_configs(
+        state.report_dir,
+        f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_reporter",
+        agent_keys=["security_test_reporter"],
+        task_keys=["write_executed_security_test_report_task"],
+    )
+
+    @crewai.CrewBase
+    class SecurityTestReporterCrew:
+        agents_config = agents_path
+        tasks_config = tasks_path
+
+        @crewai.agent
+        def security_test_reporter(self):
+            return crewai.Agent(
+                config=self.agents_config["security_test_reporter"],
+                llm=_llm(crewai, config.models.security_test_reporter, config.openrouter_api_key),
+                tools=[report_tool],
+                allow_delegation=False,
+            )
+
+        @crewai.task
+        def write_executed_security_test_report_task(self):
+            return _build_task_with_output_event(
+                crewai,
+                state,
+                config=self.tasks_config["write_executed_security_test_report_task"],
+                agent=self.security_test_reporter(),
+                agent_name="security_test_reporter",
+                task_name="write_executed_security_test_report_task",
+            )
+
+        @crewai.crew
+        def crew(self):
+            return crewai.Crew(
+                agents=[self.security_test_reporter()],
+                tasks=[self.write_executed_security_test_report_task()],
+                process=crewai.Process.sequential,
+                verbose=True,
+            )
+
+    return SecurityTestReporterCrew()
+
+
+def _build_run_security_command_tool(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+    class SecurityCommandInput(crewai.BaseModel):
+        command: str = crewai.Field(..., description="Shell command to run inside the security testing container.")
+        purpose: str = crewai.Field(..., description="Why this command is needed for the current hypothesis.")
+
+    class RunSecurityCommandTool(crewai.BaseTool):
+        name: str = "run_security_command"
+        description: str = "Run a shell command inside the disposable per-test Docker workspace."
+        args_schema: type[crewai.BaseModel] = SecurityCommandInput
+
+        def _run(self, command: str, purpose: str) -> str:
+            blocked_hosts = _disallowed_hosts(command, state.targets)
+            if blocked_hosts:
+                state.memory.record_event(
+                    "security_test_executor",
+                    "tool_blocked",
+                    "Blocked security command because it referenced out-of-scope hosts",
+                    {
+                        "test_id": _hypothesis_id(state.hypothesis),
+                        "blocked_hosts": blocked_hosts,
+                        "purpose": purpose,
+                    },
+                )
+                return json.dumps(
+                    {
+                        "exit_code": 126,
+                        "blocked": True,
+                        "blocked_hosts": blocked_hosts,
+                        "stdout": "",
+                        "stderr": "Command references out-of-scope hosts.",
+                    },
+                    sort_keys=True,
+                )
+
+            runner = DockerToolRunner(config.security_tool_image)
+            result = runner.run(
+                ["bash", "-lc", command],
+                timeout=config.security_command_timeout,
+                volumes=[(str(state.workspace_dir.resolve()), "/work")],
+                workdir="/work",
+            )
+            redacted = _redact_result(result, state.engagement)
+            command_record = {
+                "command": _redact_text(command, state.engagement),
+                "purpose": purpose,
+                "exit_code": redacted.exit_code,
+                "stdout": _truncate(redacted.stdout),
+                "stderr": _truncate(redacted.stderr),
+            }
+            state.commands.append(command_record)
+            _append_command_log(state.workspace_dir, command_record)
+            state.memory.record_event(
+                "security_test_executor",
+                "tool_result",
+                "run_security_command completed",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "purpose": purpose,
+                    "exit_code": redacted.exit_code,
+                },
+            )
+            return json.dumps(command_record, sort_keys=True)
+
+    return RunSecurityCommandTool()
+
+
+def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecutionState):
+    class EvidenceInput(crewai.BaseModel):
+        evidence: dict[str, Any] | str = crewai.Field(
+            ...,
+            description="Structured execution evidence, commands run, observations, status, and provisional result.",
+        )
+
+    class SubmitExecutionEvidenceTool(crewai.BaseTool):
+        name: str = "submit_security_test_evidence"
+        description: str = "Submit structured evidence from the security test execution."
+        args_schema: type[crewai.BaseModel] = EvidenceInput
+
+        def _run(self, evidence: Any) -> str:
+            content = _coerce_mapping(evidence)
+            content.setdefault("commands", state.commands)
+            state.evidence = content
+            state.memory.add_item(
+                "security_test_execution_evidence",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "revision": state.revision,
+                    "structured": content,
+                },
+                "security_test_executor",
+            )
+            state.memory.record_event(
+                "security_test_executor",
+                "evidence_submitted",
+                "Security test executor submitted evidence",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "revision": state.revision,
+                    "commands": len(state.commands),
+                },
+            )
+            return json.dumps({"accepted": True, "commands": len(state.commands)}, sort_keys=True)
+
+    return SubmitExecutionEvidenceTool()
+
+
+def _build_submit_execution_review_tool(crewai: Any, state: SecurityTestExecutionState):
+    class ReviewInput(crewai.BaseModel):
+        review: dict[str, Any] | str = crewai.Field(
+            ...,
+            description="Structured review with accepted, summary, requested_changes, and safety concerns.",
+        )
+
+    class SubmitExecutionReviewTool(crewai.BaseTool):
+        name: str = "submit_security_test_review"
+        description: str = "Submit the reviewer decision for this security test evidence."
+        args_schema: type[crewai.BaseModel] = ReviewInput
+
+        def _run(self, review: Any) -> str:
+            content = _coerce_mapping(review)
+            content.setdefault("accepted", False)
+            state.review = content
+            state.memory.add_item(
+                "security_test_execution_review",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "revision": state.revision,
+                    "structured": content,
+                },
+                "security_test_reviewer",
+            )
+            state.memory.record_event(
+                "security_test_reviewer",
+                "review_submitted",
+                "Security test reviewer submitted review",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "revision": state.revision,
+                    "accepted": bool(content.get("accepted")),
+                },
+            )
+            return json.dumps({"accepted": bool(content.get("accepted"))}, sort_keys=True)
+
+    return SubmitExecutionReviewTool()
+
+
+def _build_write_executed_test_report_tool(crewai: Any, state: SecurityTestExecutionState):
+    class ReportInput(crewai.BaseModel):
+        report: dict[str, Any] | str = crewai.Field(
+            ...,
+            description="Structured report content for executed_tests/{test_id}.md.",
+        )
+
+    class WriteExecutedTestReportTool(crewai.BaseTool):
+        name: str = "write_executed_test_report"
+        description: str = "Write the stable Markdown artifact for this executed security test."
+        args_schema: type[crewai.BaseModel] = ReportInput
+
+        def _run(self, report: Any) -> str:
+            content = _coerce_mapping(report)
+            markdown = render_executed_test_report(
+                target_url=state.target_url,
+                hypothesis=state.hypothesis,
+                targets=state.targets,
+                evidence=content.get("evidence") if isinstance(content.get("evidence"), dict) else state.evidence or content,
+                review=content.get("review") if isinstance(content.get("review"), dict) else state.review or {},
+                commands=state.commands,
+                report_content=content,
+            )
+            state.executed_report_path.write_text(markdown, encoding="utf-8")
+            state.report_written = True
+            state.memory.add_item(
+                "executed_security_test_report",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "path": str(state.executed_report_path),
+                    "bytes": len(markdown.encode("utf-8")),
+                },
+                "security_test_reporter",
+            )
+            state.memory.record_event(
+                "security_test_reporter",
+                "report_written",
+                "Security test reporter wrote executed test report",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "path": str(state.executed_report_path),
+                    "bytes": len(markdown.encode("utf-8")),
+                },
+            )
+            return json.dumps({"path": str(state.executed_report_path), "bytes": len(markdown.encode("utf-8"))})
+
+    return WriteExecutedTestReportTool()
 
 
 def load_security_test_plan(planning_dir: Path) -> dict[str, Any]:
@@ -148,6 +742,109 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
                 lines.append(f"  - {blocker}")
     else:
         lines.append("No tests are blocked.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_executed_test_report(
+    *,
+    target_url: str,
+    hypothesis: dict[str, Any],
+    targets: dict[str, str] | None = None,
+    evidence: dict[str, Any],
+    review: dict[str, Any],
+    commands: list[dict[str, Any]],
+    report_content: dict[str, Any] | None = None,
+) -> str:
+    test_id = _hypothesis_id(hypothesis)
+    status = _text((report_content or {}).get("status")) or _text(evidence.get("status")) or "inconclusive"
+    title = _text(hypothesis.get("title")) or "Untitled test"
+    summary = _text((report_content or {}).get("summary")) or _text(evidence.get("summary")) or "No summary provided."
+    result = _text((report_content or {}).get("result")) or _text(evidence.get("result")) or "No result provided."
+    finding = (report_content or {}).get("finding")
+    lines = [
+        f"# {test_id}: {title}",
+        "",
+        "## Status",
+        "",
+        status,
+        "",
+        "## Scope",
+        "",
+        f"- Target URL: `{target_url}`",
+        f"- Surface: `{_text(hypothesis.get('surface')) or 'unknown'}`",
+        f"- Priority: `{_text(hypothesis.get('priority')) or 'unknown'}`",
+    ]
+    if targets:
+        lines.append("- Effective targets:")
+        for key, value in targets.items():
+            lines.append(f"  - {key}: `{value}`")
+    lines.extend(
+        [
+            "",
+            "## Summary",
+            "",
+            summary,
+            "",
+            "## Commands Run",
+            "",
+        ]
+    )
+    if commands:
+        for index, command in enumerate(commands, start=1):
+            lines.extend(
+                [
+                    f"### Command {index}",
+                    "",
+                    f"- Purpose: {command.get('purpose', '')}",
+                    f"- Exit code: `{command.get('exit_code', '')}`",
+                    "",
+                    "```bash",
+                    str(command.get("command", "")),
+                    "```",
+                ]
+            )
+            if command.get("stdout"):
+                lines.extend(["", "Stdout:", "", "```text", str(command["stdout"]), "```"])
+            if command.get("stderr"):
+                lines.extend(["", "Stderr:", "", "```text", str(command["stderr"]), "```"])
+            lines.append("")
+    else:
+        lines.extend(["No commands were recorded.", ""])
+    lines.extend(
+        [
+            "## Evidence",
+            "",
+            _markdown_value(evidence.get("observations") or evidence.get("evidence") or evidence),
+            "",
+            "## Result",
+            "",
+            result,
+            "",
+            "## Finding",
+            "",
+        ]
+    )
+    if isinstance(finding, dict):
+        for key in ("severity", "title", "impact", "recommendation"):
+            if finding.get(key):
+                lines.append(f"- {key.replace('_', ' ').title()}: {finding[key]}")
+    elif finding:
+        lines.append(str(finding))
+    else:
+        lines.append("None.")
+    lines.extend(
+        [
+            "",
+            "## Review",
+            "",
+            f"- Accepted: `{bool(review.get('accepted'))}`",
+            f"- Summary: {_text(review.get('summary')) or 'No review summary provided.'}",
+            "",
+            "## Follow-Up",
+            "",
+            _markdown_value((report_content or {}).get("follow_up") or evidence.get("follow_up") or review.get("requested_changes") or "None."),
+        ]
+    )
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -266,3 +963,179 @@ def _text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _hypothesis_id(hypothesis: dict[str, Any]) -> str:
+    return _text(hypothesis.get("id")) or "unknown"
+
+
+def _safe_test_id(test_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", test_id.strip())
+    return safe or "unknown"
+
+
+def _ready_pending_hypotheses(
+    plan: dict[str, Any],
+    preflight: SecurityTestPreflightResult,
+    report_dir: Path,
+) -> list[dict[str, Any]]:
+    ready_ids = {_text(item.get("id")) for item in preflight.ready}
+    executed_ids = _executed_test_ids(report_dir)
+    return [
+        hypothesis
+        for hypothesis in _hypotheses(plan)
+        if _hypothesis_id(hypothesis) in ready_ids and _safe_test_id(_hypothesis_id(hypothesis)) not in executed_ids
+    ]
+
+
+def _executed_test_ids(report_dir: Path) -> set[str]:
+    executed_dir = report_dir / "executed_tests"
+    if not executed_dir.exists():
+        return set()
+    return {path.stem for path in executed_dir.glob("*.md")}
+
+
+def _disallowed_hosts(command: str, targets: dict[str, str]) -> list[str]:
+    allowed_hosts = _target_hosts(targets)
+    found_hosts = []
+    for raw_url in re.findall(r"https?://[^\s\"'<>),]+", command):
+        try:
+            host = (urlparse(raw_url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host and host not in allowed_hosts:
+            found_hosts.append(host)
+    return sorted(set(found_hosts))
+
+
+def _target_hosts(targets: dict[str, str]) -> set[str]:
+    hosts: set[str] = set()
+    for url in targets.values():
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _redact_result(result: DockerToolResult, engagement: dict[str, Any]) -> DockerToolResult:
+    return DockerToolResult(
+        exit_code=result.exit_code,
+        stdout=_redact_text(result.stdout, engagement),
+        stderr=_redact_text(result.stderr, engagement),
+    )
+
+
+def _redact_text(text: str, engagement: dict[str, Any]) -> str:
+    redacted = text
+    for secret in _secret_values(engagement):
+        redacted = redacted.replace(secret, "[REDACTED]")
+    redacted = re.sub(
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+        "[REDACTED_JWT]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(Authorization:\s*Bearer\s+)([^\s\"']+)",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
+def _secret_values(engagement: dict[str, Any]) -> list[str]:
+    credentials = engagement.get("credentials") if isinstance(engagement.get("credentials"), dict) else {}
+    values: list[str] = []
+    for credential in credentials.values():
+        if isinstance(credential, dict):
+            for key in ("username", "password", "token"):
+                text = _text(credential.get(key))
+                if text:
+                    values.append(text)
+    return sorted(set(values), key=len, reverse=True)
+
+
+def _truncate(value: str, limit: int = 8000) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + f"\n[truncated {len(value) - limit} characters]"
+
+
+def _append_command_log(workspace_dir: Path, command_record: dict[str, Any]) -> None:
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    with (workspace_dir / "commands.log").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(command_record, sort_keys=True) + "\n")
+
+
+def _coerce_mapping(value: Any | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {"content": dumped}
+    if hasattr(value, "dict"):
+        dumped = value.dict()
+        return dumped if isinstance(dumped, dict) else {"content": dumped}
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {"content": value}
+        return parsed if isinstance(parsed, dict) else {"content": parsed}
+    return {"content": value}
+
+
+def _markdown_value(value: Any) -> str:
+    if value is None:
+        return "None."
+    if isinstance(value, str):
+        return value.strip() or "None."
+    return "```json\n" + json.dumps(value, indent=2, sort_keys=True) + "\n```"
+
+
+def _write_security_testing_subset_configs(
+    report_dir: Path,
+    name: str,
+    agent_keys: list[str],
+    task_keys: list[str],
+) -> tuple[str, str]:
+    config_dir = report_dir / ".crew_config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    source_agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml").read_text(
+        encoding="utf-8"
+    )
+    source_tasks = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml").read_text(
+        encoding="utf-8"
+    )
+    agents_path = config_dir / f"{name}_agents.yaml"
+    tasks_path = config_dir / f"{name}_tasks.yaml"
+    agents_path.write_text(_select_yaml_top_level_blocks(source_agents, agent_keys), encoding="utf-8")
+    tasks_path.write_text(_select_yaml_top_level_blocks(source_tasks, task_keys), encoding="utf-8")
+    return str(agents_path.resolve()), str(tasks_path.resolve())
+
+
+def _select_yaml_top_level_blocks(source: str, keys: list[str]) -> str:
+    blocks: dict[str, list[str]] = {}
+    current_key: str | None = None
+    current_block: list[str] = []
+    for line in source.splitlines():
+        if line and not line[0].isspace() and line.rstrip().endswith(":"):
+            if current_key is not None:
+                blocks[current_key] = current_block
+            current_key = line.rstrip()[:-1]
+            current_block = [line]
+        elif current_key is not None:
+            current_block.append(line)
+    if current_key is not None:
+        blocks[current_key] = current_block
+    missing = [key for key in keys if key not in blocks]
+    if missing:
+        raise KeyError(f"Missing security testing YAML config block(s): {', '.join(missing)}")
+    return "\n\n".join("\n".join(blocks[key]).rstrip() for key in keys) + "\n"

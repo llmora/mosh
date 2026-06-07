@@ -5,6 +5,7 @@ from pathlib import Path
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawlResult
 from appsec_harness.reporting import write_reports
+from appsec_harness.security_testing_crew import render_executed_test_report
 from appsec_harness.security_test_planning_reporting import write_security_test_plan
 
 
@@ -138,3 +139,38 @@ class FakeSecurityPlanningResult:
         self.critic_review = review
         self.accepted = accepted
         self.iterations = iterations
+
+
+class FakeSecurityTestingRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, target_url, report_dir, memory, plan, engagement, preflight, ready_pending) -> None:
+        self.calls.append(
+            {
+                "target_url": target_url,
+                "report_dir": str(report_dir),
+                "ready_pending": [item.get("id") for item in ready_pending],
+            }
+        )
+        executed_dir = report_dir / "executed_tests"
+        executed_dir.mkdir(parents=True, exist_ok=True)
+        for hypothesis in ready_pending:
+            test_id = str(hypothesis.get("id") or "unknown")
+            markdown = render_executed_test_report(
+                target_url=target_url,
+                hypothesis=hypothesis,
+                evidence={
+                    "status": "no-finding",
+                    "summary": "Fake execution completed.",
+                    "result": "No finding in fake runner.",
+                },
+                review={"accepted": True, "summary": "Accepted."},
+                commands=[],
+            )
+            (executed_dir / f"{test_id}.md").write_text(markdown, encoding="utf-8")
+            memory.add_item(
+                "executed_security_test_report",
+                {"test_id": test_id, "path": str(executed_dir / f"{test_id}.md")},
+                "security_test_reporter",
+            )

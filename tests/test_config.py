@@ -55,6 +55,22 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertFalse(config.refine_engagement_template_with_llm)
 
+    def test_security_testing_settings_can_be_overridden_from_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "APPSEC_HARNESS_SECURITY_TOOL_IMAGE": "security-tools:test",
+                "APPSEC_HARNESS_SECURITY_COMMAND_TIMEOUT": "45",
+                "APPSEC_HARNESS_SECURITY_EXECUTION_MAX_REVISIONS": "3",
+            },
+            clear=True,
+        ):
+            config = AppConfig.from_env()
+
+        self.assertEqual(config.security_tool_image, "security-tools:test")
+        self.assertEqual(config.security_command_timeout, 45)
+        self.assertEqual(config.security_execution_max_revisions, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
