@@ -27,6 +27,7 @@ class AppConfigTests(unittest.TestCase):
                 "APPSEC_HARNESS_DIRB_WORDLIST": "/tmp/words.txt",
                 "APPSEC_HARNESS_DIRB_DOCKER_TIMEOUT": "45",
                 "APPSEC_HARNESS_CANDIDATE_FOLLOW_UP_LIMIT": "2",
+                "APPSEC_HARNESS_PLANNING_MAX_REVISIONS": "4",
             },
             clear=True,
         ):
@@ -35,6 +36,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.dirb_wordlist, "/tmp/words.txt")
         self.assertEqual(config.dirb_docker_timeout, 45)
         self.assertEqual(config.candidate_follow_up_limit, 2)
+        self.assertEqual(config.planning_max_revisions, 4)
 
 
 if __name__ == "__main__":

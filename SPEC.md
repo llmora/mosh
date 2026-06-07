@@ -109,10 +109,14 @@ CrewAI orchestration is mandatory. The application should not silently fall back
 
 The discovery workflow must run as a CrewAI crew. Agents, exchanges, tasks, and tool invocation should be represented through CrewAI rather than a deterministic Python sequence.
 
-CrewAI agent and task definitions should use CrewAI's built-in YAML configuration pattern. Discovery crew configuration currently lives in:
+CrewAI agent and task definitions should use CrewAI's built-in YAML configuration pattern. Configuration is grouped by crew, so each crew's agents and tasks are kept together for future reference:
 
-- `src/appsec_harness/crew_config/agents.yaml`
-- `src/appsec_harness/crew_config/tasks.yaml`
+- Discovery crew:
+  - `src/appsec_harness/crew_config/discovery/agents.yaml`
+  - `src/appsec_harness/crew_config/discovery/tasks.yaml`
+- Security planning crew:
+  - `src/appsec_harness/crew_config/security_planning/agents.yaml`
+  - `src/appsec_harness/crew_config/security_planning/tasks.yaml`
 
 Python should bind live tool implementations to the YAML-defined agents, but agent roles, goals, backstories, task descriptions, and expected outputs should live in YAML.
 

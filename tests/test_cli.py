@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from appsec_harness.cli import main
 from appsec_harness.scope import report_dir_name
-from tests.fakes import FakeCrewRunner
+from tests.fakes import FakeCrewRunner, FakeSecurityPlanningRunner
 from tests.fixtures import fixture_server
 
 
@@ -33,6 +33,41 @@ class CliTests(unittest.TestCase):
                 import json
                 memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
                 self.assertTrue(any(item["kind"] == "llm_report" for item in memory))
+
+    def test_cli_discover_subcommand_writes_discovery_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with fixture_server() as url:
+                stdout = io.StringIO()
+                with patch("appsec_harness.orchestrator.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                    with contextlib.redirect_stdout(stdout):
+                        exit_code = main(["discover", url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
+
+                report_dir = Path(directory) / "report" / report_dir_name(url) / "discovery"
+                self.assertEqual(exit_code, 0)
+                self.assertTrue((report_dir / "report.md").exists())
+
+    def test_cli_plan_security_subcommand_writes_security_test_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            discovery_dir = output_root / report_dir_name(target_url) / "discovery"
+            discovery_dir.mkdir(parents=True)
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with patch(
+                "appsec_harness.security_planning_crew.build_security_test_planning_crew_runner",
+                return_value=FakeSecurityPlanningRunner(),
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["plan-security", target_url, "--output-root", str(output_root)])
+
+            report_dir = output_root / report_dir_name(target_url) / "security-test-planning"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security test plan written to", stdout.getvalue())
+            self.assertTrue((report_dir / "security_test_plan.md").exists())
 
 
 if __name__ == "__main__":

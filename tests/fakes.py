@@ -5,6 +5,7 @@ from pathlib import Path
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawlResult
 from appsec_harness.reporting import write_reports
+from appsec_harness.security_test_planning_reporting import write_security_test_plan
 
 
 class FakeCrewRunner:
@@ -85,3 +86,55 @@ class FakeCrewResult:
         self.crawl = crawl
         self.components = components
         self.summary = summary
+
+
+class FakeSecurityPlanningRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, target_url: str, discovery_dir: Path, report_dir: Path, memory: FileMemory):
+        self.calls.append(
+            {
+                "target_url": target_url,
+                "discovery_dir": str(discovery_dir),
+                "report_dir": str(report_dir),
+            }
+        )
+        plan = {
+            "title": "Security Test Plan",
+            "scope_summary": "Plan derived from fixture discovery output.",
+            "assumptions": ["Testing is authorised."],
+            "test_hypotheses": [
+                {
+                    "id": "AUTH-001",
+                    "title": "Private API requires authentication",
+                    "surface": "authentication",
+                    "priority": "high",
+                    "hypothesis": "Private API endpoints should reject unauthenticated requests.",
+                    "evidence": ["Fixture discovery report"],
+                    "requirements": ["No credentials required for the unauthenticated variant."],
+                    "tools_expected": ["HTTP client"],
+                    "preconditions": ["Discovery report exists."],
+                    "test_steps": ["Request the private API without a token."],
+                    "expected_secure_behavior": "The API returns 401 or 403.",
+                    "interesting_failure_modes": ["200 OK without credentials."],
+                    "safety_notes": ["Do not brute force credentials."],
+                    "stopping_conditions": ["Stop after observing authentication enforcement."],
+                    "status": "planned",
+                }
+            ],
+            "not_in_scope": [],
+            "open_questions": [],
+        }
+        review = {"accepted": True, "summary": "Accepted.", "blocking_findings": [], "non_blocking_suggestions": []}
+        memory.add_item("security_test_plan_final", {"structured": plan, "critic_review": review}, "security_test_finalizer")
+        write_security_test_plan(report_dir, target_url, plan, review, accepted=True, iterations=1)
+        return FakeSecurityPlanningResult(plan, review, accepted=True, iterations=1)
+
+
+class FakeSecurityPlanningResult:
+    def __init__(self, plan: dict[str, object], review: dict[str, object], accepted: bool, iterations: int) -> None:
+        self.plan = plan
+        self.critic_review = review
+        self.accepted = accepted
+        self.iterations = iterations

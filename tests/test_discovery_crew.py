@@ -104,13 +104,21 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             self.assertIn("js_static_endpoint_discovery", tool_names)
 
     def test_crewai_yaml_config_files_are_packaged(self) -> None:
-        agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("agents.yaml")
-        tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("tasks.yaml")
+        agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/agents.yaml")
+        tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml")
+        planning_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml")
+        planning_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml")
 
         self.assertTrue(agents_yaml.is_file())
         self.assertTrue(tasks_yaml.is_file())
+        self.assertTrue(planning_agents_yaml.is_file())
+        self.assertTrue(planning_tasks_yaml.is_file())
         self.assertIn("crawler:", agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("crawl_application_task:", tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("security_test_planner:", planning_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("draft_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("security_test_finalizer:", planning_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("write_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
 
     def test_crawler_tool_skips_previously_crawled_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

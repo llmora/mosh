@@ -168,8 +168,8 @@ def _build_yaml_discovery_crew(
 ):
     crawler_tool = _build_crawler_tool(crewai, state, crawler_agent)
     report_tool = _build_report_tool(crewai, state, summarizer_agent)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml"))
 
     @crewai.CrewBase
     class DiscoveryCrew:
