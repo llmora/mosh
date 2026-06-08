@@ -5,7 +5,14 @@ from pathlib import Path
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawlResult
 from appsec_harness.crews.discovery.reporting import write_reports
-from appsec_harness.crews.security_testing.crew import render_executed_test_report
+from appsec_harness.crews.security_testing.crew import (
+    _archive_latest_report,
+    _execution_metadata,
+    _with_execution_metadata_mapping,
+    hypothesis_fingerprint,
+    plan_revision_id,
+    render_executed_test_report,
+)
 from appsec_harness.crews.security_planning.reporting import write_security_test_plan
 
 
@@ -157,6 +164,7 @@ class FakeSecurityTestingRunner:
         executed_dir.mkdir(parents=True, exist_ok=True)
         for hypothesis in ready_pending:
             test_id = str(hypothesis.get("id") or "unknown")
+            archived = _archive_latest_report(report_dir, test_id, memory=memory)
             markdown = render_executed_test_report(
                 target_url=target_url,
                 hypothesis=hypothesis,
@@ -168,9 +176,23 @@ class FakeSecurityTestingRunner:
                 review={"accepted": True, "summary": "Accepted."},
                 commands=[],
             )
-            (executed_dir / f"{test_id}.md").write_text(markdown, encoding="utf-8")
+            report_path = executed_dir / f"{test_id}.md"
+            metadata = _execution_metadata(
+                test_id=test_id,
+                plan_revision_id=plan_revision_id(plan),
+                hypothesis_fingerprint=hypothesis_fingerprint(hypothesis),
+                evidence={
+                    "status": "no-finding",
+                    "summary": "Fake execution completed.",
+                    "result": "No finding in fake runner.",
+                },
+                review={"accepted": True, "summary": "Accepted."},
+                report_path=str(report_path),
+                archived_previous_reports=archived,
+            )
+            report_path.write_text(_with_execution_metadata_mapping(markdown, metadata), encoding="utf-8")
             memory.add_item(
                 "executed_security_test_report",
-                {"test_id": test_id, "path": str(executed_dir / f"{test_id}.md")},
+                {"test_id": test_id, "path": str(report_path)},
                 "security_test_reporter",
             )

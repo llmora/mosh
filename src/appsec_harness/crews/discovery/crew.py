@@ -21,7 +21,6 @@ from appsec_harness.scope import report_dir_name
 from appsec_harness.scope import normalize_url
 
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 CREW_CONFIG_PACKAGE = "appsec_harness.crews"
 
 
@@ -73,8 +72,15 @@ class CrewAIDiscoveryCrewRunner:
         max_pages: int,
         max_depth: int,
     ) -> DiscoveryCrewResult:
-        if not self.config.openrouter_api_key:
-            raise CrewAIUnavailable("OPENROUTER_API_KEY is not set.")
+        missing_keys = self.config.missing_llm_api_keys_for_models(
+            [
+                self.config.models.crawler,
+                self.config.models.sbom_compiler,
+                self.config.models.summarizer,
+            ]
+        )
+        if missing_keys:
+            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
 
         crewai = _load_crewai()
         state = DiscoveryCrewState(
@@ -194,13 +200,19 @@ def _load_crewai():
     return crewai
 
 
-def _llm(crewai: Any, model: str, api_key: str):
-    return crewai.LLM(
-        model=_openrouter_model(model),
-        base_url=OPENROUTER_BASE_URL,
-        api_key=api_key,
-        temperature=0,
-    )
+def _llm(crewai: Any, config: AppConfig, model: str):
+    api_key = config.llm_api_key_for_model(model)
+    if not api_key:
+        raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
+    kwargs = {
+        "model": config.llm_model_name(model),
+        "provider": config.llm_provider_for_model(model),
+        "api_key": api_key,
+        "temperature": 0,
+    }
+    if not config.uses_direct_deepseek(model):
+        kwargs["base_url"] = config.openrouter_base_url
+    return crewai.LLM(**kwargs)
 
 
 def _build_yaml_discovery_crew(
@@ -224,7 +236,7 @@ def _build_yaml_discovery_crew(
         def crawler(self):
             return crewai.Agent(
                 config=self.agents_config["crawler"],
-                llm=_llm(crewai, config.models.crawler, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.crawler),
                 tools=[crawler_tool],
                 allow_delegation=False,
             )
@@ -233,7 +245,7 @@ def _build_yaml_discovery_crew(
         def sbom_compiler(self):
             return crewai.Agent(
                 config=self.agents_config["sbom_compiler"],
-                llm=_llm(crewai, config.models.sbom_compiler, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.sbom_compiler),
                 tools=[],
                 allow_delegation=False,
             )
@@ -242,7 +254,7 @@ def _build_yaml_discovery_crew(
         def summarizer(self):
             return crewai.Agent(
                 config=self.agents_config["summarizer"],
-                llm=_llm(crewai, config.models.summarizer, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.summarizer),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -475,9 +487,6 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent:
 
     return WriteDiscoveryReportTool()
 
-
-def _openrouter_model(model: str) -> str:
-    return model if model.startswith("openrouter/") else f"openrouter/{model}"
 
 
 def _build_task_with_output_event(

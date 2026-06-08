@@ -97,15 +97,37 @@ The intended Docker interaction is:
 
 Use CrewAI for the agent implementation.
 
-Use OpenRouter for LLM access. The API key is provided through an environment variable:
+Use OpenRouter and optional direct DeepSeek API access for LLM calls.
+
+OpenRouter is the default and is always used for non-DeepSeek models. Its API
+key is provided through:
 
 ```text
 OPENROUTER_API_KEY
 ```
 
+When a selected model is a DeepSeek model and `DEEPSEEK_API_KEY` is present, the
+application should call the DeepSeek API directly through CrewAI's LiteLLM-backed
+LLM integration rather than using raw HTTP calls:
+
+```text
+DEEPSEEK_API_KEY
+```
+
+Configured model names may use existing provider-style names such as
+`deepseek/deepseek-v4-flash` or `openrouter/deepseek/deepseek-v4-flash`. When
+direct DeepSeek is selected, the runtime must normalize these names to the bare
+DeepSeek API model name, such as `deepseek-v4-flash` or `deepseek-v4-pro`,
+before passing them to CrewAI's LiteLLM-backed LLM integration. The default
+package provider configuration should be used.
+
+If a selected model is a DeepSeek model but `DEEPSEEK_API_KEY` is not present,
+the application should use OpenRouter for that model. If a crew uses any
+non-DeepSeek model, `OPENROUTER_API_KEY` is still required for that model.
+
 Each agent can be configured to use a specific LLM model. Model selection should not be exposed as a command-line option for now. It should be easy to change in application configuration or agent definitions.
 
-CrewAI orchestration is mandatory. The application should not silently fall back to a deterministic agent sequence when CrewAI or OpenRouter is unavailable. If the CrewAI discovery crew cannot run, the CLI should fail clearly and report the missing requirement.
+CrewAI orchestration is mandatory. The application should not silently fall back to a deterministic agent sequence when CrewAI or the required LLM API key is unavailable. If the CrewAI discovery crew cannot run, the CLI should fail clearly and report the missing requirement.
 
 The discovery workflow must run as a CrewAI crew. Agents, exchanges, tasks, and tool invocation should be represented through CrewAI rather than a deterministic Python sequence.
 
@@ -296,6 +318,26 @@ the test plan. The system does not immediately auto-run new tests from that
 refreshed plan; additional execution happens on the next security-testing run
 only if the refreshed plan contains ready, unexecuted hypotheses.
 
+Security test completion is determined from metadata embedded in the latest
+executed Markdown report, not from a separate execution index. Each
+`executed_tests/<test_id>.md` report should include machine-readable execution
+metadata containing at least the test ID, plan revision ID, hypothesis
+fingerprint, status, reviewer acceptance, and execution time. A ready hypothesis
+is skipped only when the latest report has matching accepted metadata for the
+same hypothesis fingerprint. If the hypothesis changes after discovery-driven
+replanning, if the previous execution was not accepted, or if the existing
+report is legacy output without metadata, the test is queued for rerun.
+
+Before a rerun overwrites `executed_tests/<test_id>.md`, the previous report must
+be preserved under `executed_tests/history/` as a reference. This keeps older
+security test output available while making the latest report the current
+version.
+
+To avoid runaway loops, duplicate security-testing discovery feedback must not
+trigger another discovery update or security-planning refresh. Only feedback
+facts not already present in discovery memory should cause the discovery report
+to update and the security planning crew to refresh.
+
 ## Discovery Scope
 
 The only current target type is a URL.
@@ -400,7 +442,8 @@ At minimum, tests should cover:
 - crawler behavior against a fixture app
 - SBOM agent output recording
 - security-testing feedback into discovery memory, discovery reporting, and replanning
+- security test rerun decisions from embedded report metadata and preserved history
 
 # Roadmap
 
-* I am using models through OpenRouter right now, but want to have the choice between continuing to do so and connecting to the DeepSeek API directly (which is cheaper overall).
+No pending roadmap items.

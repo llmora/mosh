@@ -45,6 +45,40 @@ class AppConfigTests(unittest.TestCase):
         self.assertTrue(config.refine_engagement_template_with_llm)
         self.assertEqual(config.models.engagement_template_refiner, "deepseek/deepseek-v4-flash")
 
+    def test_deepseek_models_use_direct_deepseek_when_key_is_available(self) -> None:
+        config = AppConfig(deepseek_api_key="deepseek-key")
+
+        self.assertTrue(config.uses_direct_deepseek("deepseek/deepseek-v4-flash"))
+        self.assertEqual(config.llm_api_key_for_model("deepseek/deepseek-v4-flash"), "deepseek-key")
+        self.assertEqual(config.llm_api_key_name_for_model("deepseek/deepseek-v4-flash"), "DEEPSEEK_API_KEY")
+        self.assertEqual(config.llm_provider_for_model("deepseek/deepseek-v4-flash"), "deepseek")
+        self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
+        self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
+
+    def test_deepseek_models_fall_back_to_openrouter_without_deepseek_key(self) -> None:
+        config = AppConfig(openrouter_api_key="openrouter-key")
+
+        self.assertFalse(config.uses_direct_deepseek("deepseek/deepseek-v4-flash"))
+        self.assertEqual(config.llm_api_key_for_model("deepseek/deepseek-v4-flash"), "openrouter-key")
+        self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "openrouter/deepseek/deepseek-v4-flash")
+
+    def test_non_deepseek_models_always_use_openrouter(self) -> None:
+        config = AppConfig(deepseek_api_key="deepseek-key")
+
+        self.assertFalse(config.uses_direct_deepseek("openai/gpt-5.2"))
+        self.assertEqual(config.llm_api_key_for_model("openai/gpt-5.2"), None)
+        self.assertEqual(config.missing_llm_api_keys_for_models(["deepseek/deepseek-v4-flash", "openai/gpt-5.2"]), ["OPENROUTER_API_KEY"])
+
+    def test_deepseek_api_key_is_loaded_from_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"DEEPSEEK_API_KEY": "deepseek-key"},
+            clear=True,
+        ):
+            config = AppConfig.from_env()
+
+        self.assertEqual(config.deepseek_api_key, "deepseek-key")
+
     def test_engagement_template_refinement_can_be_disabled_from_env(self) -> None:
         with patch.dict(
             os.environ,

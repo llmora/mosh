@@ -100,8 +100,16 @@ class CrewAISecurityTestPlanningCrewRunner:
         report_dir: Path,
         memory: FileMemory,
     ) -> SecurityTestPlanningResult:
-        if not self.config.openrouter_api_key:
-            raise CrewAIUnavailable("OPENROUTER_API_KEY is not set.")
+        missing_keys = self.config.missing_llm_api_keys_for_models(
+            [
+                self.config.models.security_test_planner,
+                self.config.models.security_test_critic,
+                self.config.models.security_test_finalizer,
+                self.config.models.engagement_template_refiner,
+            ]
+        )
+        if missing_keys:
+            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
 
         discovery_context = load_discovery_context(discovery_dir)
         crewai = _load_crewai()
@@ -322,7 +330,7 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
         def security_test_planner(self):
             return crewai.Agent(
                 config=self.agents_config["security_test_planner"],
-                llm=_llm(crewai, config.models.security_test_planner, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.security_test_planner),
                 tools=[plan_tool],
                 allow_delegation=False,
             )
@@ -368,7 +376,7 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
         def security_test_critic(self):
             return crewai.Agent(
                 config=self.agents_config["security_test_critic"],
-                llm=_llm(crewai, config.models.security_test_critic, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.security_test_critic),
                 tools=[critique_tool],
                 allow_delegation=False,
             )
@@ -414,7 +422,7 @@ def _build_planning_finalizer_crew(crewai: Any, config: AppConfig, state: Securi
         def security_test_finalizer(self):
             return crewai.Agent(
                 config=self.agents_config["security_test_finalizer"],
-                llm=_llm(crewai, config.models.security_test_finalizer, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.security_test_finalizer),
                 tools=[write_tool],
                 allow_delegation=False,
             )
@@ -465,7 +473,7 @@ def _build_engagement_template_refinement_crew(
         def engagement_template_refiner(self):
             return crewai.Agent(
                 config=self.agents_config["engagement_template_refiner"],
-                llm=_llm(crewai, config.models.engagement_template_refiner, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.engagement_template_refiner),
                 tools=[write_tool],
                 allow_delegation=False,
             )

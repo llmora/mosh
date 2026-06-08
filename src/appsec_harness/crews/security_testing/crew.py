@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass, field
 from importlib import resources
@@ -20,8 +21,12 @@ from appsec_harness.crews.discovery.crew import (
 from appsec_harness.docker_tools import DockerToolResult, DockerToolRunner
 from appsec_harness.engagement import load_engagement_file, resolve_target_mapping
 from appsec_harness.memory import FileMemory
-from appsec_harness.models import Event, MemoryItem
+from appsec_harness.models import Event, MemoryItem, utc_now
 from appsec_harness.scope import report_dir_name
+
+
+EXECUTION_METADATA_START = "<!-- appsec-harness-execution"
+EXECUTION_METADATA_END = "-->"
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,8 @@ class SecurityTestExecutionState:
     engagement: dict[str, Any]
     targets: dict[str, str]
     executed_report_path: Path
+    plan_revision_id: str = ""
+    hypothesis_fingerprint: str = ""
     revision: int = 1
     evidence: dict[str, Any] | None = None
     review: dict[str, Any] | None = None
@@ -48,6 +55,7 @@ class SecurityTestExecutionState:
     commands: list[dict[str, Any]] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    archived_report_paths: list[str] = field(default_factory=list)
 
 
 class SecurityTestingCrewRunner(Protocol):
@@ -94,9 +102,9 @@ class SecurityTestingOrchestrator:
         plan = load_security_test_plan(planning_dir)
         engagement = load_engagement_file(engagement_file)
         result = run_security_testing_preflight(plan, engagement)
+        ready_pending = _ready_pending_hypotheses(plan, result, report_dir)
         markdown = render_preflight_report(url, engagement_file, result)
         (report_dir / "preflight.md").write_text(markdown, encoding="utf-8")
-        ready_pending = _ready_pending_hypotheses(plan, result, report_dir)
         memory.add_item(
             "security_testing_preflight",
             {
@@ -104,6 +112,7 @@ class SecurityTestingOrchestrator:
                 "blocked": result.blocked,
                 "targets": result.targets,
                 "ready_pending": [_hypothesis_id(item) for item in ready_pending],
+                "plan_revision_id": plan_revision_id(plan),
             },
             "security_test_coordinator",
         )
@@ -116,18 +125,19 @@ class SecurityTestingOrchestrator:
             )
             self.crew_runner.run(url, report_dir, memory, plan, engagement, result, ready_pending)
             feedback_updates = collect_security_testing_discovery_updates(report_dir)
-            if feedback_updates:
+            new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
+            if new_feedback_updates:
                 _feed_security_testing_updates_to_discovery(
                     discovery_dir=discovery_dir,
                     testing_memory=memory,
-                    updates=feedback_updates,
+                    updates=new_feedback_updates,
                     source_report_dir=report_dir,
                 )
                 memory.record_event(
                     "orchestrator",
                     "security_planning_refresh_start",
                     "Starting security test planning refresh from security-testing discovery feedback",
-                    {"updates": len(feedback_updates), "discovery_dir": str(discovery_dir)},
+                    {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
                 )
                 from appsec_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 
@@ -141,6 +151,13 @@ class SecurityTestingOrchestrator:
                     "orchestrator",
                     "security_planning_refresh_complete",
                     "Security test planning refresh completed from security-testing discovery feedback",
+                    {"updates": len(new_feedback_updates)},
+                )
+            elif feedback_updates:
+                memory.record_event(
+                    "orchestrator",
+                    "discovery_feedback_duplicate_skipped",
+                    "Security-testing discovery feedback was already present; skipped planning refresh",
                     {"updates": len(feedback_updates)},
                 )
             else:
@@ -155,7 +172,7 @@ class SecurityTestingOrchestrator:
                 "orchestrator",
                 "execution_skipped",
                 "No ready pending security tests to execute",
-                {"ready": len(result.ready), "already_executed": sorted(_executed_test_ids(report_dir))},
+                {"ready": len(result.ready), "already_executed": sorted(_current_executed_test_ids(report_dir))},
             )
         memory.record_event(
             "orchestrator",
@@ -189,9 +206,17 @@ class CrewAISecurityTestingCrewRunner:
         preflight: SecurityTestPreflightResult,
         ready_pending: list[dict[str, Any]],
     ) -> None:
-        if not self.config.openrouter_api_key:
-            raise CrewAIUnavailable("OPENROUTER_API_KEY is not set.")
+        missing_keys = self.config.missing_llm_api_keys_for_models(
+            [
+                self.config.models.security_test_executor,
+                self.config.models.security_test_reviewer,
+                self.config.models.security_test_reporter,
+            ]
+        )
+        if missing_keys:
+            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
         crewai = _load_crewai()
+        current_plan_revision_id = plan_revision_id(plan)
         for hypothesis in ready_pending:
             _run_one_security_test(
                 crewai=crewai,
@@ -202,6 +227,7 @@ class CrewAISecurityTestingCrewRunner:
                 hypothesis=hypothesis,
                 engagement=engagement,
                 targets=preflight.targets,
+                plan_revision_id=current_plan_revision_id,
             )
 
 
@@ -214,8 +240,10 @@ def _run_one_security_test(
     hypothesis: dict[str, Any],
     engagement: dict[str, Any],
     targets: dict[str, str],
+    plan_revision_id: str,
 ) -> None:
     test_id = _hypothesis_id(hypothesis)
+    current_hypothesis_fingerprint = hypothesis_fingerprint(hypothesis)
     workspace_dir = report_dir / "workspaces" / _safe_test_id(test_id)
     executed_report_path = report_dir / "executed_tests" / f"{_safe_test_id(test_id)}.md"
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -229,7 +257,10 @@ def _run_one_security_test(
         engagement=engagement,
         targets=targets,
         executed_report_path=executed_report_path,
+        plan_revision_id=plan_revision_id,
+        hypothesis_fingerprint=current_hypothesis_fingerprint,
     )
+    _archive_existing_latest_report(state)
     previous_review: dict[str, Any] | None = None
     max_attempts = config.security_execution_max_revisions + 1
     for revision in range(1, max_attempts + 1):
@@ -330,7 +361,9 @@ def _run_one_security_test(
             commands=state.commands,
             execution_bundle=execution_bundle,
         )
+        markdown = _with_execution_metadata(markdown, state)
         state.executed_report_path.write_text(markdown, encoding="utf-8")
+        state.report_written = True
         memory.record_event(
             "security_test_reporter",
             "report_fallback_written",
@@ -413,12 +446,150 @@ def _record_execution_attempt(state: SecurityTestExecutionState, command_start: 
 def _execution_bundle(state: SecurityTestExecutionState) -> dict[str, Any]:
     return {
         "test_id": _hypothesis_id(state.hypothesis),
+        "plan_revision_id": state.plan_revision_id,
+        "hypothesis_fingerprint": state.hypothesis_fingerprint,
         "final_evidence": state.evidence or {},
         "final_review": state.review or {},
         "attempts": state.attempts,
         "artifacts": state.artifacts,
         "commands": state.commands,
+        "report_path": str(state.executed_report_path),
+        "archived_previous_reports": state.archived_report_paths,
     }
+
+
+def plan_revision_id(plan: dict[str, Any]) -> str:
+    return _stable_fingerprint(plan)
+
+
+def hypothesis_fingerprint(hypothesis: dict[str, Any]) -> str:
+    return _stable_fingerprint(hypothesis)
+
+
+def _stable_fingerprint(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _archive_existing_latest_report(state: SecurityTestExecutionState) -> None:
+    state.archived_report_paths.extend(
+        _archive_latest_report(
+            report_dir=state.report_dir,
+            test_id=_hypothesis_id(state.hypothesis),
+            memory=state.memory,
+        )
+    )
+
+
+def _archive_latest_report(report_dir: Path, test_id: str, memory: FileMemory | None = None) -> list[str]:
+    report_path = report_dir / "executed_tests" / f"{_safe_test_id(test_id)}.md"
+    if not report_path.exists():
+        return []
+    previous_metadata = _latest_execution_metadata(report_dir, test_id) or {}
+    previous_fingerprint = _text(previous_metadata.get("hypothesis_fingerprint"))[:12] or "legacy"
+    history_dir = report_path.parent / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    history_path = _next_history_report_path(history_dir, _safe_test_id(test_id), previous_fingerprint)
+    report_path.replace(history_path)
+    if memory:
+        memory.record_event(
+            "security_test_coordinator",
+            "previous_report_archived",
+            "Archived previous executed security test report before rerun",
+            {
+                "test_id": test_id,
+                "archived_path": str(history_path),
+                "previous_hypothesis_fingerprint": previous_metadata.get("hypothesis_fingerprint"),
+            },
+        )
+    return [str(history_path)]
+
+
+def _next_history_report_path(history_dir: Path, safe_test_id: str, fingerprint_prefix: str) -> Path:
+    index = 1
+    while True:
+        candidate = history_dir / f"{safe_test_id}__{fingerprint_prefix}__v{index}.md"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _with_execution_metadata(markdown: str, state: SecurityTestExecutionState, report_content: dict[str, Any] | None = None) -> str:
+    metadata = _execution_metadata(
+        test_id=_hypothesis_id(state.hypothesis),
+        plan_revision_id=state.plan_revision_id,
+        hypothesis_fingerprint=state.hypothesis_fingerprint,
+        evidence=state.evidence or {},
+        review=state.review or {},
+        report_path=str(state.executed_report_path),
+        archived_previous_reports=state.archived_report_paths,
+        report_content=report_content,
+    )
+    return _with_execution_metadata_mapping(markdown, metadata)
+
+
+def _with_execution_metadata_mapping(markdown: str, metadata: dict[str, Any]) -> str:
+    body = _strip_execution_metadata(markdown).lstrip()
+    return (
+        f"{EXECUTION_METADATA_START}\n"
+        f"{json.dumps(metadata, indent=2, sort_keys=True)}\n"
+        f"{EXECUTION_METADATA_END}\n\n"
+        f"{body}"
+    )
+
+
+def _execution_metadata(
+    *,
+    test_id: str,
+    plan_revision_id: str,
+    hypothesis_fingerprint: str,
+    evidence: dict[str, Any],
+    review: dict[str, Any],
+    report_path: str,
+    archived_previous_reports: list[str] | None = None,
+    report_content: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema": "appsec-harness.security-test-execution.v1",
+        "test_id": test_id,
+        "plan_revision_id": plan_revision_id,
+        "hypothesis_fingerprint": hypothesis_fingerprint,
+        "status": _text((report_content or {}).get("status")) or _text(evidence.get("status")) or "inconclusive",
+        "review_accepted": bool(review.get("accepted")),
+        "report_path": report_path,
+        "archived_previous_reports": archived_previous_reports or [],
+        "executed_at": utc_now(),
+    }
+
+
+def _latest_execution_metadata(report_dir: Path, test_id: str) -> dict[str, Any] | None:
+    report_path = report_dir / "executed_tests" / f"{_safe_test_id(test_id)}.md"
+    if not report_path.exists():
+        return None
+    return _extract_execution_metadata(report_path.read_text(encoding="utf-8"))
+
+
+def _extract_execution_metadata(markdown: str) -> dict[str, Any] | None:
+    if not markdown.startswith(EXECUTION_METADATA_START):
+        return None
+    end = markdown.find(EXECUTION_METADATA_END)
+    if end < 0:
+        return None
+    payload = markdown[len(EXECUTION_METADATA_START) : end].strip()
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _strip_execution_metadata(markdown: str) -> str:
+    if not markdown.startswith(EXECUTION_METADATA_START):
+        return markdown
+    end = markdown.find(EXECUTION_METADATA_END)
+    if end < 0:
+        return markdown
+    return markdown[end + len(EXECUTION_METADATA_END) :]
 
 
 def collect_security_testing_discovery_updates(report_dir: Path) -> list[dict[str, Any]]:
@@ -572,6 +743,18 @@ def _all_discovery_feedback_updates(discovery_dir: Path) -> list[dict[str, Any]]
                 seen.add(fingerprint)
                 updates.append(update)
     return updates
+
+
+def _new_discovery_feedback_updates(discovery_dir: Path, updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing = {_discovery_update_fingerprint(update) for update in _all_discovery_feedback_updates(discovery_dir)}
+    fresh: list[dict[str, Any]] = []
+    seen = set(existing)
+    for update in updates:
+        fingerprint = _discovery_update_fingerprint(update)
+        if fingerprint not in seen:
+            seen.add(fingerprint)
+            fresh.append(update)
+    return fresh
 
 
 def _append_existing_memory_item(report_dir: Path, item: MemoryItem) -> None:
@@ -738,7 +921,7 @@ def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: Se
         def security_test_executor(self):
             return crewai.Agent(
                 config=self.agents_config["security_test_executor"],
-                llm=_llm(crewai, config.models.security_test_executor, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.security_test_executor),
                 tools=[command_tool, evidence_tool],
                 allow_delegation=False,
             )
@@ -784,7 +967,7 @@ def _build_security_test_reviewer_crew(crewai: Any, config: AppConfig, state: Se
         def security_test_reviewer(self):
             return crewai.Agent(
                 config=self.agents_config["security_test_reviewer"],
-                llm=_llm(crewai, config.models.security_test_reviewer, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.security_test_reviewer),
                 tools=[review_tool],
                 allow_delegation=False,
             )
@@ -830,7 +1013,7 @@ def _build_security_test_reporter_crew(crewai: Any, config: AppConfig, state: Se
         def security_test_reporter(self):
             return crewai.Agent(
                 config=self.agents_config["security_test_reporter"],
-                llm=_llm(crewai, config.models.security_test_reporter, config.openrouter_api_key),
+                llm=_llm(crewai, config, config.models.security_test_reporter),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -1029,6 +1212,7 @@ def _build_write_executed_test_report_tool(crewai: Any, state: SecurityTestExecu
                 execution_bundle=_execution_bundle(state),
                 report_content=content,
             )
+            markdown = _with_execution_metadata(markdown, state, report_content=content)
             state.executed_report_path.write_text(markdown, encoding="utf-8")
             state.report_written = True
             state.memory.add_item(
@@ -1123,7 +1307,10 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
     lines.extend(["", "## Ready Tests", ""])
     if result.ready:
         for item in result.ready:
-            lines.append(f"- **{item['id']}**: {item['title']} ({item['priority']})")
+            suffix = ""
+            if item.get("execution_status"):
+                suffix = f" - `{item['execution_status']}`: {item.get('execution_reason', '')}"
+            lines.append(f"- **{item['id']}**: {item['title']} ({item['priority']}){suffix}")
     else:
         lines.append("No tests are ready to execute.")
     lines.extend(["", "## Blocked Tests", ""])
@@ -1473,20 +1660,47 @@ def _ready_pending_hypotheses(
     preflight: SecurityTestPreflightResult,
     report_dir: Path,
 ) -> list[dict[str, Any]]:
-    ready_ids = {_text(item.get("id")) for item in preflight.ready}
-    executed_ids = _executed_test_ids(report_dir)
-    return [
-        hypothesis
-        for hypothesis in _hypotheses(plan)
-        if _hypothesis_id(hypothesis) in ready_ids and _safe_test_id(_hypothesis_id(hypothesis)) not in executed_ids
-    ]
+    ready_items = {_text(item.get("id")): item for item in preflight.ready}
+    pending: list[dict[str, Any]] = []
+    for hypothesis in _hypotheses(plan):
+        test_id = _hypothesis_id(hypothesis)
+        ready_item = ready_items.get(test_id)
+        if not ready_item:
+            continue
+        status, reason = _execution_status_for_hypothesis(report_dir, hypothesis)
+        ready_item["execution_status"] = status
+        ready_item["execution_reason"] = reason
+        ready_item["hypothesis_fingerprint"] = hypothesis_fingerprint(hypothesis)
+        if status != "current":
+            pending.append(hypothesis)
+    return pending
 
 
-def _executed_test_ids(report_dir: Path) -> set[str]:
+def _execution_status_for_hypothesis(report_dir: Path, hypothesis: dict[str, Any]) -> tuple[str, str]:
+    test_id = _hypothesis_id(hypothesis)
+    report_path = report_dir / "executed_tests" / f"{_safe_test_id(test_id)}.md"
+    if not report_path.exists():
+        return "pending", "not previously executed"
+    metadata = _latest_execution_metadata(report_dir, test_id)
+    if metadata is None:
+        return "rerun", "previous report is legacy and has no execution metadata"
+    if _text(metadata.get("hypothesis_fingerprint")) != hypothesis_fingerprint(hypothesis):
+        return "rerun", "hypothesis changed since the previous execution"
+    if not bool(metadata.get("review_accepted")):
+        return "rerun", "previous execution was not reviewer-accepted"
+    return "current", "matching accepted execution already exists"
+
+
+def _current_executed_test_ids(report_dir: Path) -> set[str]:
     executed_dir = report_dir / "executed_tests"
     if not executed_dir.exists():
         return set()
-    return {path.stem for path in executed_dir.glob("*.md")}
+    current: set[str] = set()
+    for path in executed_dir.glob("*.md"):
+        metadata = _extract_execution_metadata(path.read_text(encoding="utf-8"))
+        if metadata and metadata.get("review_accepted"):
+            current.add(path.stem)
+    return current
 
 
 def _disallowed_hosts(command: str, targets: dict[str, str]) -> list[str]:

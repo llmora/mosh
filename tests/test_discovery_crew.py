@@ -17,6 +17,7 @@ from appsec_harness.crews.discovery.crew import (
     _build_crawler_tool,
     _build_report_tool,
     _build_task_with_output_event,
+    _llm,
 )
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawledPage, CrawlResult
@@ -67,6 +68,12 @@ class FakeTaskCrewAI:
             self.callback = callback
 
 
+class FakeLLMCrewAI:
+    class LLM:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+
 class FakeTaskOutput:
     raw = "raw task output"
     json_dict = {"result": "ok"}
@@ -83,6 +90,35 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
 
             with self.assertRaisesRegex(CrewAIUnavailable, "OPENROUTER_API_KEY"):
                 runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
+
+    def test_discovery_can_use_direct_deepseek_without_openrouter_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            memory = FileMemory(Path(directory))
+            runner = CrewAIDiscoveryCrewRunner(AppConfig(deepseek_api_key="deepseek-key"))
+
+            with patch("appsec_harness.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+                with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
+                    runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
+
+    def test_llm_uses_direct_deepseek_endpoint_for_deepseek_models_when_key_exists(self) -> None:
+        llm = _llm(FakeLLMCrewAI, AppConfig(deepseek_api_key="deepseek-key"), "deepseek/deepseek-v4-flash")
+
+        self.assertEqual(llm.kwargs["model"], "deepseek-v4-flash")
+        self.assertEqual(llm.kwargs["provider"], "deepseek")
+        self.assertNotIn("base_url", llm.kwargs)
+        self.assertEqual(llm.kwargs["api_key"], "deepseek-key")
+
+    def test_llm_uses_openrouter_for_non_deepseek_models(self) -> None:
+        llm = _llm(
+            FakeLLMCrewAI,
+            AppConfig(openrouter_api_key="openrouter-key", deepseek_api_key="deepseek-key"),
+            "openai/gpt-5.2",
+        )
+
+        self.assertEqual(llm.kwargs["model"], "openrouter/openai/gpt-5.2")
+        self.assertEqual(llm.kwargs["provider"], "openai")
+        self.assertEqual(llm.kwargs["base_url"], "https://openrouter.ai/api/v1")
+        self.assertEqual(llm.kwargs["api_key"], "openrouter-key")
 
     def test_builds_crawler_agent_with_configured_discovery_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

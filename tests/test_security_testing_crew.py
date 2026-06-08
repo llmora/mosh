@@ -16,10 +16,14 @@ from appsec_harness.crews.security_testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
     collect_security_testing_discovery_updates,
+    _execution_metadata,
     _fallback_executor_evidence,
     _kickoff_capturing_tool_state,
     _build_run_security_command_tool,
     _run_one_security_test,
+    _with_execution_metadata_mapping,
+    hypothesis_fingerprint,
+    plan_revision_id,
     _redact_text,
     load_security_test_plan,
     render_executed_test_report,
@@ -121,7 +125,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertTrue((report_dir / "executed_tests" / "API-001.md").exists())
             self.assertFalse((report_dir / "executed_tests" / "API-002.md").exists())
 
-    def test_security_testing_skips_already_executed_ready_tests(self) -> None:
+    def test_security_testing_skips_matching_accepted_execution_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -141,7 +145,17 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (executed_dir / "API-001.md").write_text("# already executed\n", encoding="utf-8")
+            current_hypothesis = _plan()["test_hypotheses"][0]
+            report_path = executed_dir / "API-001.md"
+            metadata = _execution_metadata(
+                test_id="API-001",
+                plan_revision_id=plan_revision_id(_plan()),
+                hypothesis_fingerprint=hypothesis_fingerprint(current_hypothesis),
+                evidence={"status": "no-finding"},
+                review={"accepted": True},
+                report_path=str(report_path),
+            )
+            report_path.write_text(_with_execution_metadata_mapping("# already executed\n", metadata), encoding="utf-8")
             engagement_file = Path(directory) / "engagement.yaml"
             write_engagement_template(Path(directory), target_url, _plan())
             engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
@@ -153,7 +167,79 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
 
             self.assertEqual(runner.calls, [])
-            self.assertEqual((report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"), "# already executed\n")
+            self.assertIn("# already executed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
+
+    def test_security_testing_reruns_changed_hypothesis_and_archives_previous_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            domain_dir = output_root / report_dir_name(target_url)
+            planning_dir = domain_dir / "security-test-planning"
+            executed_dir = domain_dir / "security-testing" / "executed_tests"
+            planning_dir.mkdir(parents=True)
+            executed_dir.mkdir(parents=True)
+            plan = _plan()
+            changed_hypothesis = dict(plan["test_hypotheses"][0])
+            changed_hypothesis["test_steps"] = ["Request endpoint without Authorization header.", "Also verify WWW-Authenticate."]
+            plan["test_hypotheses"][0] = changed_hypothesis
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            old_report_path = executed_dir / "API-001.md"
+            old_metadata = _execution_metadata(
+                test_id="API-001",
+                plan_revision_id="old-plan",
+                hypothesis_fingerprint="old-fingerprint",
+                evidence={"status": "no-finding"},
+                review={"accepted": True},
+                report_path=str(old_report_path),
+            )
+            old_report_path.write_text(_with_execution_metadata_mapping("# old execution\n", old_metadata), encoding="utf-8")
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, plan)
+            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+            runner = FakeSecurityTestingRunner()
+
+            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
+                target_url,
+                engagement_file=engagement_file,
+            )
+
+            self.assertEqual(runner.calls[0]["ready_pending"], ["API-001"])
+            history_files = list((report_dir / "executed_tests" / "history").glob("API-001__old-fingerpr*__v1.md"))
+            self.assertEqual(len(history_files), 1)
+            self.assertIn("# old execution", history_files[0].read_text(encoding="utf-8"))
+            self.assertIn("Fake execution completed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
+
+    def test_security_testing_reruns_legacy_report_without_metadata_and_preserves_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            domain_dir = output_root / report_dir_name(target_url)
+            planning_dir = domain_dir / "security-test-planning"
+            executed_dir = domain_dir / "security-testing" / "executed_tests"
+            planning_dir.mkdir(parents=True)
+            executed_dir.mkdir(parents=True)
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
+                encoding="utf-8",
+            )
+            (executed_dir / "API-001.md").write_text("# legacy execution\n", encoding="utf-8")
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, _plan())
+            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+            runner = FakeSecurityTestingRunner()
+
+            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
+                target_url,
+                engagement_file=engagement_file,
+            )
+
+            self.assertEqual(runner.calls[0]["ready_pending"], ["API-001"])
+            history_files = list((report_dir / "executed_tests" / "history").glob("API-001__legacy__v1.md"))
+            self.assertEqual(len(history_files), 1)
+            self.assertIn("# legacy execution", history_files[0].read_text(encoding="utf-8"))
 
     def test_security_testing_feeds_new_discovery_updates_and_refreshes_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -215,6 +301,59 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(len(planning_runner.calls), 1)
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+
+    def test_duplicate_discovery_feedback_does_not_refresh_planning_again(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            domain_dir = output_root / report_dir_name(target_url)
+            discovery_dir = domain_dir / "discovery"
+            planning_dir = domain_dir / "security-test-planning"
+            discovery_dir.mkdir(parents=True)
+            planning_dir.mkdir(parents=True)
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "security_testing_discovery_feedback",
+                            "content": {
+                                "updates": [
+                                    {
+                                        "test_id": "API-001",
+                                        "type": "component",
+                                        "detail": "Express 4.18.2 is exposed by the API service header.",
+                                        "confidence": "confirmed",
+                                        "evidence": ["X-Powered-By: Express 4.18.2"],
+                                    }
+                                ]
+                            },
+                            "source": "security_testing_orchestrator",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
+                encoding="utf-8",
+            )
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, _plan())
+            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+            planning_runner = _CountingPlanningRunner()
+
+            report_dir = SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"),
+                output_root=output_root,
+                crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
+                planning_crew_runner=planning_runner,
+            ).run(target_url, engagement_file=engagement_file)
+
+            self.assertEqual(planning_runner.calls, [])
+            testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "discovery_feedback_duplicate_skipped" for event in testing_events))
 
     def test_collect_security_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
