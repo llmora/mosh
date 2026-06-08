@@ -9,11 +9,18 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from appsec_harness.config import AppConfig
-from appsec_harness.discovery_crew import CREW_CONFIG_PACKAGE, CrewAIUnavailable, _build_task_with_output_event, _llm, _load_crewai
+from appsec_harness.crews.discovery.reporting import update_report_with_security_testing_feedback
+from appsec_harness.crews.discovery.crew import (
+    CREW_CONFIG_PACKAGE,
+    CrewAIUnavailable,
+    _build_task_with_output_event,
+    _llm,
+    _load_crewai,
+)
 from appsec_harness.docker_tools import DockerToolResult, DockerToolRunner
 from appsec_harness.engagement import load_engagement_file, resolve_target_mapping
 from appsec_harness.memory import FileMemory
-from appsec_harness.models import Event
+from appsec_harness.models import Event, MemoryItem
 from appsec_harness.scope import report_dir_name
 
 
@@ -39,6 +46,8 @@ class SecurityTestExecutionState:
     review: dict[str, Any] | None = None
     report_written: bool = False
     commands: list[dict[str, Any]] = field(default_factory=list)
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SecurityTestingCrewRunner(Protocol):
@@ -62,14 +71,17 @@ class SecurityTestingOrchestrator:
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
         crew_runner: SecurityTestingCrewRunner | None = None,
+        planning_crew_runner: Any | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_security_testing_crew_runner(config)
+        self.planning_crew_runner = planning_crew_runner
 
     def run(self, url: str, engagement_file: Path) -> Path:
         domain_dir = self.output_root / report_dir_name(url)
+        discovery_dir = domain_dir / "discovery"
         planning_dir = domain_dir / "security-test-planning"
         report_dir = domain_dir / "security-testing"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
@@ -103,6 +115,41 @@ class SecurityTestingOrchestrator:
                 {"tests": [_hypothesis_id(item) for item in ready_pending]},
             )
             self.crew_runner.run(url, report_dir, memory, plan, engagement, result, ready_pending)
+            feedback_updates = collect_security_testing_discovery_updates(report_dir)
+            if feedback_updates:
+                _feed_security_testing_updates_to_discovery(
+                    discovery_dir=discovery_dir,
+                    testing_memory=memory,
+                    updates=feedback_updates,
+                    source_report_dir=report_dir,
+                )
+                memory.record_event(
+                    "orchestrator",
+                    "security_planning_refresh_start",
+                    "Starting security test planning refresh from security-testing discovery feedback",
+                    {"updates": len(feedback_updates), "discovery_dir": str(discovery_dir)},
+                )
+                from appsec_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+
+                SecurityTestPlanningOrchestrator(
+                    self.config,
+                    output_root=self.output_root,
+                    event_sink=self.event_sink,
+                    crew_runner=self.planning_crew_runner,
+                ).run(url)
+                memory.record_event(
+                    "orchestrator",
+                    "security_planning_refresh_complete",
+                    "Security test planning refresh completed from security-testing discovery feedback",
+                    {"updates": len(feedback_updates)},
+                )
+            else:
+                memory.record_event(
+                    "orchestrator",
+                    "discovery_feedback_skipped",
+                    "No new security-testing discovery feedback was submitted",
+                    {},
+                )
         else:
             memory.record_event(
                 "orchestrator",
@@ -189,6 +236,7 @@ def _run_one_security_test(
         state.revision = revision
         state.evidence = None
         state.review = None
+        command_start = len(state.commands)
         executor_crew = _build_security_test_executor_crew(crewai, config, state)
         _kickoff_capturing_tool_state(
             executor_crew,
@@ -242,10 +290,18 @@ def _run_one_security_test(
                 "summary": "Reviewer did not submit a review.",
                 "requested_changes": ["Submit a structured review."],
             }
+        _apply_review_artifact_decisions(state.artifacts, state.review)
+        _record_execution_attempt(state, command_start)
         previous_review = state.review
         if state.review.get("accepted"):
             break
 
+    execution_bundle = _execution_bundle(state)
+    memory.add_item(
+        "security_test_execution_bundle",
+        execution_bundle,
+        "security_test_coordinator",
+    )
     reporter_crew = _build_security_test_reporter_crew(crewai, config, state)
     _kickoff_capturing_tool_state(
         reporter_crew,
@@ -261,6 +317,7 @@ def _run_one_security_test(
             "evidence": json.dumps(state.evidence or {}, sort_keys=True),
             "review": json.dumps(state.review or {}, sort_keys=True),
             "commands": json.dumps(state.commands, sort_keys=True),
+            "execution_bundle": json.dumps(execution_bundle, sort_keys=True),
         },
     )
     if not state.report_written:
@@ -271,6 +328,7 @@ def _run_one_security_test(
             evidence=state.evidence or {},
             review=state.review or {},
             commands=state.commands,
+            execution_bundle=execution_bundle,
         )
         state.executed_report_path.write_text(markdown, encoding="utf-8")
         memory.record_event(
@@ -327,6 +385,338 @@ def _fallback_executor_evidence(state: SecurityTestExecutionState) -> dict[str, 
         "follow_up": "Re-run the test or simplify the hypothesis execution steps.",
         "commands": [],
     }
+
+
+def _record_execution_attempt(state: SecurityTestExecutionState, command_start: int) -> None:
+    attempt = {
+        "revision": state.revision,
+        "evidence": state.evidence or {},
+        "review": state.review or {},
+        "commands": state.commands[command_start:],
+        "artifacts": [
+            artifact
+            for artifact in state.artifacts
+            if artifact.get("source_revision") == state.revision
+        ],
+    }
+    state.attempts.append(attempt)
+    state.memory.add_item(
+        "security_test_execution_attempt",
+        {
+            "test_id": _hypothesis_id(state.hypothesis),
+            **attempt,
+        },
+        "security_test_coordinator",
+    )
+
+
+def _execution_bundle(state: SecurityTestExecutionState) -> dict[str, Any]:
+    return {
+        "test_id": _hypothesis_id(state.hypothesis),
+        "final_evidence": state.evidence or {},
+        "final_review": state.review or {},
+        "attempts": state.attempts,
+        "artifacts": state.artifacts,
+        "commands": state.commands,
+    }
+
+
+def collect_security_testing_discovery_updates(report_dir: Path) -> list[dict[str, Any]]:
+    updates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in _read_json_list(report_dir / "memory.json"):
+        if item.get("kind") != "security_test_execution_bundle":
+            continue
+        content = item.get("content") if isinstance(item.get("content"), dict) else {}
+        for update in _updates_from_execution_bundle(content):
+            fingerprint = _discovery_update_fingerprint(update)
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                updates.append(update)
+    return updates
+
+
+def _updates_from_execution_bundle(bundle: dict[str, Any]) -> list[dict[str, Any]]:
+    test_id = _text(bundle.get("test_id")) or "unknown"
+    candidates: list[Any] = []
+    final_evidence = bundle.get("final_evidence") if isinstance(bundle.get("final_evidence"), dict) else {}
+    candidates.extend(_explicit_discovery_updates(final_evidence))
+    for attempt in _list(bundle.get("attempts")):
+        if isinstance(attempt, dict) and isinstance(attempt.get("evidence"), dict):
+            candidates.extend(_explicit_discovery_updates(attempt["evidence"]))
+
+    updates: list[dict[str, Any]] = []
+    for candidate in candidates:
+        update = _normalize_discovery_update(candidate, test_id)
+        if update:
+            updates.append(update)
+    return updates
+
+
+def _explicit_discovery_updates(evidence: dict[str, Any]) -> list[Any]:
+    updates: list[Any] = []
+    for key in (
+        "discovery_updates",
+        "new_discovery",
+        "new_discovery_facts",
+        "discovery_feedback",
+        "new_entry_points",
+        "new_components",
+    ):
+        updates.extend(_list(evidence.get(key)))
+    return updates
+
+
+def _normalize_discovery_update(value: Any, test_id: str) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        detail = _text(value.get("detail") or value.get("summary") or value.get("value") or value.get("url") or value.get("endpoint"))
+        if not detail:
+            return None
+        evidence = _string_list(value.get("evidence") or value.get("source_evidence") or value.get("references"))
+        return {
+            "test_id": _text(value.get("test_id")) or test_id,
+            "type": _text(value.get("type") or value.get("kind") or value.get("category")) or "security-testing-fact",
+            "detail": detail,
+            "confidence": _text(value.get("confidence")) or "observed",
+            "evidence": evidence,
+            "source": "security-testing",
+        }
+    detail = _text(value)
+    if not detail:
+        return None
+    return {
+        "test_id": test_id,
+        "type": "security-testing-fact",
+        "detail": detail,
+        "confidence": "observed",
+        "evidence": [],
+        "source": "security-testing",
+    }
+
+
+def _discovery_update_fingerprint(update: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "test_id": update.get("test_id"),
+            "type": update.get("type"),
+            "detail": update.get("detail"),
+            "evidence": update.get("evidence"),
+        },
+        sort_keys=True,
+    )
+
+
+def _feed_security_testing_updates_to_discovery(
+    *,
+    discovery_dir: Path,
+    testing_memory: FileMemory,
+    updates: list[dict[str, Any]],
+    source_report_dir: Path,
+) -> None:
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    content = {
+        "updates": updates,
+        "source_report_dir": str(source_report_dir),
+    }
+    _append_existing_memory_item(
+        discovery_dir,
+        MemoryItem(
+            kind="security_testing_discovery_feedback",
+            content=content,
+            source="security_testing_orchestrator",
+        ),
+    )
+    report_updates = _all_discovery_feedback_updates(discovery_dir)
+    update_report_with_security_testing_feedback(discovery_dir, report_updates)
+    _append_existing_event(
+        discovery_dir,
+        Event(
+            agent="security_testing_orchestrator",
+            action="memory_write",
+            message="Added security-testing discovery feedback to shared discovery memory",
+            data={"kind": "security_testing_discovery_feedback", "content": content},
+        ),
+    )
+    _append_existing_event(
+        discovery_dir,
+        Event(
+            agent="security_testing_orchestrator",
+            action="report_updated",
+            message="Updated discovery report with security-testing feedback",
+            data={"updates": len(report_updates), "new_updates": len(updates), "report": str(discovery_dir / "report.md")},
+        ),
+    )
+    testing_memory.add_item(
+        "security_testing_discovery_feedback",
+        {
+            "updates": updates,
+            "discovery_dir": str(discovery_dir),
+            "discovery_report": str(discovery_dir / "report.md"),
+        },
+        "security_testing_orchestrator",
+    )
+
+
+def _all_discovery_feedback_updates(discovery_dir: Path) -> list[dict[str, Any]]:
+    updates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in _read_json_list(discovery_dir / "memory.json"):
+        if item.get("kind") != "security_testing_discovery_feedback":
+            continue
+        content = item.get("content") if isinstance(item.get("content"), dict) else {}
+        for update in _list(content.get("updates")):
+            if not isinstance(update, dict):
+                continue
+            fingerprint = _discovery_update_fingerprint(update)
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                updates.append(update)
+    return updates
+
+
+def _append_existing_memory_item(report_dir: Path, item: MemoryItem) -> None:
+    path = report_dir / "memory.json"
+    items = _read_json_list(path)
+    items.append(item.to_dict())
+    _write_json(path, items)
+
+
+def _append_existing_event(report_dir: Path, event: Event) -> None:
+    path = report_dir / "events.json"
+    events = _read_json_list(path)
+    events.append(event.to_dict())
+    _write_json(path, events)
+
+
+def _read_json_list(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError(f"{path} must contain a JSON list")
+    return data
+
+
+def _write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _preserve_evidence_artifacts(state: SecurityTestExecutionState, evidence: dict[str, Any]) -> None:
+    for artifact in _extract_artifacts(evidence, state.revision):
+        if _artifact_fingerprint(artifact) not in {_artifact_fingerprint(existing) for existing in state.artifacts}:
+            state.artifacts.append(artifact)
+            state.memory.add_item(
+                "security_test_artifact",
+                {
+                    "test_id": _hypothesis_id(state.hypothesis),
+                    "artifact": artifact,
+                },
+                "security_test_executor",
+            )
+
+
+def _extract_artifacts(evidence: dict[str, Any], revision: int) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    explicit_artifacts = evidence.get("artifacts")
+    if isinstance(explicit_artifacts, list):
+        for index, artifact in enumerate(explicit_artifacts, start=1):
+            normalized = _normalize_artifact(artifact, revision, default_name=f"artifact_{index}")
+            if normalized:
+                artifacts.append(normalized)
+
+    artifact_keys = {
+        "recommended_csp_policy": ("recommended_policy", "content_security_policy"),
+        "recommended_policy": ("recommended_policy", "recommended_policy"),
+        "proof_of_concept": ("proof_of_concept", "proof_of_concept"),
+        "poc": ("proof_of_concept", "proof_of_concept"),
+        "generated_script": ("generated_script", "generated_script"),
+        "endpoint_inventory": ("endpoint_inventory", "endpoint_inventory"),
+        "auth_matrix": ("auth_matrix", "auth_matrix"),
+    }
+    for key, (artifact_type, name) in artifact_keys.items():
+        if key in evidence and evidence.get(key) not in (None, "", [], {}):
+            artifacts.append(
+                {
+                    "type": artifact_type,
+                    "name": name,
+                    "value": evidence[key],
+                    "source_revision": revision,
+                    "status": "draft",
+                    "review_status": "preserved",
+                }
+            )
+    return artifacts
+
+
+def _normalize_artifact(value: Any, revision: int, default_name: str) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        artifact_value = value.get("value", value.get("content", value.get("body")))
+        if artifact_value in (None, "", [], {}):
+            artifact_value = {key: item for key, item in value.items() if key not in {"type", "name", "status", "review_status"}}
+        if artifact_value in (None, "", [], {}):
+            return None
+        return {
+            "type": _text(value.get("type")) or "artifact",
+            "name": _text(value.get("name")) or default_name,
+            "value": artifact_value,
+            "source_revision": int(value.get("source_revision") or revision),
+            "status": _text(value.get("status")) or "draft",
+            "review_status": _text(value.get("review_status")) or "preserved",
+        }
+    if value in (None, "", [], {}):
+        return None
+    return {
+        "type": "artifact",
+        "name": default_name,
+        "value": value,
+        "source_revision": revision,
+        "status": "draft",
+        "review_status": "preserved",
+    }
+
+
+def _artifact_fingerprint(artifact: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "type": artifact.get("type"),
+            "name": artifact.get("name"),
+            "value": artifact.get("value"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _apply_review_artifact_decisions(artifacts: list[dict[str, Any]], review: dict[str, Any]) -> None:
+    accepted = _artifact_decision_names(review.get("accepted_artifacts"))
+    rejected = _artifact_decision_names(review.get("rejected_artifacts"))
+    for decision in _list(review.get("artifact_decisions")):
+        if isinstance(decision, dict):
+            name = _text(decision.get("name") or decision.get("artifact") or decision.get("id"))
+            status = _text(decision.get("status") or decision.get("decision")).lower()
+            if name and status in {"accepted", "valid", "include"}:
+                accepted.add(name)
+            elif name and status in {"rejected", "invalid", "exclude"}:
+                rejected.add(name)
+    for artifact in artifacts:
+        name = _text(artifact.get("name"))
+        if name in accepted:
+            artifact["review_status"] = "accepted"
+        elif name in rejected:
+            artifact["review_status"] = "rejected"
+
+
+def _artifact_decision_names(value: Any) -> set[str]:
+    names: set[str] = set()
+    for item in _list(value):
+        if isinstance(item, dict):
+            name = _text(item.get("name") or item.get("artifact") or item.get("id"))
+        else:
+            name = _text(item)
+        if name:
+            names.add(name)
+    return names
 
 
 def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
@@ -550,6 +940,7 @@ def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecut
             content = _coerce_mapping(evidence)
             content.setdefault("commands", state.commands)
             state.evidence = content
+            _preserve_evidence_artifacts(state, content)
             state.memory.add_item(
                 "security_test_execution_evidence",
                 {
@@ -635,6 +1026,7 @@ def _build_write_executed_test_report_tool(crewai: Any, state: SecurityTestExecu
                 evidence=content.get("evidence") if isinstance(content.get("evidence"), dict) else state.evidence or content,
                 review=content.get("review") if isinstance(content.get("review"), dict) else state.review or {},
                 commands=state.commands,
+                execution_bundle=_execution_bundle(state),
                 report_content=content,
             )
             state.executed_report_path.write_text(markdown, encoding="utf-8")
@@ -753,6 +1145,7 @@ def render_executed_test_report(
     evidence: dict[str, Any],
     review: dict[str, Any],
     commands: list[dict[str, Any]],
+    execution_bundle: dict[str, Any] | None = None,
     report_content: dict[str, Any] | None = None,
 ) -> str:
     test_id = _hypothesis_id(hypothesis)
@@ -761,6 +1154,8 @@ def render_executed_test_report(
     summary = _text((report_content or {}).get("summary")) or _text(evidence.get("summary")) or "No summary provided."
     result = _text((report_content or {}).get("result")) or _text(evidence.get("result")) or "No result provided."
     finding = (report_content or {}).get("finding")
+    artifacts = _report_artifacts(report_content, execution_bundle, evidence)
+    resolution = _resolution_guidance(report_content, evidence, finding, artifacts)
     lines = [
         f"# {test_id}: {title}",
         "",
@@ -820,6 +1215,29 @@ def render_executed_test_report(
             "",
             result,
             "",
+            "## Useful Artifacts",
+            "",
+        ]
+    )
+    if artifacts:
+        for artifact in artifacts:
+            lines.extend(
+                [
+                    f"### {_text(artifact.get('name')) or 'Artifact'}",
+                    "",
+                    f"- Type: `{_text(artifact.get('type')) or 'artifact'}`",
+                    f"- Status: `{_text(artifact.get('status')) or 'draft'}`",
+                    f"- Review status: `{_text(artifact.get('review_status')) or 'preserved'}`",
+                    f"- Source revision: `{_text(artifact.get('source_revision')) or 'unknown'}`",
+                    "",
+                    _markdown_value(artifact.get("value")),
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["None.", ""])
+    lines.extend(
+        [
             "## Finding",
             "",
         ]
@@ -835,6 +1253,10 @@ def render_executed_test_report(
     lines.extend(
         [
             "",
+            "## Resolution",
+            "",
+            _markdown_value(resolution),
+            "",
             "## Review",
             "",
             f"- Accepted: `{bool(review.get('accepted'))}`",
@@ -846,6 +1268,74 @@ def render_executed_test_report(
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _report_artifacts(
+    report_content: dict[str, Any] | None,
+    execution_bundle: dict[str, Any] | None,
+    evidence: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for source in (
+        (report_content or {}).get("useful_artifacts"),
+        (report_content or {}).get("artifacts"),
+        (execution_bundle or {}).get("artifacts"),
+        evidence.get("artifacts"),
+    ):
+        for item in _list(source):
+            normalized = _normalize_artifact(item, revision=0, default_name="artifact")
+            if normalized:
+                candidates.append(normalized)
+    candidates.extend(_extract_artifacts(evidence, revision=0))
+
+    seen: set[str] = set()
+    artifacts: list[dict[str, Any]] = []
+    for artifact in candidates:
+        fingerprint = _artifact_fingerprint(artifact)
+        if fingerprint not in seen:
+            seen.add(fingerprint)
+            artifacts.append(artifact)
+    return artifacts
+
+
+def _resolution_guidance(
+    report_content: dict[str, Any] | None,
+    evidence: dict[str, Any],
+    finding: Any,
+    artifacts: list[dict[str, Any]],
+) -> Any:
+    for source in (report_content or {}, evidence):
+        for key in (
+            "resolution",
+            "remediation",
+            "recommended_resolution",
+            "developer_guidance",
+            "remediation_steps",
+            "mitigation",
+            "recommendation",
+        ):
+            if source.get(key) not in (None, "", [], {}):
+                return source[key]
+    if isinstance(finding, dict):
+        for key in ("resolution", "remediation", "recommendation", "mitigation"):
+            if finding.get(key) not in (None, "", [], {}):
+                return finding[key]
+
+    artifact_hints = []
+    for artifact in artifacts:
+        artifact_type = _text(artifact.get("type")).lower()
+        artifact_name = _text(artifact.get("name")) or "artifact"
+        if any(marker in artifact_type for marker in ("remediation", "recommended_policy", "policy", "script")):
+            artifact_hints.append(
+                f"Use the preserved `{artifact_name}` artifact as a starting point for the fix, then re-test this hypothesis."
+            )
+    if artifact_hints:
+        return artifact_hints
+
+    follow_up = (report_content or {}).get("follow_up") or evidence.get("follow_up")
+    if follow_up not in (None, "", [], {}):
+        return follow_up
+    return "No specific resolution guidance was provided."
 
 
 def _hypothesis_blockers(
@@ -957,6 +1447,10 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _string_list(value: Any) -> list[str]:
+    return [_text(item) for item in _list(value) if _text(item)]
 
 
 def _text(value: Any) -> str:

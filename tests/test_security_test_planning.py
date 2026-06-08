@@ -8,11 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from appsec_harness.config import AppConfig
-from appsec_harness.discovery_crew import CREW_CONFIG_PACKAGE
+from appsec_harness.crews.discovery.crew import CREW_CONFIG_PACKAGE
 from appsec_harness.engagement import build_engagement_template, load_engagement_file, resolve_target_mapping
 from appsec_harness.memory import FileMemory
 from appsec_harness.scope import report_dir_name
-from appsec_harness.security_planning_crew import (
+from appsec_harness.crews.security_planning.crew import (
     CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
     SecurityTestPlanningState,
@@ -22,7 +22,7 @@ from appsec_harness.security_planning_crew import (
     _write_security_planning_subset_configs,
     load_discovery_context,
 )
-from appsec_harness.security_test_planning_reporting import render_security_test_plan, write_security_test_plan
+from appsec_harness.crews.security_planning.reporting import render_security_test_plan, write_security_test_plan
 from tests.fakes import FakeSecurityPlanningRunner
 
 
@@ -374,7 +374,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
                 AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
             )
 
-            with patch("appsec_harness.security_planning_crew._load_crewai", return_value=FakeRuntimeCrewAI):
+            with patch("appsec_harness.crews.security_planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
                 with self.assertRaisesRegex(RuntimeError, "finalizer post-processing failed"):
                     runner.run("https://example.test", discovery_dir, report_dir, memory)
 

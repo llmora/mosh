@@ -4,9 +4,9 @@ from pathlib import Path
 
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawlResult
-from appsec_harness.reporting import write_reports
-from appsec_harness.security_testing_crew import render_executed_test_report
-from appsec_harness.security_test_planning_reporting import write_security_test_plan
+from appsec_harness.crews.discovery.reporting import write_reports
+from appsec_harness.crews.security_testing.crew import render_executed_test_report
+from appsec_harness.crews.security_planning.reporting import write_security_test_plan
 
 
 class FakeCrewRunner:
@@ -29,7 +29,7 @@ class FakeCrewRunner:
                 "max_depth": max_depth,
             }
         )
-        from appsec_harness.crawler import Crawler
+        from appsec_harness.crews.discovery.crawler import Crawler
 
         crawl = Crawler(timeout=3).crawl(target_url, max_pages=max_pages, max_depth=max_depth)
         memory.record_event("crawler", "task_received", "Crawl the target and discover app surface")

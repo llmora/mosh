@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from appsec_harness.docker_tools import DockerToolResult
-from appsec_harness.tools import KatanaDockerCrawlerTool, parse_katana_output
+from appsec_harness.crews.discovery.tools import KatanaDockerCrawlerTool, parse_katana_output
 
 
 class FakeDockerRunner:

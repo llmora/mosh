@@ -12,9 +12,10 @@ from appsec_harness.docker_tools import DockerToolResult
 from appsec_harness.engagement import write_engagement_template
 from appsec_harness.memory import FileMemory
 from appsec_harness.scope import report_dir_name
-from appsec_harness.security_testing_crew import (
+from appsec_harness.crews.security_testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
+    collect_security_testing_discovery_updates,
     _fallback_executor_evidence,
     _kickoff_capturing_tool_state,
     _build_run_security_command_tool,
@@ -154,6 +155,101 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(runner.calls, [])
             self.assertEqual((report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"), "# already executed\n")
 
+    def test_security_testing_feeds_new_discovery_updates_and_refreshes_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            domain_dir = output_root / report_dir_name(target_url)
+            discovery_dir = domain_dir / "discovery"
+            planning_dir = domain_dir / "security-test-planning"
+            discovery_dir.mkdir(parents=True)
+            planning_dir.mkdir(parents=True)
+            (discovery_dir / "report.md").write_text("# Discovery\n\n## Existing\n\nOriginal.\n", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "security_testing_discovery_feedback",
+                            "content": {
+                                "updates": [
+                                    {
+                                        "test_id": "OLD-001",
+                                        "type": "endpoint",
+                                        "detail": "https://api.example.test/api/private/old",
+                                        "confidence": "confirmed",
+                                        "evidence": ["prior run"],
+                                    }
+                                ]
+                            },
+                            "source": "security_testing_orchestrator",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
+                encoding="utf-8",
+            )
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, _plan())
+            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+            planning_runner = _CountingPlanningRunner()
+
+            report_dir = SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"),
+                output_root=output_root,
+                crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
+                planning_crew_runner=planning_runner,
+            ).run(target_url, engagement_file=engagement_file)
+
+            discovery_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
+            feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
+            self.assertEqual(len(feedback_items), 2)
+            self.assertIn("Express 4.18.2", json.dumps(feedback_items))
+            discovery_report = (discovery_dir / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Security Testing Feedback", discovery_report)
+            self.assertIn("Express 4.18.2", discovery_report)
+            self.assertIn("https://api.example.test/api/private/old", discovery_report)
+            self.assertEqual(len(planning_runner.calls), 1)
+            testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+
+    def test_collect_security_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir)
+            memory.add_item(
+                "security_test_execution_bundle",
+                {
+                    "test_id": "API-001",
+                    "final_evidence": {
+                        "discovery_updates": [
+                            {
+                                "type": "endpoint",
+                                "detail": "https://api.example.test/api/private/status",
+                                "confidence": "confirmed",
+                                "evidence": ["curl returned 401"],
+                            },
+                            {
+                                "type": "endpoint",
+                                "detail": "https://api.example.test/api/private/status",
+                                "confidence": "confirmed",
+                                "evidence": ["curl returned 401"],
+                            },
+                        ]
+                    },
+                },
+                "security_test_coordinator",
+            )
+
+            updates = collect_security_testing_discovery_updates(report_dir)
+
+            self.assertEqual(len(updates), 1)
+            self.assertEqual(updates[0]["test_id"], "API-001")
+            self.assertEqual(updates[0]["type"], "endpoint")
+
     def test_security_command_tool_blocks_out_of_scope_hosts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
@@ -190,7 +286,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
 
-            with patch("appsec_harness.security_testing_crew.DockerToolRunner", return_value=fake_runner):
+            with patch("appsec_harness.crews.security_testing.crew.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_security_command_tool(_FakeCrewAI, AppConfig(), state)
                 result = json.loads(tool._run("curl https://api.example.test/api/private/auth/me", "auth check"))
 
@@ -294,7 +390,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
     def test_security_testing_tasks_treat_effective_targets_as_canonical(self) -> None:
         task_yaml = (
-            Path("src/appsec_harness/crew_config/security_testing/tasks.yaml")
+            Path("src/appsec_harness/crews/security_testing/tasks.yaml")
             .read_text(encoding="utf-8")
             .lower()
         )
@@ -307,10 +403,16 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("do not request a re-run", task_yaml)
         self.assertIn("write the report against the effective target mappings", task_yaml)
         self.assertIn("discovery evidence urls from execution targets", task_yaml)
+        self.assertIn("accepted_artifacts", task_yaml)
+        self.assertIn("execution bundle json", task_yaml)
+        self.assertIn("useful_artifacts", task_yaml)
+        self.assertIn("resolution:", task_yaml)
+        self.assertIn("developer/app-owner guidance", task_yaml)
         self.assertEqual(
             inspect.getsource(_run_one_security_test).count('"targets": json.dumps(targets, sort_keys=True)'),
             3,
         )
+        self.assertIn('"execution_bundle": json.dumps(execution_bundle, sort_keys=True)', inspect.getsource(_run_one_security_test))
 
     def test_executed_test_report_includes_effective_targets(self) -> None:
         markdown = render_executed_test_report(
@@ -325,6 +427,95 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("- Effective targets:", markdown)
         self.assertIn("api: `https://preprod-api.example.test/api/private`", markdown)
 
+    def test_executed_test_report_renders_artifact_sibling_fields_even_with_observations(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "HDR-001", "title": "CSP", "surface": "headers", "priority": "medium"},
+            evidence={
+                "status": "finding",
+                "summary": "CSP is missing.",
+                "observations": {"csp": "absent"},
+                "result": "Missing CSP.",
+                "recommended_csp_policy": "default-src 'self'; object-src 'none'; base-uri 'self';",
+            },
+            review={"accepted": True, "summary": "Accepted.", "accepted_artifacts": ["content_security_policy"]},
+            commands=[],
+        )
+
+        self.assertIn("## Useful Artifacts", markdown)
+        self.assertIn("### content_security_policy", markdown)
+        self.assertIn("default-src 'self'; object-src 'none'; base-uri 'self';", markdown)
+
+    def test_executed_test_report_renders_artifacts_from_prior_attempt_bundle(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "HDR-001", "title": "CSP", "surface": "headers", "priority": "medium"},
+            evidence={
+                "status": "inconclusive",
+                "summary": "Final attempt used fallback evidence.",
+                "observations": [],
+                "result": "No final conclusion.",
+            },
+            review={"accepted": False, "summary": "Needs re-run."},
+            commands=[],
+            execution_bundle={
+                "artifacts": [
+                    {
+                        "type": "recommended_policy",
+                        "name": "content_security_policy",
+                        "value": "script-src 'self'; object-src 'none';",
+                        "source_revision": 1,
+                        "status": "draft",
+                        "review_status": "preserved",
+                    }
+                ]
+            },
+        )
+
+        self.assertIn("### content_security_policy", markdown)
+        self.assertIn("Source revision: `1`", markdown)
+        self.assertIn("script-src 'self'; object-src 'none';", markdown)
+        self.assertIn("## Resolution", markdown)
+        self.assertIn("Use the preserved `content_security_policy` artifact", markdown)
+
+    def test_executed_test_report_renders_explicit_resolution(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "HDR-001", "title": "CSP", "surface": "headers", "priority": "medium"},
+            evidence={"status": "finding", "summary": "CSP is missing.", "result": "Missing CSP."},
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            report_content={
+                "resolution": [
+                    "Set Content-Security-Policy on all HTML responses.",
+                    "Start with report-only mode, then enforce after validating reports.",
+                ]
+            },
+        )
+
+        self.assertIn("## Resolution", markdown)
+        self.assertIn("Set Content-Security-Policy", markdown)
+        self.assertIn("report-only mode", markdown)
+
+    def test_executed_test_report_uses_finding_recommendation_as_resolution_fallback(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "CORS-001", "title": "CORS", "surface": "headers", "priority": "high"},
+            evidence={"status": "finding", "summary": "Wildcard CORS.", "result": "Finding."},
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            report_content={
+                "finding": {
+                    "severity": "high",
+                    "title": "Wildcard CORS",
+                    "recommendation": "Restrict Access-Control-Allow-Origin to approved application origins.",
+                }
+            },
+        )
+
+        self.assertIn("## Resolution", markdown)
+        self.assertIn("Restrict Access-Control-Allow-Origin", markdown)
+
 
 class _FakeCrewAI:
     BaseModel = object
@@ -333,6 +524,77 @@ class _FakeCrewAI:
     @staticmethod
     def Field(default=None, description: str = ""):
         return default
+
+
+class _DiscoveryFeedbackSecurityTestingRunner:
+    def run(self, target_url, report_dir, memory, plan, engagement, preflight, ready_pending) -> None:
+        memory.add_item(
+            "security_test_execution_bundle",
+            {
+                "test_id": "API-001",
+                "final_evidence": {
+                    "status": "no-finding",
+                    "summary": "Execution discovered a backend version header.",
+                    "discovery_updates": [
+                        {
+                            "type": "component",
+                            "detail": "Express 4.18.2 is exposed by the API service header.",
+                            "confidence": "confirmed",
+                            "evidence": ["X-Powered-By: Express 4.18.2"],
+                        }
+                    ],
+                },
+                "final_review": {"accepted": True},
+                "attempts": [],
+                "artifacts": [],
+                "commands": [],
+            },
+            "security_test_coordinator",
+        )
+
+
+class _CountingPlanningRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, target_url, discovery_dir, report_dir, memory):
+        self.calls.append(
+            {
+                "target_url": target_url,
+                "discovery_dir": str(discovery_dir),
+                "report_dir": str(report_dir),
+            }
+        )
+        memory.add_item(
+            "security_test_plan_final",
+            {
+                "structured": _refreshed_plan(),
+                "critic_review": {"accepted": True},
+            },
+            "security_test_finalizer",
+        )
+        return _PlanningResult(_refreshed_plan(), {"accepted": True}, accepted=True, iterations=1)
+
+
+def _refreshed_plan() -> dict[str, object]:
+    return {
+        "title": "Refreshed plan",
+        "test_hypotheses": [
+            {
+                "id": "API-001",
+                "title": "Refreshed test",
+                "requirements": ["No credentials required."],
+            }
+        ],
+    }
+
+
+class _PlanningResult:
+    def __init__(self, plan, critic_review, accepted: bool, iterations: int) -> None:
+        self.plan = plan
+        self.critic_review = critic_review
+        self.accepted = accepted
+        self.iterations = iterations
 
 
 class _FakeDockerRunner:

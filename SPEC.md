@@ -112,13 +112,23 @@ The discovery workflow must run as a CrewAI crew. Agents, exchanges, tasks, and 
 CrewAI agent and task definitions should use CrewAI's built-in YAML configuration pattern. Configuration is grouped by crew, so each crew's agents and tasks are kept together for future reference:
 
 - Discovery crew:
-  - `src/appsec_harness/crew_config/discovery/agents.yaml`
-  - `src/appsec_harness/crew_config/discovery/tasks.yaml`
+  - `src/appsec_harness/crews/discovery/agents.yaml`
+  - `src/appsec_harness/crews/discovery/tasks.yaml`
 - Security planning crew:
-  - `src/appsec_harness/crew_config/security_planning/agents.yaml`
-  - `src/appsec_harness/crew_config/security_planning/tasks.yaml`
+  - `src/appsec_harness/crews/security_planning/agents.yaml`
+  - `src/appsec_harness/crews/security_planning/tasks.yaml`
+- Security testing crew:
+  - `src/appsec_harness/crews/security_testing/agents.yaml`
+  - `src/appsec_harness/crews/security_testing/tasks.yaml`
 
 Python should bind live tool implementations to the YAML-defined agents, but agent roles, goals, backstories, task descriptions, and expected outputs should live in YAML.
+
+Crew-specific Python code should also live with the crew. For example, the
+discovery crew owns its `crew.py`, `agents.py`, `crawler.py`, `tools.py`, and
+`reporting.py` modules under `src/appsec_harness/crews/discovery/`. Shared
+application primitives such as configuration, Docker execution, engagement
+files, file-backed memory, shared models, and scope helpers stay at the
+`appsec_harness` package root.
 
 ## Shared Memory
 
@@ -139,6 +149,12 @@ Use the host only for the report directory name. For example:
 
 The host directory is reserved for multiple crew outputs. Future crews should
 write to their own subdirectories under `report/<host>/`.
+
+Current crew output subdirectories are:
+
+- `report/<host>/discovery/`
+- `report/<host>/security-test-planning/`
+- `report/<host>/security-testing/`
 
 ## Real-Time Visibility
 
@@ -225,6 +241,60 @@ deterministic component inventory tool in the current implementation.
 The summarizer agent owns summarization behavior and the report-writing tool. The
 orchestrator may request reporting, but it must not synthesize the final report by
 calling reporting helpers directly.
+
+## Security Testing Crew
+
+The security testing crew executes ready hypotheses from the security test plan.
+It runs tests sequentially so reviewer feedback for one test can inform a bounded
+rerun before the next test starts.
+
+The security testing crew has these agents:
+
+- security test executor: runs scoped commands through the security tools Docker container
+- security test reviewer: critiques evidence, safety, target scope, and useful generated artifacts
+- security test reporter: writes the stable Markdown artifact for each executed test
+
+The executor may run commands, install packages, compile helper code, and write
+scripts only inside the disposable Docker workspace. The orchestrator must not
+run test tools directly.
+
+Effective target mappings from the engagement file are canonical for execution,
+review, and reporting. URLs in the original hypothesis may be production
+discovery evidence. If an alternative staging or preprod target is mapped, agents
+must execute and evaluate the mapped target rather than drifting back to the
+original production URL.
+
+Each executed test should preserve a structured execution bundle containing:
+
+- final evidence
+- final reviewer decision
+- every executor/reviewer attempt
+- command records
+- useful artifacts generated during any attempt
+
+Useful artifacts include generated policies, proof-of-concept payloads, endpoint
+inventories, helper scripts, auth matrices, and remediation snippets. Reviewer
+feedback may accept or reject artifacts separately from the final evidence
+decision. A reviewer-requested rerun must not discard a useful artifact from an
+earlier attempt; the final report should include it with status and caveats
+unless it is unsafe or known invalid.
+
+Each executed test report should include a `Resolution` section aimed at
+developers and application owners. This section should explain how to remediate
+an identified issue using concrete configuration, code, header, control, or
+process changes where evidence supports them. If no issue is identified, the
+section should state that no remediation is required for that hypothesis.
+
+Security testing can discover additional facts that belong back in discovery:
+new entry points, endpoints, technologies, versions, service behavior, headers,
+or other app-surface information. The executor should submit these as
+structured `discovery_updates` in its evidence. After ready tests finish, the
+security-testing orchestrator feeds those updates into the discovery crew's
+file-backed memory, updates the discovery report with a deterministic `Security
+Testing Feedback` section, and then asks the security planning crew to refresh
+the test plan. The system does not immediately auto-run new tests from that
+refreshed plan; additional execution happens on the next security-testing run
+only if the refreshed plan contains ready, unexecuted hypotheses.
 
 ## Discovery Scope
 
@@ -329,8 +399,8 @@ At minimum, tests should cover:
 - agent-owned tool invocation
 - crawler behavior against a fixture app
 - SBOM agent output recording
+- security-testing feedback into discovery memory, discovery reporting, and replanning
 
 # Roadmap
 
-* CrewAI orchestration is required. The orchestrator should start a CrewAI crew that contains the discovery agents, their tasks, exchanges, and agent-owned tools. There must be no production deterministic fallback path.
-* The current implementation direction is a CrewAI discovery crew. Future work should deepen inter-agent exchange and delegation so crawler, SBOM/component inventory, summarizer, and future crews communicate through the CrewAI runtime and shared file-backed memory.
+* I am using models through OpenRouter right now, but want to have the choice between continuing to do so and connecting to the DeepSeek API directly (which is cheaper overall).

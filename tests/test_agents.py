@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from appsec_harness.agents import CrawlerAgent, discovery_agent_definitions
+from appsec_harness.crews.discovery.agents import CrawlerAgent, discovery_agent_definitions
 from appsec_harness.config import AppConfig
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate

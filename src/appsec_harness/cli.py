@@ -6,10 +6,10 @@ from pathlib import Path
 
 from appsec_harness.config import AppConfig
 from appsec_harness.models import Event
-from appsec_harness.orchestrator import DiscoveryOrchestrator
+from appsec_harness.crews.discovery.crew import DiscoveryOrchestrator
 from appsec_harness.scope import report_dir_name
-from appsec_harness.security_planning_crew import SecurityTestPlanningOrchestrator
-from appsec_harness.security_testing_crew import SecurityTestingOrchestrator
+from appsec_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+from appsec_harness.crews.security_testing.crew import SecurityTestingOrchestrator
 
 
 def main(argv: list[str] | None = None) -> int:

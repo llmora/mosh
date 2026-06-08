@@ -4,7 +4,7 @@ import json
 import unittest
 
 from appsec_harness.docker_tools import DockerToolResult
-from appsec_harness.tools import JsStaticEndpointDockerTool, parse_js_static_output
+from appsec_harness.crews.discovery.tools import JsStaticEndpointDockerTool, parse_js_static_output
 
 
 class FakeDockerRunner:

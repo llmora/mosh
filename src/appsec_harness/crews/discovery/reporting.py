@@ -22,10 +22,13 @@ REPORT_SECTION_ORDER = (
     "Authentication Observations",
     "Confirmed Findings",
     "Inferred Findings",
+    "Security Testing Feedback",
     "Discovery Limitations",
     "Recommended Next Steps",
     "Appendix",
 )
+
+SECURITY_TESTING_FEEDBACK_HEADING = "Security Testing Feedback"
 
 
 def write_reports(
@@ -68,11 +71,56 @@ def render_markdown_report(
     _add_items_section(lines, "Authentication Observations", report_content.get("authentication_observations"))
     _add_items_section(lines, "Confirmed Findings", report_content.get("confirmed_findings"))
     _add_items_section(lines, "Inferred Findings", report_content.get("inferred_findings"))
+    _add_items_section(lines, SECURITY_TESTING_FEEDBACK_HEADING, report_content.get("security_testing_feedback"))
     _add_items_section(lines, "Discovery Limitations", report_content.get("limitations"))
     _add_actions_section(lines, report_content.get("recommended_next_steps"))
     _add_appendix(lines, report_content.get("appendix"), crawl)
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def update_report_with_security_testing_feedback(report_dir: Path, updates: list[dict[str, Any]]) -> str:
+    report_path = report_dir / "report.md"
+    existing = report_path.read_text(encoding="utf-8") if report_path.exists() else "# Application Discovery Report\n"
+    section = _render_security_testing_feedback_section(updates)
+    updated = _replace_markdown_section(existing, SECURITY_TESTING_FEEDBACK_HEADING, section)
+    report_path.write_text(updated, encoding="utf-8")
+    return updated
+
+
+def _render_security_testing_feedback_section(updates: list[dict[str, Any]]) -> str:
+    lines = [f"## {SECURITY_TESTING_FEEDBACK_HEADING}", ""]
+    if not updates:
+        lines.extend(["No security-testing feedback has been fed back into discovery.", ""])
+        return "\n".join(lines)
+    lines.extend(["| Type | Detail | Confidence | Source Test | Evidence |", "|---|---|---|---|---|"])
+    for update in updates:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _cell(update.get("type") or update.get("kind") or update.get("category")),
+                    _cell(update.get("detail") or update.get("summary") or update.get("value")),
+                    _cell(update.get("confidence")),
+                    _cell(update.get("test_id")),
+                    _cell("; ".join(_string_list(update.get("evidence") or update.get("source_evidence")))),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _replace_markdown_section(markdown: str, heading: str, replacement: str) -> str:
+    marker = f"## {heading}"
+    start = markdown.find(marker)
+    if start < 0:
+        return markdown.rstrip() + "\n\n" + replacement.rstrip() + "\n"
+    next_heading = markdown.find("\n## ", start + len(marker))
+    if next_heading < 0:
+        return markdown[:start].rstrip() + "\n\n" + replacement.rstrip() + "\n"
+    return markdown[:start].rstrip() + "\n\n" + replacement.rstrip() + "\n" + markdown[next_heading:]
 
 
 def _add_text_section(lines: list[str], heading: str, value: Any) -> None:

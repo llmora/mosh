@@ -17,4 +17,4 @@ where = ["src"]
 include = ["appsec_harness*"]
 
 [tool.setuptools.package-data]
-appsec_harness = ["crew_config/*.yaml", "crew_config/**/*.yaml"]
+appsec_harness = ["crews/**/*.yaml"]

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from appsec_harness.models import CrawledPage, CrawlResult
-from appsec_harness.reporting import write_reports
+from appsec_harness.crews.discovery.reporting import update_report_with_security_testing_feedback, write_reports
 
 
 class ReportingTests(unittest.TestCase):
@@ -69,6 +69,31 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("| Pages Crawled | 1 |", markdown)
             self.assertIn("## Confirmed Findings", markdown)
             self.assertIn("Example finding", markdown)
+
+    def test_security_testing_feedback_section_is_replaced_in_discovery_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            (report_dir / "report.md").write_text(
+                "# Discovery\n\n## Security Testing Feedback\n\nOld feedback.\n\n## Appendix\n\nExisting appendix.\n",
+                encoding="utf-8",
+            )
+
+            markdown = update_report_with_security_testing_feedback(
+                report_dir,
+                [
+                    {
+                        "type": "component",
+                        "detail": "Express 4.18.2 is exposed by the API service header.",
+                        "confidence": "confirmed",
+                        "test_id": "API-001",
+                        "evidence": ["X-Powered-By: Express 4.18.2"],
+                    }
+                ],
+            )
+
+            self.assertNotIn("Old feedback", markdown)
+            self.assertIn("Express 4.18.2", markdown)
+            self.assertIn("## Appendix", markdown)
 
 
 if __name__ == "__main__":

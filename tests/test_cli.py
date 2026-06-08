@@ -20,7 +20,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
-                with patch("appsec_harness.orchestrator.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                with patch("appsec_harness.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main([url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
@@ -40,7 +40,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
-                with patch("appsec_harness.orchestrator.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                with patch("appsec_harness.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main(["discover", url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
@@ -60,7 +60,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "appsec_harness.security_planning_crew.build_security_test_planning_crew_runner",
+                "appsec_harness.crews.security_planning.crew.build_security_test_planning_crew_runner",
                 return_value=FakeSecurityPlanningRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -105,7 +105,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "appsec_harness.security_testing_crew.build_security_testing_crew_runner",
+                "appsec_harness.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -152,7 +152,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "appsec_harness.security_testing_crew.build_security_testing_crew_runner",
+                "appsec_harness.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
