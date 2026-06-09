@@ -1,4 +1,4 @@
-# Open Security Harness
+# osh: Open Security Harness
 
 Turn an application URL into an evidence-backed security testing workflow.
 
