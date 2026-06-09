@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from appsec_harness.config import AppConfig
 from appsec_harness.crews.discovery.crew import CREW_CONFIG_PACKAGE
-from appsec_harness.engagement import build_engagement_template, load_engagement_file, resolve_target_mapping
+from appsec_harness.engagement import (
+    build_engagement_template,
+    load_engagement_file,
+    resolve_target_mapping,
+    write_engagement_template_mapping,
+)
 from appsec_harness.memory import FileMemory
 from appsec_harness.scope import report_dir_name
 from appsec_harness.crews.security_planning.crew import (
@@ -285,6 +290,73 @@ class SecurityTestPlanningTests(unittest.TestCase):
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "refinement_rejected" for event in events))
 
+    def test_refined_engagement_template_tool_allows_existing_user_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir)
+            deterministic = build_engagement_template("https://example.test", _plan())
+            role = next(iter(deterministic["credentials"]))
+            existing = json.loads(json.dumps(deterministic))
+            existing["credentials"][role]["username"] = "existing@example.test"
+            existing["credentials"][role]["password"] = "existing-secret"
+            write_engagement_template_mapping(report_dir, existing, preserve_existing=False, reject_candidate_credentials=False)
+            state = SecurityTestPlanningState(
+                target_url="https://example.test",
+                discovery_dir=report_dir / "discovery",
+                report_dir=report_dir,
+                memory=memory,
+                discovery_context={},
+                current_plan=_plan(),
+                current_review={"accepted": True, "summary": "Accepted."},
+                accepted=True,
+                iterations=1,
+            )
+            tool = _build_write_refined_engagement_template_tool(FakeCrewAI, state, deterministic)
+
+            result = json.loads(tool._run(load_engagement_file(report_dir / "engagement_template.yaml")))
+
+            self.assertFalse(result["fallback_used"])
+            template = load_engagement_file(report_dir / "engagement_template.yaml")
+            self.assertEqual(template["credentials"][role]["username"], "existing@example.test")
+            self.assertEqual(template["credentials"][role]["password"], "existing-secret")
+
+    def test_engagement_template_regeneration_preserves_user_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            existing = build_engagement_template("https://example.test", _plan())
+            existing["targets"]["alternative"]["api"] = "https://staging-api.example.test/api/private"
+            existing["credentials"]["admin"] = {
+                "username": "admin@example.test",
+                "password": "secret",
+                "token": None,
+                "status": "required",
+                "needed_for": ["API-001"],
+                "notes": "Generated explanation that should not remain in the simple template.",
+            }
+            existing["safe_test_data"]["customer_ids"] = {
+                "values": ["cust_safe_1"],
+                "status": "required",
+                "needed_for": ["IDOR-001"],
+            }
+            existing["required_answers"] = [{"question": "Old verbose question", "needed_for": ["all"]}]
+            write_engagement_template_mapping(report_dir, existing, preserve_existing=False, reject_candidate_credentials=False)
+            original_text = (report_dir / "engagement_template.yaml").read_text(encoding="utf-8")
+
+            write_engagement_template_mapping(report_dir, build_engagement_template("https://example.test", _plan()))
+
+            template = load_engagement_file(report_dir / "engagement_template.yaml")
+            backups = sorted((report_dir / "engagement_template.backups").glob("engagement_template-*.yaml"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), original_text)
+            self.assertEqual(template["targets"]["alternative"]["api"], "https://staging-api.example.test/api/private")
+            self.assertEqual(template["credentials"]["admin"]["username"], "admin@example.test")
+            self.assertEqual(template["credentials"]["admin"]["password"], "secret")
+            self.assertEqual(template["safe_test_data"]["customer_ids"], ["cust_safe_1"])
+            self.assertNotIn("required_answers", template)
+            self.assertNotIn("status", template["credentials"]["admin"])
+            self.assertNotIn("needed_for", template["credentials"]["admin"])
+            self.assertNotIn("notes", template["credentials"]["admin"])
+
     def test_load_discovery_context_reads_discovery_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             discovery_dir = Path(directory)
@@ -343,6 +415,11 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
             self.assertIsNone(template["targets"]["alternative"]["website"])
             self.assertIn("authenticated_user", template["credentials"])
+            self.assertNotIn("required_answers", template)
+            for credential in template["credentials"].values():
+                self.assertNotIn("status", credential)
+                self.assertNotIn("needed_for", credential)
+                self.assertNotIn("notes", credential)
             self.assertTrue(template["engagement"]["authorization_confirmed"])
 
             template["targets"]["alternative"]["api"] = "https://staging-api.example.test/api/private"

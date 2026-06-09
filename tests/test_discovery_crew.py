@@ -115,7 +115,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             "openai/gpt-5.2",
         )
 
-        self.assertEqual(llm.kwargs["model"], "openrouter/openai/gpt-5.2")
+        self.assertEqual(llm.kwargs["model"], "openai/gpt-5.2")
         self.assertEqual(llm.kwargs["provider"], "openai")
         self.assertEqual(llm.kwargs["base_url"], "https://openrouter.ai/api/v1")
         self.assertEqual(llm.kwargs["api_key"], "openrouter-key")

@@ -25,6 +25,7 @@ from appsec_harness.crews.security_testing.crew import (
     hypothesis_fingerprint,
     plan_revision_id,
     _redact_text,
+    _status_label,
     load_security_test_plan,
     render_executed_test_report,
 )
@@ -168,6 +169,18 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             self.assertEqual(runner.calls, [])
             self.assertIn("# already executed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
+
+    def test_execution_metadata_preserves_canonical_status(self) -> None:
+        metadata = _execution_metadata(
+            test_id="API-002",
+            plan_revision_id="plan",
+            hypothesis_fingerprint="fingerprint",
+            evidence={"status": "finding"},
+            review={"accepted": True},
+            report_path="report/API-002.md",
+        )
+
+        self.assertEqual(metadata["status"], "finding")
 
     def test_security_testing_reruns_changed_hypothesis_and_archives_previous_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -566,6 +579,27 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("- Effective targets:", markdown)
         self.assertIn("api: `https://preprod-api.example.test/api/private`", markdown)
 
+    def test_executed_test_report_renders_human_readable_status(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "API-002", "title": "Bundle access", "surface": "api", "priority": "high"},
+            evidence={"status": "finding", "summary": "Admin can download bundle.", "result": "Finding."},
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+        )
+
+        self.assertIn("## Status\n\nFinding Confirmed\n", markdown)
+        self.assertNotIn("## Status\n\nfinding\n", markdown)
+
+    def test_status_labels_cover_security_testing_states(self) -> None:
+        self.assertEqual(_status_label("needs-review"), "Needs Review")
+        self.assertEqual(_status_label("needs-rerun"), "Needs Re-Run")
+        self.assertEqual(_status_label("rerun-requested"), "Re-Run Requested")
+        self.assertEqual(_status_label("partial-finding"), "Partial Finding")
+        self.assertEqual(_status_label("not-applicable"), "Not Applicable")
+        self.assertEqual(_status_label("error"), "Execution Error")
+        self.assertEqual(_status_label("custom_status"), "Custom Status")
+
     def test_executed_test_report_renders_artifact_sibling_fields_even_with_observations(self) -> None:
         markdown = render_executed_test_report(
             target_url="https://example.test",
@@ -612,10 +646,52 @@ class SecurityTestingCrewTests(unittest.TestCase):
         )
 
         self.assertIn("### content_security_policy", markdown)
-        self.assertIn("Source revision: `1`", markdown)
+        self.assertNotIn("Source revision:", markdown)
+        self.assertNotIn("Review status:", markdown)
         self.assertIn("script-src 'self'; object-src 'none';", markdown)
         self.assertIn("## Resolution", markdown)
         self.assertIn("Use the preserved `content_security_policy` artifact", markdown)
+
+    def test_executed_test_report_renders_concrete_artifacts_and_skips_descriptors(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "CORS-001", "title": "CORS", "surface": "cors", "priority": "high"},
+            evidence={
+                "status": "finding",
+                "summary": "Wildcard CORS.",
+                "result": "Token theft amplification.",
+                "artifacts": {
+                    "cors_policy_summary": "ACAO is wildcard on authenticated API endpoints; ACAC is absent.",
+                    "recommended_remediation": "Restrict ACAO to approved origins and add Vary: Origin.",
+                },
+            },
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            report_content={
+                "useful_artifacts": [
+                    {
+                        "name": "cors_policy_summary",
+                        "type": "artifact",
+                        "description": "CORS policy summary covering all findings.",
+                        "source": "executor evidence artifacts",
+                    },
+                    {
+                        "name": "commands",
+                        "type": "artifact",
+                        "description": "All curl commands used for testing.",
+                        "source": "executor evidence artifacts",
+                    },
+                ]
+            },
+        )
+
+        self.assertIn("### cors_policy_summary", markdown)
+        self.assertIn("ACAO is wildcard on authenticated API endpoints", markdown)
+        self.assertIn("### recommended_remediation", markdown)
+        self.assertIn("Restrict ACAO to approved origins", markdown)
+        self.assertNotIn("### commands", markdown)
+        self.assertNotIn("Type: `artifact`", markdown)
+        self.assertNotIn("Review status:", markdown)
 
     def test_executed_test_report_renders_explicit_resolution(self) -> None:
         markdown = render_executed_test_report(
@@ -635,6 +711,27 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("## Resolution", markdown)
         self.assertIn("Set Content-Security-Policy", markdown)
         self.assertIn("report-only mode", markdown)
+
+    def test_executed_test_report_splits_inline_numbered_resolution(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="https://example.test",
+            hypothesis={"id": "CORS-001", "title": "CORS", "surface": "cors", "priority": "high"},
+            evidence={"status": "finding", "summary": "Wildcard CORS.", "result": "Finding."},
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            report_content={
+                "resolution": (
+                    "Remove Access-Control-Allow-Origin: * from authenticated API endpoints. "
+                    "2. Add Vary: Origin to responses that include Access-Control-Allow-Origin. "
+                    "3. Reduce JWT expiry to limit token theft impact."
+                )
+            },
+        )
+
+        self.assertIn("1. Remove Access-Control-Allow-Origin", markdown)
+        self.assertIn("2. Add Vary: Origin", markdown)
+        self.assertIn("3. Reduce JWT expiry", markdown)
+        self.assertNotIn("endpoints. 2. Add", markdown)
 
     def test_executed_test_report_uses_finding_recommendation_as_resolution_fallback(self) -> None:
         markdown = render_executed_test_report(

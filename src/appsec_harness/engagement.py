@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -10,16 +11,29 @@ from appsec_harness.scope import normalize_url
 
 
 def write_engagement_template(report_dir: Path, target_url: str, plan: dict[str, Any]) -> str:
-    content = render_engagement_template(target_url, plan)
+    return write_engagement_template_mapping(report_dir, build_engagement_template(target_url, plan))
+
+
+def write_engagement_template_mapping(
+    report_dir: Path,
+    template: dict[str, Any],
+    *,
+    preserve_existing: bool = True,
+    reject_candidate_credentials: bool = True,
+) -> str:
     path = report_dir / "engagement_template.yaml"
-    path.write_text(content, encoding="utf-8")
-    return content
-
-
-def write_engagement_template_mapping(report_dir: Path, template: dict[str, Any]) -> str:
+    existing_template = _simplify_engagement_template(load_engagement_file(path)) if preserve_existing and path.exists() else {}
     validate_engagement_template(template)
-    content = _dump_yaml(template)
-    (report_dir / "engagement_template.yaml").write_text(content, encoding="utf-8")
+    final_template = _simplify_engagement_template(template)
+    if reject_candidate_credentials:
+        _validate_no_new_secret_values(final_template, existing_template)
+    if existing_template:
+        final_template = _merge_existing_engagement_values(final_template, existing_template)
+    validate_engagement_template(final_template)
+    content = _dump_yaml(final_template)
+    if path.exists():
+        _backup_existing_engagement_template(path)
+    path.write_text(content, encoding="utf-8")
     return content
 
 
@@ -31,7 +45,6 @@ def validate_engagement_template(template: dict[str, Any]) -> None:
         "limits",
         "credentials",
         "safe_test_data",
-        "required_answers",
     }
     missing = sorted(required_keys - set(template))
     if missing:
@@ -39,18 +52,33 @@ def validate_engagement_template(template: dict[str, Any]) -> None:
     for key in ("engagement", "targets", "contacts", "limits", "credentials", "safe_test_data"):
         if not isinstance(template.get(key), dict):
             raise ValueError(f"Engagement template field {key} must be a mapping")
-    if not isinstance(template.get("required_answers"), list):
-        raise ValueError("Engagement template field required_answers must be a list")
-    _validate_no_secret_values(template)
 
 
-def _validate_no_secret_values(template: dict[str, Any]) -> None:
-    credentials = template.get("credentials") if isinstance(template.get("credentials"), dict) else {}
+def _backup_existing_engagement_template(path: Path) -> Path:
+    backup_dir = path.parent / "engagement_template.backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup_path = backup_dir / f"engagement_template-{timestamp}.yaml"
+    counter = 1
+    while backup_path.exists():
+        backup_path = backup_dir / f"engagement_template-{timestamp}-{counter}.yaml"
+        counter += 1
+    backup_path.write_bytes(path.read_bytes())
+    return backup_path
+
+
+def _validate_no_new_secret_values(candidate: dict[str, Any], existing: dict[str, Any]) -> None:
+    credentials = candidate.get("credentials") if isinstance(candidate.get("credentials"), dict) else {}
+    existing_credentials = existing.get("credentials") if isinstance(existing.get("credentials"), dict) else {}
     for role, values in credentials.items():
         if not isinstance(values, dict):
             raise ValueError(f"credentials.{role} must be a mapping")
+        existing_values = existing_credentials.get(role) if isinstance(existing_credentials.get(role), dict) else {}
         for field in ("username", "password", "token"):
-            if _text(values.get(field)):
+            candidate_value = _text(values.get(field))
+            if not candidate_value:
+                continue
+            if candidate_value != _text(existing_values.get(field)):
                 raise ValueError(f"Refined template must not invent credentials.{role}.{field}")
 
 
@@ -62,7 +90,6 @@ def render_engagement_template(target_url: str, plan: dict[str, Any]) -> str:
 def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str, Any]:
     targets = _infer_targets(target_url, plan)
     roles = _infer_credential_roles(plan)
-    hypotheses = [_hypothesis_id(item) for item in _list(plan.get("test_hypotheses")) if isinstance(item, dict)]
     return {
         "engagement": {
             "authorization_confirmed": True,
@@ -92,7 +119,6 @@ def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str
                 "username": None,
                 "password": None,
                 "token": None,
-                "notes": _credential_note(role, plan),
             }
             for role in roles
         },
@@ -104,9 +130,125 @@ def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str
             "customer_ids": [],
             "enterprise_account_ids": [],
             "activation_codes": [],
+            "callback_listener_url": None,
         },
-        "required_answers": _required_answers(plan, hypotheses),
     }
+
+
+def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "engagement": _simplify_engagement(template.get("engagement")),
+        "targets": _simplify_targets(template.get("targets")),
+        "contacts": _simplify_mapping(template.get("contacts")),
+        "limits": _simplify_mapping(template.get("limits")),
+        "credentials": _simplify_credentials(template.get("credentials")),
+        "safe_test_data": _simplify_safe_test_data(template.get("safe_test_data")),
+    }
+
+
+def _simplify_engagement(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "authorization_confirmed": source.get("authorization_confirmed"),
+        "active_testing_allowed": source.get("active_testing_allowed"),
+        "state_changing_tests_allowed": source.get("state_changing_tests_allowed"),
+        "notes": _unwrap_config_value(source.get("notes")),
+    }
+
+
+def _simplify_targets(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "production": _simplify_mapping(source.get("production")),
+        "alternative": _simplify_mapping(source.get("alternative")),
+    }
+
+
+def _simplify_credentials(value: Any) -> dict[str, dict[str, Any]]:
+    source = value if isinstance(value, dict) else {}
+    credentials: dict[str, dict[str, Any]] = {}
+    for role, role_value in source.items():
+        if not isinstance(role_value, dict):
+            continue
+        credentials[str(role)] = {
+            "username": _unwrap_config_value(role_value.get("username")),
+            "password": _unwrap_config_value(role_value.get("password")),
+            "token": _unwrap_config_value(role_value.get("token")),
+        }
+    return credentials
+
+
+def _simplify_safe_test_data(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    safe_data: dict[str, Any] = {}
+    for key, item in source.items():
+        if key in {"status", "needed_for", "required", "question", "notes"}:
+            continue
+        safe_data[str(key)] = _unwrap_config_value(item)
+    return safe_data
+
+
+def _simplify_mapping(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    simplified: dict[str, Any] = {}
+    for key, item in source.items():
+        if key in {"status", "needed_for", "required", "question"}:
+            continue
+        simplified[str(key)] = _unwrap_config_value(item)
+    return simplified
+
+
+def _unwrap_config_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        if "values" in value:
+            return value.get("values")
+        if "value" in value:
+            return value.get("value")
+        return _simplify_mapping(value)
+    if isinstance(value, list):
+        return [_unwrap_config_value(item) for item in value]
+    return value
+
+
+def _merge_existing_engagement_values(generated: Any, existing: Any) -> Any:
+    if isinstance(generated, dict) and isinstance(existing, dict):
+        merged: dict[str, Any] = {}
+        for key in list(generated) + [key for key in existing if key not in generated]:
+            merged[key] = _merge_existing_engagement_values(generated.get(key), existing.get(key))
+        return merged
+    if isinstance(generated, list) and isinstance(existing, list):
+        if not _has_user_value(existing):
+            return generated
+        if not _has_user_value(generated):
+            return existing
+        return _merge_lists(existing, generated)
+    if _has_user_value(existing):
+        return existing
+    return generated
+
+
+def _merge_lists(existing: list[Any], generated: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for item in existing + generated:
+        marker = json.dumps(item, sort_keys=True, default=str)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        merged.append(item)
+    return merged
+
+
+def _has_user_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, dict):
+        return any(_has_user_value(item) for item in value.values())
+    return True
 
 
 def load_engagement_file(path: Path) -> dict[str, Any]:
@@ -179,40 +321,44 @@ def _hostname(url: str) -> str:
 
 
 def _infer_credential_roles(plan: dict[str, Any]) -> list[str]:
-    text = json.dumps(plan, sort_keys=True).lower()
     roles: list[str] = []
-    for role in ("admin", "sales", "developer", "enterprise"):
-        if role in text:
-            roles.append(role)
-    if "credential" in text or "authenticated" in text or "token" in text:
-        roles.append("authenticated_user")
+    for hypothesis in _list(plan.get("test_hypotheses")):
+        if not isinstance(hypothesis, dict):
+            continue
+        for role in ("admin", "sales", "developer", "enterprise"):
+            if _role_needed(role, hypothesis):
+                roles.append(role)
+        if _mentions_auth_material(hypothesis):
+            roles.append("authenticated_user")
     if not roles:
         roles.append("authenticated_user")
     return sorted(set(roles))
-
-
-def _credential_note(role: str, plan: dict[str, Any]) -> str:
-    needed_for = [
-        _hypothesis_id(item)
-        for item in _list(plan.get("test_hypotheses"))
-        if isinstance(item, dict) and _role_needed(role, item)
-    ]
-    if not needed_for and role == "authenticated_user":
-        needed_for = [
-            _hypothesis_id(item)
-            for item in _list(plan.get("test_hypotheses"))
-            if isinstance(item, dict) and _mentions_auth_material(item)
-        ]
-    if not needed_for:
-        return "Fill if this role is needed by the selected test plan."
-    return f"Required by {', '.join(needed_for)}."
 
 
 def _role_needed(role: str, hypothesis: dict[str, Any]) -> bool:
     text = _requirement_text(hypothesis)
     if role == "authenticated_user":
         return _mentions_auth_material(hypothesis)
+    if role == "enterprise":
+        return _enterprise_credentials_needed(text)
     return _contains_word(text, role)
+
+
+def _enterprise_credentials_needed(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in (
+            "enterprise credential",
+            "enterprise credentials",
+            "enterprise user",
+            "enterprise role",
+            "enterprise token",
+            "enterprise session",
+            "enterprise login",
+            "enterprise account credential",
+            "enterprise account credentials",
+        )
+    )
 
 
 def _mentions_auth_material(hypothesis: dict[str, Any]) -> bool:
@@ -234,62 +380,12 @@ def _requirement_text(hypothesis: dict[str, Any]) -> str:
     return json.dumps(material, sort_keys=True).lower()
 
 
-def _required_answers(plan: dict[str, Any], hypotheses: list[str]) -> list[dict[str, Any]]:
-    answers = [
-        {
-            "question": "Provide alternative target URLs only if testing should run against staging or another environment instead of production.",
-            "needed_for": ["all"],
-        },
-        {
-            "question": "Provide test credentials and tokens listed in the credentials section where available.",
-            "needed_for": hypotheses or ["credentialed tests"],
-        },
-        {
-            "question": "Provide safe test data for forms, customer IDs, enterprise account IDs, and activation codes.",
-            "needed_for": _state_changing_hypotheses(plan) or ["state-changing tests"],
-        },
-    ]
-    for question in _list(plan.get("open_questions")):
-        text = _text(question)
-        if text and not _is_duplicate_required_question(text):
-            answers.append({"question": text, "needed_for": ["planning open question"]})
-    return answers
-
-
-def _is_duplicate_required_question(question: str) -> bool:
-    lowered = question.lower()
-    duplicate_markers = (
-        "staging/test environment",
-        "agreed testing hours",
-        "escalation contacts",
-        "source ips",
-    )
-    return any(marker in lowered for marker in duplicate_markers)
-
-
 def _contains_word(text: str, word: str) -> bool:
     return bool(re.search(rf"\b{re.escape(word)}\b", text))
 
 
 def _contains_phrase(text: str, phrase: str) -> bool:
     return phrase in text
-
-
-def _state_changing_hypotheses(plan: dict[str, Any]) -> list[str]:
-    return [
-        _hypothesis_id(item)
-        for item in _list(plan.get("test_hypotheses"))
-        if isinstance(item, dict) and _is_state_changing(item)
-    ]
-
-
-def _is_state_changing(hypothesis: dict[str, Any]) -> bool:
-    text = json.dumps(hypothesis, sort_keys=True).lower()
-    return any(marker in text for marker in ("post ", " put ", " delete ", "submit", "create", "modify", "invite"))
-
-
-def _hypothesis_id(hypothesis: dict[str, Any]) -> str:
-    return _text(hypothesis.get("id")) or _text(hypothesis.get("title")) or "unknown"
 
 
 def _dump_yaml(value: Any, indent: int = 0) -> str:

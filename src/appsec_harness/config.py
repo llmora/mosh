@@ -11,11 +11,11 @@ class AgentModelConfig:
     sbom_compiler: str = "deepseek/deepseek-v4-flash"
     summarizer: str = "deepseek/deepseek-v4-flash"
     security_test_planner: str = "deepseek/deepseek-v4-flash"
-    security_test_critic: str = "openai/gpt-5.2"
+    security_test_critic: str = "deepseek/deepseek-v4-pro"
     security_test_finalizer: str = "deepseek/deepseek-v4-flash"
     engagement_template_refiner: str = "deepseek/deepseek-v4-flash"
     security_test_executor: str = "deepseek/deepseek-v4-flash"
-    security_test_reviewer: str = "deepseek/deepseek-v4-flash"
+    security_test_reviewer: str = "deepseek/deepseek-v4-pro"
     security_test_reporter: str = "deepseek/deepseek-v4-flash"
 
 
@@ -111,7 +111,7 @@ def _direct_deepseek_model(model: str) -> str:
 
 def _openrouter_model(model: str) -> str:
     normalized = model.strip()
-    return normalized if normalized.startswith("openrouter/") else f"openrouter/{normalized}"
+    return normalized.removeprefix("openrouter/")
 
 
 def _env_bool(name: str, default: bool) -> bool:

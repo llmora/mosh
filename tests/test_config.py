@@ -60,7 +60,7 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertFalse(config.uses_direct_deepseek("deepseek/deepseek-v4-flash"))
         self.assertEqual(config.llm_api_key_for_model("deepseek/deepseek-v4-flash"), "openrouter-key")
-        self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "openrouter/deepseek/deepseek-v4-flash")
+        self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
 
     def test_non_deepseek_models_always_use_openrouter(self) -> None:
         config = AppConfig(deepseek_api_key="deepseek-key")
@@ -68,6 +68,12 @@ class AppConfigTests(unittest.TestCase):
         self.assertFalse(config.uses_direct_deepseek("openai/gpt-5.2"))
         self.assertEqual(config.llm_api_key_for_model("openai/gpt-5.2"), None)
         self.assertEqual(config.missing_llm_api_keys_for_models(["deepseek/deepseek-v4-flash", "openai/gpt-5.2"]), ["OPENROUTER_API_KEY"])
+
+    def test_openrouter_model_name_strips_provider_routing_prefix(self) -> None:
+        config = AppConfig(openrouter_api_key="openrouter-key")
+
+        self.assertEqual(config.llm_model_name("openrouter/openai/gpt-5.2"), "openai/gpt-5.2")
+        self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
 
     def test_deepseek_api_key_is_loaded_from_env(self) -> None:
         with patch.dict(

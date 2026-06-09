@@ -839,6 +839,8 @@ def _normalize_artifact(value: Any, revision: int, default_name: str) -> dict[st
             artifact_value = {key: item for key, item in value.items() if key not in {"type", "name", "status", "review_status"}}
         if artifact_value in (None, "", [], {}):
             return None
+        if _is_descriptor_only_artifact_value(artifact_value):
+            return None
         return {
             "type": _text(value.get("type")) or "artifact",
             "name": _text(value.get("name")) or default_name,
@@ -849,6 +851,8 @@ def _normalize_artifact(value: Any, revision: int, default_name: str) -> dict[st
         }
     if value in (None, "", [], {}):
         return None
+    if _is_descriptor_only_artifact_value(value):
+        return None
     return {
         "type": "artifact",
         "name": default_name,
@@ -857,6 +861,13 @@ def _normalize_artifact(value: Any, revision: int, default_name: str) -> dict[st
         "status": "draft",
         "review_status": "preserved",
     }
+
+
+def _is_descriptor_only_artifact_value(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    keys = set(value)
+    return bool(keys) and keys <= {"description", "source", "notes"}
 
 
 def _artifact_fingerprint(artifact: dict[str, Any]) -> str:
@@ -1348,7 +1359,7 @@ def render_executed_test_report(
         "",
         "## Status",
         "",
-        status,
+        _status_label(status),
         "",
         "## Scope",
         "",
@@ -1408,19 +1419,7 @@ def render_executed_test_report(
     )
     if artifacts:
         for artifact in artifacts:
-            lines.extend(
-                [
-                    f"### {_text(artifact.get('name')) or 'Artifact'}",
-                    "",
-                    f"- Type: `{_text(artifact.get('type')) or 'artifact'}`",
-                    f"- Status: `{_text(artifact.get('status')) or 'draft'}`",
-                    f"- Review status: `{_text(artifact.get('review_status')) or 'preserved'}`",
-                    f"- Source revision: `{_text(artifact.get('source_revision')) or 'unknown'}`",
-                    "",
-                    _markdown_value(artifact.get("value")),
-                    "",
-                ]
-            )
+            lines.extend([f"### {_text(artifact.get('name')) or 'Artifact'}", "", _markdown_value(artifact.get("value")), ""])
     else:
         lines.extend(["None.", ""])
     lines.extend(
@@ -1442,7 +1441,7 @@ def render_executed_test_report(
             "",
             "## Resolution",
             "",
-            _markdown_value(resolution),
+            _resolution_markdown(resolution),
             "",
             "## Review",
             "",
@@ -1469,20 +1468,65 @@ def _report_artifacts(
         (execution_bundle or {}).get("artifacts"),
         evidence.get("artifacts"),
     ):
-        for item in _list(source):
-            normalized = _normalize_artifact(item, revision=0, default_name="artifact")
-            if normalized:
-                candidates.append(normalized)
+        candidates.extend(_artifact_candidates_from_source(source))
     candidates.extend(_extract_artifacts(evidence, revision=0))
 
-    seen: set[str] = set()
-    artifacts: list[dict[str, Any]] = []
+    by_name: dict[str, dict[str, Any]] = {}
+    unnamed: list[dict[str, Any]] = []
     for artifact in candidates:
+        if _text(artifact.get("review_status")).lower() == "rejected":
+            continue
+        name = _text(artifact.get("name"))
+        if not name:
+            unnamed.append(artifact)
+            continue
+        current = by_name.get(name)
+        if current is None or _artifact_quality_score(artifact) > _artifact_quality_score(current):
+            by_name[name] = artifact
+    artifacts = list(by_name.values()) + unnamed
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for artifact in artifacts:
         fingerprint = _artifact_fingerprint(artifact)
-        if fingerprint not in seen:
-            seen.add(fingerprint)
-            artifacts.append(artifact)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        deduplicated.append(artifact)
+    return deduplicated
+
+
+def _artifact_candidates_from_source(source: Any) -> list[dict[str, Any]]:
+    if source in (None, "", [], {}):
+        return []
+    if isinstance(source, dict):
+        if any(key in source for key in ("value", "content", "body", "name", "type")):
+            normalized = _normalize_artifact(source, revision=0, default_name="artifact")
+            return [normalized] if normalized else []
+        artifacts: list[dict[str, Any]] = []
+        for key, value in source.items():
+            normalized = _normalize_artifact(value, revision=0, default_name=_text(key) or "artifact")
+            if normalized:
+                artifacts.append(normalized)
+        return artifacts
+    artifacts = []
+    for item in _list(source):
+        normalized = _normalize_artifact(item, revision=0, default_name="artifact")
+        if normalized:
+            artifacts.append(normalized)
     return artifacts
+
+
+def _artifact_quality_score(artifact: dict[str, Any]) -> int:
+    value = artifact.get("value")
+    if isinstance(value, str):
+        return len(value.strip())
+    if isinstance(value, dict):
+        if _is_descriptor_only_artifact_value(value):
+            return 0
+        return len(json.dumps(value, sort_keys=True, default=str))
+    if isinstance(value, list):
+        return len(value)
+    return 1 if value not in (None, "", [], {}) else 0
 
 
 def _resolution_guidance(
@@ -1523,6 +1567,27 @@ def _resolution_guidance(
     if follow_up not in (None, "", [], {}):
         return follow_up
     return "No specific resolution guidance was provided."
+
+
+def _status_label(status: str) -> str:
+    normalized = status.strip().lower().replace("_", "-")
+    labels = {
+        "finding": "Finding Confirmed",
+        "no-finding": "No Finding",
+        "inconclusive": "Inconclusive",
+        "blocked": "Blocked",
+        "skipped": "Skipped",
+        "not-executed": "Not Executed",
+        "needs-review": "Needs Review",
+        "needs-rerun": "Needs Re-Run",
+        "rerun-requested": "Re-Run Requested",
+        "partial-finding": "Partial Finding",
+        "not-applicable": "Not Applicable",
+        "error": "Execution Error",
+    }
+    if normalized in labels:
+        return labels[normalized]
+    return normalized.replace("-", " ").title() if normalized else "Inconclusive"
 
 
 def _hypothesis_blockers(
@@ -1569,10 +1634,29 @@ def _needed_roles(hypothesis: dict[str, Any]) -> list[str]:
     text = _requirement_text(hypothesis)
     if "no credentials required" in text or "no credential" in text:
         return []
-    roles = [role for role in ("admin", "sales", "developer", "enterprise") if _contains_word(text, role)]
+    roles = [role for role in ("admin", "sales", "developer") if _contains_word(text, role)]
+    if _enterprise_credentials_needed(text):
+        roles.append("enterprise")
     if not roles and _mentions_auth_material(text):
         roles.append("authenticated_user")
     return sorted(set(roles))
+
+
+def _enterprise_credentials_needed(text: str) -> bool:
+    return any(
+        phrase in text
+        for phrase in (
+            "enterprise credential",
+            "enterprise credentials",
+            "enterprise user",
+            "enterprise role",
+            "enterprise token",
+            "enterprise session",
+            "enterprise login",
+            "enterprise account credential",
+            "enterprise account credentials",
+        )
+    )
 
 
 def _needed_safe_data(hypothesis: dict[str, Any]) -> list[str]:
@@ -1806,6 +1890,34 @@ def _markdown_value(value: Any) -> str:
     if isinstance(value, str):
         return value.strip() or "None."
     return "```json\n" + json.dumps(value, indent=2, sort_keys=True) + "\n```"
+
+
+def _resolution_markdown(value: Any) -> str:
+    if isinstance(value, str):
+        items = _split_inline_numbered_list(value)
+        if len(items) > 1:
+            return "\n".join(f"{index}. {item}" for index, item in enumerate(items, start=1))
+    return _markdown_value(value)
+
+
+def _split_inline_numbered_list(value: str) -> list[str]:
+    text = value.strip()
+    if not re.search(r"\s2\.\s+", text):
+        return []
+    matches = list(re.finditer(r"(?:^|\s)(\d+)\.\s+", text))
+    if not matches:
+        return []
+    items: list[str] = []
+    first_item = text[: matches[0].start()].strip()
+    if first_item:
+        items.append(first_item)
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        item = text[start:end].strip()
+        if item:
+            items.append(item)
+    return items
 
 
 def _write_security_testing_subset_configs(

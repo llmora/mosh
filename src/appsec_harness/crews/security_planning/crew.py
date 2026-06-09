@@ -15,7 +15,7 @@ from appsec_harness.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
-from appsec_harness.engagement import build_engagement_template, write_engagement_template_mapping
+from appsec_harness.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
 from appsec_harness.memory import FileMemory
 from appsec_harness.models import Event
 from appsec_harness.scope import report_dir_name
@@ -171,6 +171,7 @@ class CrewAISecurityTestPlanningCrewRunner:
 
         deterministic_engagement_template = build_engagement_template(target_url, state.current_plan)
         engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
+        current_engagement_template = load_engagement_file(report_dir / "engagement_template.yaml")
         memory.record_event(
             "orchestrator",
             "engagement_template_written",
@@ -201,7 +202,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                     inputs={
                         "target_url": target_url,
                         "security_test_plan": json.dumps(state.current_plan, sort_keys=True),
-                        "engagement_template": json.dumps(deterministic_engagement_template, sort_keys=True),
+                        "engagement_template": json.dumps(current_engagement_template, sort_keys=True),
                     }
                 )
                 if not (report_dir / "engagement_template.yaml").exists():

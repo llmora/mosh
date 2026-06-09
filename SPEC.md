@@ -121,6 +121,11 @@ DeepSeek API model name, such as `deepseek-v4-flash` or `deepseek-v4-pro`,
 before passing them to CrewAI's LiteLLM-backed LLM integration. The default
 package provider configuration should be used.
 
+When OpenRouter is selected, the runtime should pass the OpenRouter model ID
+without an extra routing prefix, such as `openai/gpt-5.2` or
+`deepseek/deepseek-v4-flash`. A leading `openrouter/` in local configuration is
+allowed as a convenience but must be stripped before the LLM call.
+
 If a selected model is a DeepSeek model but `DEEPSEEK_API_KEY` is not present,
 the application should use OpenRouter for that model. If a crew uses any
 non-DeepSeek model, `OPENROUTER_API_KEY` is still required for that model.
@@ -270,6 +275,39 @@ The security testing crew executes ready hypotheses from the security test plan.
 It runs tests sequentially so reviewer feedback for one test can inform a bounded
 rerun before the next test starts.
 
+## Engagement File
+
+The security planning crew writes `engagement_template.yaml` under
+`report/<host>/security-test-planning/`. This file is user-owned execution
+configuration for the security testing crew.
+
+The engagement file should stay small and directly editable. It should include:
+
+- engagement permissions and notes
+- production target mappings and optional alternative target mappings
+- escalation contact details
+- execution limits
+- credential placeholders by role
+- safe test data placeholders
+
+It should not include explanatory readiness metadata such as `status`,
+`needed_for`, `required_answers`, or long generated notes. Missing inputs,
+blocked tests, and questions belong in `security_test_plan.md`, `preflight.md`,
+`events.json`, or `memory.json`.
+
+Repeated security-planning runs must not overwrite non-empty values that the
+user has already added to `engagement_template.yaml`. Generated or refined
+templates should merge into the existing file, preserving filled credentials,
+tokens, alternative targets, safe test data, contact details, limits, and notes
+unless the user explicitly changes them. The LLM refiner must not invent secret
+values; if it proposes credentials or tokens, the generated candidate is rejected
+and the preserved existing configuration remains in place.
+
+Before an existing `engagement_template.yaml` is rewritten, the previous file
+must be copied into `engagement_template.backups/` with a timestamped filename.
+This keeps a recoverable copy even when regeneration or refinement simplifies
+the template shape.
+
 The security testing crew has these agents:
 
 - security test executor: runs scoped commands through the security tools Docker container
@@ -299,13 +337,19 @@ inventories, helper scripts, auth matrices, and remediation snippets. Reviewer
 feedback may accept or reject artifacts separately from the final evidence
 decision. A reviewer-requested rerun must not discard a useful artifact from an
 earlier attempt; the final report should include it with status and caveats
-unless it is unsafe or known invalid.
+unless it is unsafe or known invalid. The human Markdown report should render
+the concrete artifact content, not internal artifact metadata or
+description-only placeholders.
 
 Each executed test report should include a `Resolution` section aimed at
 developers and application owners. This section should explain how to remediate
 an identified issue using concrete configuration, code, header, control, or
 process changes where evidence supports them. If no issue is identified, the
 section should state that no remediation is required for that hypothesis.
+The Markdown `Status` section should use human-readable labels such as
+`Finding Confirmed`, `No Finding`, `Inconclusive`, `Needs Re-Run`,
+`Not Applicable`, or `Execution Error`; canonical machine status values such as
+`finding` should remain in embedded execution metadata.
 
 Security testing can discover additional facts that belong back in discovery:
 new entry points, endpoints, technologies, versions, service behavior, headers,
