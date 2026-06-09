@@ -1,4 +1,4 @@
-# AppSec Harness Specification
+# Open Security Harness Specification
 
 ## Goal
 
@@ -7,7 +7,7 @@ Build an application security testing harness that uses coordinated agents to pe
 The first working prototype is a CLI-only discovery harness for a single URL:
 
 ```bash
-appsec-harness <URL>
+osh <URL>
 ```
 
 The system should be built in small, testable steps. Do not over-engineer early versions, but keep the core architecture clear enough to support future crews.
@@ -87,6 +87,16 @@ container should also include Katana form-fill defaults for common login fields,
 so headless crawling can submit unauthenticated forms and observe resulting
 XHR/fetch endpoints.
 
+Tool image source should stay grouped by crew/tooling domain:
+
+- discovery tool image assets live under `tools/discovery/`
+- security testing tool image assets live under `tools/security/`
+
+The repository setup script should build the required Docker images and rebuild
+them when their source files are newer than the local image. This prevents
+renames or tool image changes from silently causing browser-backed discovery
+tools to be unavailable at runtime.
+
 The intended Docker interaction is:
 
 - execute a container with the tool
@@ -139,23 +149,23 @@ The discovery workflow must run as a CrewAI crew. Agents, exchanges, tasks, and 
 CrewAI agent and task definitions should use CrewAI's built-in YAML configuration pattern. Configuration is grouped by crew, so each crew's agents and tasks are kept together for future reference:
 
 - Discovery crew:
-  - `src/appsec_harness/crews/discovery/agents.yaml`
-  - `src/appsec_harness/crews/discovery/tasks.yaml`
+  - `src/open_security_harness/crews/discovery/agents.yaml`
+  - `src/open_security_harness/crews/discovery/tasks.yaml`
 - Security planning crew:
-  - `src/appsec_harness/crews/security_planning/agents.yaml`
-  - `src/appsec_harness/crews/security_planning/tasks.yaml`
+  - `src/open_security_harness/crews/security_planning/agents.yaml`
+  - `src/open_security_harness/crews/security_planning/tasks.yaml`
 - Security testing crew:
-  - `src/appsec_harness/crews/security_testing/agents.yaml`
-  - `src/appsec_harness/crews/security_testing/tasks.yaml`
+  - `src/open_security_harness/crews/security_testing/agents.yaml`
+  - `src/open_security_harness/crews/security_testing/tasks.yaml`
 
 Python should bind live tool implementations to the YAML-defined agents, but agent roles, goals, backstories, task descriptions, and expected outputs should live in YAML.
 
 Crew-specific Python code should also live with the crew. For example, the
 discovery crew owns its `crew.py`, `agents.py`, `crawler.py`, `tools.py`, and
-`reporting.py` modules under `src/appsec_harness/crews/discovery/`. Shared
+`reporting.py` modules under `src/open_security_harness/crews/discovery/`. Shared
 application primitives such as configuration, Docker execution, engagement
 files, file-backed memory, shared models, and scope helpers stay at the
-`appsec_harness` package root.
+`open_security_harness` package root.
 
 ## Shared Memory
 

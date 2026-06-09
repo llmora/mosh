@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from appsec_harness.cli import main
-from appsec_harness.engagement import write_engagement_template
-from appsec_harness.scope import report_dir_name
+from open_security_harness.cli import main
+from open_security_harness.engagement import write_engagement_template
+from open_security_harness.scope import report_dir_name
 from tests.fakes import FakeCrewRunner, FakeSecurityPlanningRunner, FakeSecurityTestingRunner
 from tests.fixtures import fixture_server
 
@@ -20,7 +20,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
-                with patch("appsec_harness.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                with patch("open_security_harness.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main([url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
@@ -40,7 +40,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
-                with patch("appsec_harness.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                with patch("open_security_harness.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main(["discover", url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
@@ -60,7 +60,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "appsec_harness.crews.security_planning.crew.build_security_test_planning_crew_runner",
+                "open_security_harness.crews.security_planning.crew.build_security_test_planning_crew_runner",
                 return_value=FakeSecurityPlanningRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -105,7 +105,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "appsec_harness.crews.security_testing.crew.build_security_testing_crew_runner",
+                "open_security_harness.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -152,7 +152,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "appsec_harness.crews.security_testing.crew.build_security_testing_crew_runner",
+                "open_security_harness.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):

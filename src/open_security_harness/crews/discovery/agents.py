@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from appsec_harness.config import AppConfig
-from appsec_harness.crews.definitions import AgentDefinition
-from appsec_harness.memory import FileMemory
-from appsec_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
-from appsec_harness.scope import normalize_url
-from appsec_harness.crews.discovery.tools import (
+from open_security_harness.config import AppConfig
+from open_security_harness.crews.definitions import AgentDefinition
+from open_security_harness.memory import FileMemory
+from open_security_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
+from open_security_harness.scope import normalize_url
+from open_security_harness.crews.discovery.tools import (
     CrawlApplicationTool,
     DirbDockerDiscoveryTool,
     ExtractifyDockerTool,

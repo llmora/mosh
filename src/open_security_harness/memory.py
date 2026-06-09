@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from appsec_harness.models import Event, MemoryItem
+from open_security_harness.models import Event, MemoryItem
 
 
 EventSink = Callable[[Event], None]

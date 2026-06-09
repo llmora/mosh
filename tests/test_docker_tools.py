@@ -4,14 +4,14 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from appsec_harness.docker_tools import DockerToolRunner
+from open_security_harness.docker_tools import DockerToolRunner
 
 
 class DockerToolRunnerTests(unittest.TestCase):
     def test_runs_container_without_tty_by_default(self) -> None:
         runner = DockerToolRunner("image:test")
 
-        with patch("appsec_harness.docker_tools.subprocess.run") as run:
+        with patch("open_security_harness.docker_tools.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = "ok"
             run.return_value.stderr = ""
@@ -31,7 +31,7 @@ class DockerToolRunnerTests(unittest.TestCase):
     def test_can_run_container_with_interactive_tty(self) -> None:
         runner = DockerToolRunner("image:test")
 
-        with patch("appsec_harness.docker_tools.subprocess.run") as run:
+        with patch("open_security_harness.docker_tools.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = "ok"
             run.return_value.stderr = ""
@@ -51,7 +51,7 @@ class DockerToolRunnerTests(unittest.TestCase):
     def test_can_mount_workspace_and_set_workdir(self) -> None:
         runner = DockerToolRunner("image:test")
 
-        with patch("appsec_harness.docker_tools.subprocess.run") as run:
+        with patch("open_security_harness.docker_tools.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = "ok"
             run.return_value.stderr = ""
@@ -89,7 +89,7 @@ class DockerToolRunnerTests(unittest.TestCase):
     def test_returns_timeout_result_instead_of_raising(self) -> None:
         runner = DockerToolRunner("image:test")
 
-        with patch("appsec_harness.docker_tools.subprocess.run") as run:
+        with patch("open_security_harness.docker_tools.subprocess.run") as run:
             run.side_effect = subprocess.TimeoutExpired(
                 cmd=["docker", "run"],
                 timeout=300,

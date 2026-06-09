@@ -6,11 +6,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from appsec_harness.models import CrawledPage, CrawlResult
-from appsec_harness.scope import ScopePolicy, normalize_url, strip_fragment
+from open_security_harness.models import CrawledPage, CrawlResult
+from open_security_harness.scope import ScopePolicy, normalize_url, strip_fragment
 
 
-USER_AGENT = "appsec-harness/0.1 discovery"
+USER_AGENT = "osh/0.1 discovery"
 
 
 class LinkExtractor(HTMLParser):

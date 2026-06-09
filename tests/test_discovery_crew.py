@@ -7,9 +7,9 @@ from importlib import resources
 from pathlib import Path
 from unittest.mock import patch
 
-from appsec_harness.crews.discovery.agents import SummarizerAgent
-from appsec_harness.config import AppConfig
-from appsec_harness.crews.discovery.crew import (
+from open_security_harness.crews.discovery.agents import SummarizerAgent
+from open_security_harness.config import AppConfig
+from open_security_harness.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIDiscoveryCrewRunner,
     CrewAIUnavailable,
@@ -19,8 +19,8 @@ from appsec_harness.crews.discovery.crew import (
     _build_task_with_output_event,
     _llm,
 )
-from appsec_harness.memory import FileMemory
-from appsec_harness.models import CrawledPage, CrawlResult
+from open_security_harness.memory import FileMemory
+from open_security_harness.models import CrawledPage, CrawlResult
 
 
 class FakeCrewAI:
@@ -96,7 +96,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             memory = FileMemory(Path(directory))
             runner = CrewAIDiscoveryCrewRunner(AppConfig(deepseek_api_key="deepseek-key"))
 
-            with patch("appsec_harness.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+            with patch("open_security_harness.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
                 with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
                     runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
@@ -125,12 +125,12 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             memory = FileMemory(Path(directory))
             runner = CrewAIDiscoveryCrewRunner(AppConfig(openrouter_api_key="test-key"))
 
-            with patch("appsec_harness.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+            with patch("open_security_harness.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
                 with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
                     runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
             # The real wiring path is covered by build_discovery_agents, which the CrewAI runner now uses.
-            from appsec_harness.crews.discovery.agents import build_discovery_agents
+            from open_security_harness.crews.discovery.agents import build_discovery_agents
 
             agents = build_discovery_agents(AppConfig(openrouter_api_key="test-key"))
             tool_names = [tool.name for tool in agents.crawler.available_tool_definitions]

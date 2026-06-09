@@ -9,23 +9,23 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
-from appsec_harness.config import AppConfig
-from appsec_harness.crews.discovery.reporting import update_report_with_security_testing_feedback
-from appsec_harness.crews.discovery.crew import (
+from open_security_harness.config import AppConfig
+from open_security_harness.crews.discovery.reporting import update_report_with_security_testing_feedback
+from open_security_harness.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
     _llm,
     _load_crewai,
 )
-from appsec_harness.docker_tools import DockerToolResult, DockerToolRunner
-from appsec_harness.engagement import load_engagement_file, resolve_target_mapping
-from appsec_harness.memory import FileMemory
-from appsec_harness.models import Event, MemoryItem, utc_now
-from appsec_harness.scope import report_dir_name
+from open_security_harness.docker_tools import DockerToolResult, DockerToolRunner
+from open_security_harness.engagement import load_engagement_file, resolve_target_mapping
+from open_security_harness.memory import FileMemory
+from open_security_harness.models import Event, MemoryItem, utc_now
+from open_security_harness.scope import report_dir_name
 
 
-EXECUTION_METADATA_START = "<!-- appsec-harness-execution"
+EXECUTION_METADATA_START = "<!-- osh-execution"
 EXECUTION_METADATA_END = "-->"
 
 
@@ -139,7 +139,7 @@ class SecurityTestingOrchestrator:
                     "Starting security test planning refresh from security-testing discovery feedback",
                     {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
                 )
-                from appsec_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+                from open_security_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 
                 SecurityTestPlanningOrchestrator(
                     self.config,
@@ -550,7 +550,7 @@ def _execution_metadata(
     report_content: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "schema": "appsec-harness.security-test-execution.v1",
+        "schema": "osh.security-test-execution.v1",
         "test_id": test_id,
         "plan_revision_id": plan_revision_id,
         "hypothesis_fingerprint": hypothesis_fingerprint,

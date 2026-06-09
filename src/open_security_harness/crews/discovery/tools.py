@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from appsec_harness.crews.discovery.crawler import Crawler
-from appsec_harness.docker_tools import DockerToolRunner
-from appsec_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
-from appsec_harness.scope import ScopePolicy, normalize_url, strip_fragment
+from open_security_harness.crews.discovery.crawler import Crawler
+from open_security_harness.docker_tools import DockerToolRunner
+from open_security_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
+from open_security_harness.scope import ScopePolicy, normalize_url, strip_fragment
 
 
 @dataclass(frozen=True)

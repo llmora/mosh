@@ -19,10 +19,10 @@ RUN apt-get update \
 
 COPY --from=katana-builder /go/bin/katana /usr/local/bin/katana
 COPY --from=katana-builder /go/bin/extractify /usr/local/bin/extractify
-COPY tools/katana-form-config.yaml /root/.config/katana/form-config.yaml
-COPY tools/js-endpoint-extractor/package.json /opt/js-endpoint-extractor/package.json
+COPY tools/discovery/katana-form-config.yaml /root/.config/katana/form-config.yaml
+COPY tools/discovery/js-endpoint-extractor/package.json /opt/js-endpoint-extractor/package.json
 RUN cd /opt/js-endpoint-extractor && npm install --omit=dev
-COPY tools/js-endpoint-extractor/js-endpoint-extractor.mjs /opt/js-endpoint-extractor/js-endpoint-extractor.mjs
+COPY tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs /opt/js-endpoint-extractor/js-endpoint-extractor.mjs
 RUN chmod +x /opt/js-endpoint-extractor/js-endpoint-extractor.mjs \
     && ln -s /opt/js-endpoint-extractor/js-endpoint-extractor.mjs /usr/local/bin/js-endpoint-extractor
 

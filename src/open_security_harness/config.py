@@ -25,8 +25,8 @@ class AppConfig:
     deepseek_api_key: str | None = None
     models: AgentModelConfig = field(default_factory=AgentModelConfig)
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    tool_image: str = "appsec-harness-discovery-tools:latest"
-    security_tool_image: str = "appsec-harness-security-tools:latest"
+    tool_image: str = "osh-discovery-tools:latest"
+    security_tool_image: str = "osh-security-tools:latest"
     security_command_timeout: int = 300
     security_execution_max_revisions: int = 2
     katana_crawl_duration: str = "270s"
@@ -43,18 +43,18 @@ class AppConfig:
         return cls(
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
-            openrouter_base_url=os.getenv("APPSEC_HARNESS_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            security_tool_image=os.getenv("APPSEC_HARNESS_SECURITY_TOOL_IMAGE", "appsec-harness-security-tools:latest"),
-            security_command_timeout=int(os.getenv("APPSEC_HARNESS_SECURITY_COMMAND_TIMEOUT", "300")),
-            security_execution_max_revisions=int(os.getenv("APPSEC_HARNESS_SECURITY_EXECUTION_MAX_REVISIONS", "2")),
-            katana_crawl_duration=os.getenv("APPSEC_HARNESS_KATANA_CRAWL_DURATION", "270s"),
-            katana_docker_timeout=int(os.getenv("APPSEC_HARNESS_KATANA_DOCKER_TIMEOUT", "300")),
-            dirb_wordlist=os.getenv("APPSEC_HARNESS_DIRB_WORDLIST", "/usr/share/dirb/wordlists/common.txt"),
-            dirb_docker_timeout=int(os.getenv("APPSEC_HARNESS_DIRB_DOCKER_TIMEOUT", "120")),
-            candidate_follow_up_limit=int(os.getenv("APPSEC_HARNESS_CANDIDATE_FOLLOW_UP_LIMIT", "5")),
-            max_depth=int(os.getenv("APPSEC_HARNESS_MAX_DEPTH", "5")),
-            planning_max_revisions=int(os.getenv("APPSEC_HARNESS_PLANNING_MAX_REVISIONS", "1")),
-            refine_engagement_template_with_llm=_env_bool("APPSEC_HARNESS_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM", True),
+            openrouter_base_url=os.getenv("OSH_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            security_tool_image=os.getenv("OSH_SECURITY_TOOL_IMAGE", "osh-security-tools:latest"),
+            security_command_timeout=int(os.getenv("OSH_SECURITY_COMMAND_TIMEOUT", "300")),
+            security_execution_max_revisions=int(os.getenv("OSH_SECURITY_EXECUTION_MAX_REVISIONS", "2")),
+            katana_crawl_duration=os.getenv("OSH_KATANA_CRAWL_DURATION", "270s"),
+            katana_docker_timeout=int(os.getenv("OSH_KATANA_DOCKER_TIMEOUT", "300")),
+            dirb_wordlist=os.getenv("OSH_DIRB_WORDLIST", "/usr/share/dirb/wordlists/common.txt"),
+            dirb_docker_timeout=int(os.getenv("OSH_DIRB_DOCKER_TIMEOUT", "120")),
+            candidate_follow_up_limit=int(os.getenv("OSH_CANDIDATE_FOLLOW_UP_LIMIT", "5")),
+            max_depth=int(os.getenv("OSH_MAX_DEPTH", "5")),
+            planning_max_revisions=int(os.getenv("OSH_PLANNING_MAX_REVISIONS", "1")),
+            refine_engagement_template_with_llm=_env_bool("OSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM", True),
         )
 
     def llm_api_key_for_model(self, model: str) -> str | None:

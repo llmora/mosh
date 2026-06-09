@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT_DIR = Path("tools/js-endpoint-extractor")
+SCRIPT_DIR = Path("tools/discovery/js-endpoint-extractor")
 SCRIPT_PATH = SCRIPT_DIR / "js-endpoint-extractor.mjs"
 
 

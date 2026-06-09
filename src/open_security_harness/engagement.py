@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from appsec_harness.scope import normalize_url
+from open_security_harness.scope import normalize_url
 
 
 def write_engagement_template(report_dir: Path, target_url: str, plan: dict[str, Any]) -> str:

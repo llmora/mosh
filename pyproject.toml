@@ -3,18 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "appsec-harness"
+name = "open-security-harness"
 version = "0.1.0"
-description = "Agent-coordinated application security discovery harness."
+description = "Agent-coordinated application security discovery and testing workflow."
 requires-python = ">=3.11"
 dependencies = ["crewai>=1.0.0"]
 
 [project.scripts]
-appsec-harness = "appsec_harness.cli:main"
+osh = "open_security_harness.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["appsec_harness*"]
+include = ["open_security_harness*"]
 
 [tool.setuptools.package-data]
-appsec_harness = ["crews/**/*.yaml"]
+open_security_harness = ["crews/**/*.yaml"]

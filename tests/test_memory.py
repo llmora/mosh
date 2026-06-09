@@ -6,7 +6,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from appsec_harness.memory import FileMemory
+from open_security_harness.memory import FileMemory
 
 
 class FileMemoryTests(unittest.TestCase):

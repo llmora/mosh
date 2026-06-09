@@ -4,18 +4,18 @@ import argparse
 import sys
 from pathlib import Path
 
-from appsec_harness.config import AppConfig
-from appsec_harness.models import Event
-from appsec_harness.crews.discovery.crew import DiscoveryOrchestrator
-from appsec_harness.scope import report_dir_name
-from appsec_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
-from appsec_harness.crews.security_testing.crew import SecurityTestingOrchestrator
+from open_security_harness.config import AppConfig
+from open_security_harness.models import Event
+from open_security_harness.crews.discovery.crew import DiscoveryOrchestrator
+from open_security_harness.scope import report_dir_name
+from open_security_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+from open_security_harness.crews.security_testing.crew import SecurityTestingOrchestrator
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = _normalize_legacy_args(argv)
+    argv = _normalize_url_shorthand(argv)
     config = AppConfig.from_env()
-    parser = argparse.ArgumentParser(prog="appsec-harness")
+    parser = argparse.ArgumentParser(prog="osh")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     discover_parser = subcommands.add_parser("discover", help="Run the discovery crew")
@@ -54,7 +54,7 @@ def _run_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         report_dir = orchestrator.run(args.url, max_pages=args.max_pages, max_depth=args.max_depth)
     except Exception as exc:
-        print(f"appsec-harness failed: {exc}", file=sys.stderr)
+        print(f"osh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Report written to {report_dir}")
     return 0
@@ -69,7 +69,7 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
     try:
         report_dir = orchestrator.run(args.url)
     except Exception as exc:
-        print(f"appsec-harness failed: {exc}", file=sys.stderr)
+        print(f"osh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Security test plan written to {report_dir}")
     return 0
@@ -90,13 +90,13 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         report_dir = orchestrator.run(args.url, engagement_file=engagement_file)
     except Exception as exc:
-        print(f"appsec-harness failed: {exc}", file=sys.stderr)
+        print(f"osh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Security testing preflight written to {report_dir}")
     return 0
 
 
-def _normalize_legacy_args(argv: list[str] | None) -> list[str]:
+def _normalize_url_shorthand(argv: list[str] | None) -> list[str]:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         return args

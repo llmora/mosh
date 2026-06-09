@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from appsec_harness.config import AppConfig
+from open_security_harness.config import AppConfig
 
 
 class AppConfigTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.max_depth, 5)
 
     def test_max_depth_can_be_overridden_from_env(self) -> None:
-        with patch.dict(os.environ, {"APPSEC_HARNESS_MAX_DEPTH": "7"}, clear=True):
+        with patch.dict(os.environ, {"OSH_MAX_DEPTH": "7"}, clear=True):
             config = AppConfig.from_env()
 
         self.assertEqual(config.max_depth, 7)
@@ -24,10 +24,10 @@ class AppConfigTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "APPSEC_HARNESS_DIRB_WORDLIST": "/tmp/words.txt",
-                "APPSEC_HARNESS_DIRB_DOCKER_TIMEOUT": "45",
-                "APPSEC_HARNESS_CANDIDATE_FOLLOW_UP_LIMIT": "2",
-                "APPSEC_HARNESS_PLANNING_MAX_REVISIONS": "4",
+                "OSH_DIRB_WORDLIST": "/tmp/words.txt",
+                "OSH_DIRB_DOCKER_TIMEOUT": "45",
+                "OSH_CANDIDATE_FOLLOW_UP_LIMIT": "2",
+                "OSH_PLANNING_MAX_REVISIONS": "4",
             },
             clear=True,
         ):
@@ -88,7 +88,7 @@ class AppConfigTests(unittest.TestCase):
     def test_engagement_template_refinement_can_be_disabled_from_env(self) -> None:
         with patch.dict(
             os.environ,
-            {"APPSEC_HARNESS_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM": "false"},
+            {"OSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM": "false"},
             clear=True,
         ):
             config = AppConfig.from_env()
@@ -99,9 +99,9 @@ class AppConfigTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "APPSEC_HARNESS_SECURITY_TOOL_IMAGE": "security-tools:test",
-                "APPSEC_HARNESS_SECURITY_COMMAND_TIMEOUT": "45",
-                "APPSEC_HARNESS_SECURITY_EXECUTION_MAX_REVISIONS": "3",
+                "OSH_SECURITY_TOOL_IMAGE": "security-tools:test",
+                "OSH_SECURITY_COMMAND_TIMEOUT": "45",
+                "OSH_SECURITY_EXECUTION_MAX_REVISIONS": "3",
             },
             clear=True,
         ):

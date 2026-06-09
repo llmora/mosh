@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from appsec_harness.docker_tools import DockerToolResult
-from appsec_harness.crews.discovery.tools import DirbDockerDiscoveryTool, parse_dirb_output
+from open_security_harness.docker_tools import DockerToolResult
+from open_security_harness.crews.discovery.tools import DirbDockerDiscoveryTool, parse_dirb_output
 
 
 class FakeDockerRunner:

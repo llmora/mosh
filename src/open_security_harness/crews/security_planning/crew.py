@@ -6,20 +6,20 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from appsec_harness.config import AppConfig
-from appsec_harness.crews.definitions import AgentDefinition
-from appsec_harness.crews.discovery.crew import (
+from open_security_harness.config import AppConfig
+from open_security_harness.crews.definitions import AgentDefinition
+from open_security_harness.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
     _llm,
     _load_crewai,
 )
-from appsec_harness.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
-from appsec_harness.memory import FileMemory
-from appsec_harness.models import Event
-from appsec_harness.scope import report_dir_name
-from appsec_harness.crews.security_planning.reporting import write_security_test_plan
+from open_security_harness.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
+from open_security_harness.memory import FileMemory
+from open_security_harness.models import Event
+from open_security_harness.scope import report_dir_name
+from open_security_harness.crews.security_planning.reporting import write_security_test_plan
 
 
 @dataclass

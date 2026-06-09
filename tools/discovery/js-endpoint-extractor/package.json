@@ -1,5 +1,5 @@
 {
-  "name": "appsec-harness-js-endpoint-extractor",
+  "name": "osh-js-endpoint-extractor",
   "version": "0.1.0",
   "private": true,
   "type": "module",

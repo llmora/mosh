@@ -6,22 +6,22 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from appsec_harness.config import AppConfig
-from appsec_harness.crews.discovery.agents import (
+from open_security_harness.config import AppConfig
+from open_security_harness.crews.discovery.agents import (
     CrawlerAgent,
     SummarizerAgent,
     build_discovery_agents,
     discovery_agent_definitions,
 )
-from appsec_harness.memory import FileMemory
-from appsec_harness.models import Event
-from appsec_harness.models import CrawlResult
-from appsec_harness.crews.discovery.reporting import write_reports
-from appsec_harness.scope import report_dir_name
-from appsec_harness.scope import normalize_url
+from open_security_harness.memory import FileMemory
+from open_security_harness.models import Event
+from open_security_harness.models import CrawlResult
+from open_security_harness.crews.discovery.reporting import write_reports
+from open_security_harness.scope import report_dir_name
+from open_security_harness.scope import normalize_url
 
 
-CREW_CONFIG_PACKAGE = "appsec_harness.crews"
+CREW_CONFIG_PACKAGE = "open_security_harness.crews"
 
 
 @dataclass

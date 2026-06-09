@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from appsec_harness.docker_tools import DockerToolResult
-from appsec_harness.crews.discovery.tools import JsStaticEndpointDockerTool, parse_js_static_output
+from open_security_harness.docker_tools import DockerToolResult
+from open_security_harness.crews.discovery.tools import JsStaticEndpointDockerTool, parse_js_static_output
 
 
 class FakeDockerRunner:

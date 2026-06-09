@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from appsec_harness.crews.discovery.crawler import Crawler
+from open_security_harness.crews.discovery.crawler import Crawler
 from tests.fixtures import fixture_server
 
 
