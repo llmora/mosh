@@ -1,130 +1,69 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Open Security Harness logo" width="760">
+</p>
+
 # osh: Open Security Harness
 
-Turn an application URL into an evidence-backed security testing workflow.
+Find security vulnerabilities in your applications and resolve them, using AI to simulate the tasks a security researcher runs.
 
-Open Security Harness is an agent-coordinated CLI for application security teams, security-minded engineers, and product teams that want repeatable discovery instead of scattered notes and one-off scanner output. Give it a URL, and it coordinates specialist agents and Docker-backed tools to map the application surface, write an auditable discovery report, propose scoped security tests, and prepare execution with an explicit engagement file.
+## Harness what?
 
-It is built for applications you own and are authorized to test.
+Using LLMs to test the security of an application is a lot more than pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, and execution needs to be controlled, evidenced, and repeatable. `osh` implements that harness.
 
-## Why Use It
+`osh` simulates the core tasks a security researcher performs when testing an application:
 
-Modern applications spread behavior across pages, APIs, JavaScript bundles, forms, redirects, and hidden paths. Open Security Harness keeps that work organized:
+- **Discovery:** map the application surface, routes, links, forms, JavaScript assets, third-party services, and observable technologies.
+- **Security planning:** turn discovery evidence into scoped, testable security hypotheses.
+- **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
+- **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
 
-- It discovers pages, links, paths, forms, JavaScript assets, XHR/fetch endpoints, and candidate hidden routes.
-- It stores the trail, not just the conclusion: Markdown reports, structured event logs, and shared memory are written for every run.
-- It turns discovery evidence into a security test plan instead of leaving you with raw crawl output.
-- It creates a small editable engagement file so test execution is tied to authorization, target mappings, credentials, limits, and safe test data.
-- It runs external tooling in Docker, keeping scanner dependencies out of your host environment.
+## Installation
 
-## The Workflow
-
-```text
-discover -> plan-security -> edit engagement_template.yaml -> test-security
-```
-
-Each phase writes to a stable directory under:
-
-```text
-report/<host>/
-```
-
-For `https://app.example.com`, Open Security Harness creates:
-
-```text
-report/app.example.com/discovery/
-report/app.example.com/security-test-planning/
-report/app.example.com/security-testing/
-```
-
-## What You Get
-
-After a full run, you have:
-
-- a discovery report describing observed application surface area
-- `events.json` with observable agent and tool activity
-- `memory.json` with structured facts shared between crews
-- a security test plan grounded in discovery evidence
-- an editable engagement template for permissions, targets, credentials, limits, and safe data
-- security testing preflight output and executed test reports when tests are ready to run
-
-## Prerequisites
-
-Install these first:
+0. Install these prerequisites first:
 
 - Python 3.11 or newer
-- Docker, running locally
-- An LLM API key:
-  - `DEEPSEEK_API_KEY` for direct DeepSeek use with the default DeepSeek models, or
-  - `OPENROUTER_API_KEY` to route models through OpenRouter
+- Docker
 
-## Install
-
-Clone the repository:
+1. Clone the repository:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/llmora/open-security-harness.git
 cd open-security-harness
 ```
 
-Run setup:
+2. Run setup:
 
 ```bash
 ./scripts/setup.sh
 ```
 
-The setup script creates `.venv`, installs Open Security Harness in editable mode, and builds the Docker tool images. It rebuilds an image when the local image is missing or older than the files used to build it.
+The setup script creates `.venv`, installs Open Security Harness in editable mode, and builds the Docker tool images.
 
-Activate the environment:
+3. Activate the environment:
 
 ```bash
 source .venv/bin/activate
 ```
 
-Useful setup options:
+## Configuration
 
-```bash
-./scripts/setup.sh --skip-docker
-./scripts/setup.sh --force-docker
-```
+Set an LLM API key before running the CLI.
 
-The discovery image includes Katana, Dirb, Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system Chromium. The security image includes command-line utilities used inside disposable security-testing workspaces.
-
-## Configure
-
-Set an API key before running the CLI.
-
-For the default direct DeepSeek setup:
+For the default direct DeepSeek setup, open an account at deepseek.com and generate an API key:
 
 ```bash
 export DEEPSEEK_API_KEY="your-deepseek-api-key"
 ```
 
-Or route through OpenRouter:
+Or route through OpenRouter, open an account at openrouter.ai and generate an API key:
 
 ```bash
 export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
 
-Optional environment variables:
+## Running A Security Scan
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OSH_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter-compatible API base URL. |
-| `OSH_MAX_DEPTH` | `5` | Default crawl depth for discovery. |
-| `OSH_KATANA_CRAWL_DURATION` | `270s` | Katana browser crawl duration. |
-| `OSH_KATANA_DOCKER_TIMEOUT` | `300` | Katana Docker timeout in seconds. |
-| `OSH_DIRB_WORDLIST` | `/usr/share/dirb/wordlists/common.txt` | Dirb wordlist path inside the discovery image. |
-| `OSH_DIRB_DOCKER_TIMEOUT` | `120` | Dirb Docker timeout in seconds. |
-| `OSH_CANDIDATE_FOLLOW_UP_LIMIT` | `5` | Maximum candidate paths to follow up after discovery. |
-| `OSH_PLANNING_MAX_REVISIONS` | `1` | Planner/critic revision attempts beyond the first plan. |
-| `OSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM` | `true` | Whether planning asks an LLM to refine the generated engagement template. |
-| `OSH_SECURITY_TOOL_IMAGE` | `osh-security-tools:latest` | Docker image used by security testing. |
-| `OSH_SECURITY_COMMAND_TIMEOUT` | `300` | Per-command timeout for security testing commands. |
-| `OSH_SECURITY_EXECUTION_MAX_REVISIONS` | `2` | Maximum reviewer-requested reruns for a security test. |
-
-The discovery tools image currently uses the built-in image name `osh-discovery-tools:latest`; `./scripts/setup.sh` builds and refreshes it.
-
-## Run Discovery
+### 1. Run Discovery
 
 Start by mapping the application:
 
@@ -132,18 +71,10 @@ Start by mapping the application:
 osh discover https://app.example.com
 ```
 
-You can also pass a URL directly. Open Security Harness treats this as `discover`:
-
-```bash
-osh https://app.example.com
-```
-
 Discovery writes:
 
 ```text
 report/<host>/discovery/report.md
-report/<host>/discovery/events.json
-report/<host>/discovery/memory.json
 ```
 
 Optional tuning flags:
@@ -152,9 +83,9 @@ Optional tuning flags:
 osh discover https://app.example.com --max-pages 100 --max-depth 4 --output-root report
 ```
 
-## Create A Security Test Plan
+### 2. Create A Security Test Plan
 
-Once discovery has produced evidence, ask Open Security Harness to turn it into testable hypotheses:
+Once discovery has produced evidence, ask `osh` to turn it into testable hypotheses:
 
 ```bash
 osh plan-security https://app.example.com
@@ -165,11 +96,9 @@ This reads from `report/<host>/discovery/` and writes:
 ```text
 report/<host>/security-test-planning/security_test_plan.md
 report/<host>/security-test-planning/engagement_template.yaml
-report/<host>/security-test-planning/events.json
-report/<host>/security-test-planning/memory.json
 ```
 
-## Review The Engagement File
+### 3. Review The Engagement File
 
 Before running security testing, review and edit:
 
@@ -187,15 +116,9 @@ This file is deliberately small. It is where you confirm:
 - credentials by role
 - safe test data
 
-The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target.
+The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target (useful if you want to run the tests against a pre-prod environment).
 
-Repeated planning runs preserve values you have filled in and back up older templates under:
-
-```text
-report/<host>/security-test-planning/engagement_template.backups/
-```
-
-## Run Security Testing
+### 4. Run Security Testing
 
 When the plan and engagement file are ready, run:
 
@@ -203,63 +126,115 @@ When the plan and engagement file are ready, run:
 osh test-security https://app.example.com
 ```
 
-By default, this uses:
-
-```text
-report/<host>/security-test-planning/engagement_template.yaml
-```
-
-To use a different engagement file:
-
-```bash
-osh test-security https://app.example.com --engagement-file ./engagement.yaml
-```
-
 Security testing writes:
 
 ```text
 report/<host>/security-testing/preflight.md
-report/<host>/security-testing/events.json
-report/<host>/security-testing/memory.json
 report/<host>/security-testing/executed_tests/
+report/<host>/security-testing/executed_tests/history/
 ```
 
-If executed tests discover new application surface area, Open Security Harness feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready.
+Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
+
+- **Ready tests:** enough authorization, target, credential, and safe test-data information is available, so the test can run.
+- **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
+
+Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
+
+You can run security testing repeatedly:
+
+```bash
+osh test-security https://app.example.com
+```
+
+If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, accepted execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not accepted, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
+
+If executed tests discover new application surface area, `osh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
 
 ## End-To-End Example
 
 ```bash
-git clone <repo-url>
-cd open-security-harness
-
-./scripts/setup.sh
-source .venv/bin/activate
-
-export DEEPSEEK_API_KEY="your-deepseek-api-key"
-
 osh discover https://app.example.com
 osh plan-security https://app.example.com
 
 # Review and edit report/app.example.com/security-test-planning/engagement_template.yaml.
 
 osh test-security https://app.example.com
+
+# If preflight reports blocked tests, add the missing engagement details and run it again.
+osh test-security https://app.example.com
 ```
 
-## How It Works
+## What You Get
 
-Open Security Harness keeps the architecture simple:
+After a full run, you have:
+
+- a discovery report describing observed application surface area
+- a security test plan grounded in discovery evidence
+- an editable engagement template for permissions, targets, credentials, limits, and safe test data
+- executed test reports, including resolution
+
+## Resolving vulnerabilities
+
+Security testing reports are written to:
+
+```text
+report/<host>/security-testing/executed_tests/
+```
+
+Each executed test report is designed to support remediation, not just detection. Use it to understand:
+
+- what was tested
+- which target and role were used
+- what evidence was collected
+- whether the issue was accepted, rejected, or needs more review
+- what fix or mitigation is recommended
+- what should be rerun after the application has been changed
+
+A practical remediation loop looks like this:
+
+1. Review the executed test report and confirm the finding against the recorded evidence.
+2. Fix the vulnerable behavior in the application.
+3. Redeploy the application to the target environment covered by the engagement file.
+4. Run security testing again:
+
+```bash
+osh test-security https://app.example.com
+```
+
+`osh` compares the current plan and execution metadata with previous reports. Tests that are already current and accepted are skipped, while tests that need fresh evidence can run again. This makes repeat testing useful after a fix: you keep the historical reports, but the current run shows whether the issue still reproduces.
+
+If a fix changes the application surface, run discovery and planning again before retesting:
+
+```bash
+osh discover https://app.example.com
+osh plan-security https://app.example.com
+osh test-security https://app.example.com
+```
+
+Keep the engagement file up to date as the application changes. New roles, test accounts, safe test data, or staging mappings can unblock additional tests and give `osh` enough context to validate more of the application.
+
+## Implementation
+
+Open Security Harness keeps the runtime architecture simple:
 
 ```text
 orchestrator -> agent -> tools
 ```
 
-The orchestrator coordinates the run. Agents own specialist work. Tools are invoked by agents. External scanners run inside Docker containers.
+The orchestrator coordinates the run. Agents own specialist work. Tools are invoked by agents. External scanners run inside Docker containers rather than being installed on the host.
 
 Current crews:
 
-- Discovery crew: crawls and summarizes the application surface.
-- Security planning crew: turns discovery evidence into scoped test hypotheses.
-- Security testing crew: checks ready hypotheses using the engagement file and disposable Docker execution.
+- **Discovery crew:** crawls and summarizes the application surface.
+- **Security planning crew:** turns discovery evidence into scoped test hypotheses.
+- **Security testing crew:** checks ready hypotheses using the engagement file and disposable Docker execution.
+
+The discovery image includes Katana, Dirb, Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system Chromium. The security image includes command-line utilities used inside disposable security-testing workspaces.
+
+## Future Roadmap
+
+Planned areas of expansion include deeper browser-driven SPA discovery, richer API endpoint extraction, additional Docker-backed security tools, and broader reporting support. The roadmap should stay focused: small steps, tested behavior, and no broad framework churn without a clear product reason.
 
 ## Development
 
@@ -276,7 +251,7 @@ Run the test suite:
 python -m unittest discover -v
 ```
 
-Build tool images when working on Docker-backed functionality:
+Force rebuild Docker tool images when working on Docker-backed functionality:
 
 ```bash
 ./scripts/setup.sh --force-docker
@@ -296,7 +271,7 @@ Please follow these guidelines:
 - Keep external security tools in Docker containers rather than requiring host installs.
 - Avoid broad refactors unless they directly support the change being made.
 
-Before opening a pull request:
+Before opening a pull request create tests that validate your change and ensure all tests pass:
 
 ```bash
 python -m unittest discover -v
