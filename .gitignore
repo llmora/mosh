@@ -3,3 +3,4 @@ __pycache__/
 *.egg-info/
 engagements/*.yaml
 engagements/*.yml
+.DS_Store
