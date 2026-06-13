@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -10,7 +11,11 @@ from mosh.crews.discovery.crew import DiscoveryOrchestrator
 from mosh.crews.reporting.crew import FinalReportingOrchestrator
 from mosh.scope import report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
-from mosh.crews.security_testing.crew import SecurityTestingOrchestrator
+from mosh.crews.security_testing.crew import (
+    SecurityTestPreflightResult,
+    SecurityTestingOrchestrator,
+    render_blocked_tests_cli_summary,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -104,7 +109,38 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Security testing preflight written to {report_dir}")
+    summary = _security_testing_blocked_summary(report_dir, engagement_file)
+    if summary:
+        print(summary)
     return 0
+
+
+def _security_testing_blocked_summary(report_dir: Path, engagement_file: Path) -> str:
+    memory_path = report_dir / "memory.json"
+    try:
+        memory = json.loads(memory_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(memory, list):
+        return ""
+    preflight = next(
+        (
+            item.get("content")
+            for item in reversed(memory)
+            if isinstance(item, dict) and item.get("kind") == "security_testing_preflight"
+        ),
+        None,
+    )
+    if not isinstance(preflight, dict):
+        return ""
+    return render_blocked_tests_cli_summary(
+        result=SecurityTestPreflightResult(
+            ready=preflight.get("ready") if isinstance(preflight.get("ready"), list) else [],
+            blocked=preflight.get("blocked") if isinstance(preflight.get("blocked"), list) else [],
+            targets=preflight.get("targets") if isinstance(preflight.get("targets"), dict) else {},
+        ),
+        engagement_file=engagement_file,
+    )
 
 
 def _run_final_reporting(config: AppConfig, args: argparse.Namespace) -> int:

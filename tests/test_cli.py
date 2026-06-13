@@ -145,6 +145,71 @@ class CliTests(unittest.TestCase):
             self.assertIn("Security testing preflight written to", stdout.getvalue())
             self.assertTrue((report_dir / "preflight.md").exists())
 
+    def test_cli_test_security_subcommand_prints_blocked_test_unblock_details(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            planning_dir = output_root / report_dir_name(target_url) / "security-test-planning"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "HDR-001",
+                        "title": "Security headers are present",
+                        "priority": "medium",
+                        "surface": "headers",
+                        "requirements": ["No credentials required."],
+                        "tools_expected": ["HTTP client"],
+                    },
+                    {
+                        "id": "AUTH-002",
+                        "title": "Admin role cannot read another tenant",
+                        "priority": "critical",
+                        "surface": "api",
+                        "requirements": ["Admin credentials", "Safe customer IDs"],
+                        "tools_expected": ["HTTP client"],
+                    },
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, plan)
+            engagement_file.write_text(
+                (Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with patch(
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                return_value=FakeSecurityTestingRunner(),
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "test-security",
+                            target_url,
+                            "--output-root",
+                            str(output_root),
+                            "--engagement-file",
+                            str(engagement_file),
+                        ]
+                    )
+
+            output = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security testing has blocked tests remaining.", output)
+            self.assertIn("- AUTH-002: Admin role cannot read another tenant (critical)", output)
+            self.assertIn(
+                "Add `credentials.admin.token` or both `credentials.admin.username` and `credentials.admin.password`.",
+                output,
+            )
+            self.assertIn("Add a non-empty `safe_test_data.customer_ids` value.", output)
+
     def test_cli_test_security_subcommand_uses_default_engagement_template(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"

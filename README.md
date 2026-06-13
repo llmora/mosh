@@ -187,7 +187,7 @@ Every security-testing run starts with a preflight. The preflight reads the secu
 - **Ready tests:** enough authorization, target, credential, and safe test-data information is available, so the test can run.
 - **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
 
-Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
+Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with deterministic engagement-file fields to update. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
 
 You can run security testing repeatedly to incrementally complete the test:
 
@@ -243,7 +243,7 @@ mosh plan-security https://app.example.com
 
 mosh test-security https://app.example.com
 
-# If preflight reports blocked tests, add the missing engagement details and run it again.
+# If the CLI reports blocked tests, add the missing engagement details and run it again.
 mosh test-security https://app.example.com
 
 mosh report https://app.example.com

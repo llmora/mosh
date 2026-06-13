@@ -403,6 +403,13 @@ the test plan. The system does not immediately auto-run new tests from that
 refreshed plan; additional execution happens on the next security-testing run
 only if the refreshed plan contains ready, unexecuted hypotheses.
 
+After a successful `test-security` run, the CLI must print a deterministic
+human-readable summary of any blocked tests that still prevent completion. The
+summary should list each blocked test ID, title, priority, and concrete
+engagement-file fields or values needed to unblock it. This mirrors the
+preflight data without requiring the user to open `preflight.md` for the next
+action.
+
 Security test completion is determined from metadata embedded in the latest
 executed Markdown report, not from a separate execution index. Each
 `executed_tests/<test_id>.md` report should include machine-readable execution

@@ -1335,6 +1335,52 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_blocked_tests_cli_summary(result: SecurityTestPreflightResult, engagement_file: Path) -> str:
+    if not result.blocked:
+        return ""
+    lines = [
+        "",
+        "Security testing has blocked tests remaining.",
+        f"Update {engagement_file} and run security testing again:",
+        "",
+    ]
+    for item in result.blocked:
+        lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
+        blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
+        for blocker in blockers:
+            lines.append(f"  - {_unblock_guidance(_text(blocker))}")
+    return "\n".join(lines).rstrip()
+
+
+def _unblock_guidance(blocker: str) -> str:
+    guidance = {
+        "authorization_confirmed is not true in the engagement file": (
+            "Set `engagement.authorization_confirmed` to `true` after confirming authorization."
+        ),
+        "active_testing_allowed is not true in the engagement file": (
+            "Set `engagement.active_testing_allowed` to `true` once active testing is approved."
+        ),
+        "state_changing_tests_allowed is not true for this state-changing test": (
+            "Set `engagement.state_changing_tests_allowed` to `true` if state-changing tests are approved."
+        ),
+        "no effective target mappings were resolved": (
+            "Add at least one non-empty URL under `targets.production` or `targets.alternative`."
+        ),
+    }
+    if blocker in guidance:
+        return guidance[blocker]
+    if blocker.startswith("missing credential material for "):
+        role = blocker.removeprefix("missing credential material for ").strip()
+        return (
+            f"Add `credentials.{role}.token` or both "
+            f"`credentials.{role}.username` and `credentials.{role}.password`."
+        )
+    if blocker.startswith("missing safe_test_data."):
+        key = blocker.removeprefix("missing safe_test_data.").strip()
+        return f"Add a non-empty `safe_test_data.{key}` value."
+    return blocker or "Review `preflight.md` for the missing engagement detail."
+
+
 def render_executed_test_report(
     *,
     target_url: str,
