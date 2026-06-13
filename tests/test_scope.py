@@ -7,11 +7,11 @@ from mosh.scope import ScopePolicy, normalize_url, report_dir_name
 
 class ScopePolicyTests(unittest.TestCase):
     def test_www_target_allows_root_and_subdomains(self) -> None:
-        scope = ScopePolicy.from_url("https://www.test.com")
+        scope = ScopePolicy.from_url("https://www.example.com")
 
-        self.assertTrue(scope.in_scope("https://test.com/path"))
-        self.assertTrue(scope.in_scope("https://api.test.com/path"))
-        self.assertFalse(scope.in_scope("https://example.com/path"))
+        self.assertTrue(scope.in_scope("https://example.com/path"))
+        self.assertTrue(scope.in_scope("https://api.example.com/path"))
+        self.assertFalse(scope.in_scope("https://example.test/path"))
 
     def test_localhost_scope_stays_on_same_host(self) -> None:
         scope = ScopePolicy.from_url("http://127.0.0.1:8000")
