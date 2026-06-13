@@ -141,7 +141,7 @@ the application should use OpenRouter for that model. If a crew uses any
 non-DeepSeek model, `OPENROUTER_API_KEY` is still required for that model.
 
 Each agent can be configured to use a specific LLM model through an optional
-`mmmosh.yaml` file in the directory where the CLI is run. The file supports a
+`mosh.yaml` file in the directory where the CLI is run. The file supports a
 single `models` mapping grouped by crew:
 
 ```yaml

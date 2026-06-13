@@ -7,25 +7,25 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from mmosh.config import AppConfig
-from mmosh.crews.discovery.crew import (
+from mosh.config import AppConfig
+from mosh.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
     _llm,
     _load_crewai,
 )
-from mmosh.crews.reporting.reporting import (
+from mosh.crews.reporting.reporting import (
     render_final_report,
     validate_final_report_content,
     validate_rendered_report,
 )
-from mmosh.memory import FileMemory
-from mmosh.models import Event
-from mmosh.scope import report_dir_name
+from mosh.memory import FileMemory
+from mosh.models import Event
+from mosh.scope import report_dir_name
 
 
-EXECUTION_METADATA_STARTS = ("<!-- mmosh-execution", "<!-- mmosh-execution")
+EXECUTION_METADATA_STARTS = ("<!-- mosh-execution",)
 EXECUTION_METADATA_END = "-->"
 
 
@@ -151,7 +151,7 @@ def build_final_report_bundle(target_url: str, domain_dir: Path) -> dict[str, An
         if path.exists()
     ]
     return {
-        "schema": "mmosh.final-report-bundle.v1",
+        "schema": "mosh.final-report-bundle.v1",
         "target_url": target_url,
         "discovery": discovery,
         "security_plan": {

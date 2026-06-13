@@ -18,12 +18,12 @@ class SetupScriptTests(unittest.TestCase):
     def test_setup_script_rebuilds_expected_tool_images_from_source_inputs(self) -> None:
         script = Path("scripts/setup.sh").read_text(encoding="utf-8")
 
-        self.assertIn("mmosh-discovery-tools:latest", script)
+        self.assertIn("mosh-discovery-tools:latest", script)
         self.assertIn("tools/discovery/Dockerfile", script)
         self.assertIn("tools/discovery/katana-form-config.yaml", script)
         self.assertIn("tools/discovery/js-endpoint-extractor/package.json", script)
         self.assertIn("tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs", script)
-        self.assertIn("mmosh-security-tools:latest", script)
+        self.assertIn("mosh-security-tools:latest", script)
         self.assertIn("tools/security/Dockerfile", script)
         self.assertIn("image_needs_rebuild", script)
         self.assertIn("--force-docker", script)

@@ -7,9 +7,9 @@ from importlib import resources
 from pathlib import Path
 from unittest.mock import patch
 
-from mmosh.crews.discovery.agents import DiscoveryReporterAgent
-from mmosh.config import AppConfig
-from mmosh.crews.discovery.crew import (
+from mosh.crews.discovery.agents import DiscoveryReporterAgent
+from mosh.config import AppConfig
+from mosh.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIDiscoveryCrewRunner,
     CrewAIUnavailable,
@@ -19,8 +19,8 @@ from mmosh.crews.discovery.crew import (
     _build_task_with_output_event,
     _llm,
 )
-from mmosh.memory import FileMemory
-from mmosh.models import CrawledPage, CrawlResult
+from mosh.memory import FileMemory
+from mosh.models import CrawledPage, CrawlResult
 
 
 class FakeCrewAI:
@@ -96,7 +96,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             memory = FileMemory(Path(directory))
             runner = CrewAIDiscoveryCrewRunner(AppConfig(deepseek_api_key="deepseek-key"))
 
-            with patch("mmosh.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+            with patch("mosh.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
                 with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
                     runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
@@ -125,12 +125,12 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             memory = FileMemory(Path(directory))
             runner = CrewAIDiscoveryCrewRunner(AppConfig(openrouter_api_key="test-key"))
 
-            with patch("mmosh.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+            with patch("mosh.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
                 with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
                     runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
             # The real wiring path is covered by build_discovery_agents, which the CrewAI runner now uses.
-            from mmosh.crews.discovery.agents import build_discovery_agents
+            from mosh.crews.discovery.agents import build_discovery_agents
 
             agents = build_discovery_agents(AppConfig(openrouter_api_key="test-key"))
             tool_names = [tool.name for tool in agents.crawler.available_tool_definitions]

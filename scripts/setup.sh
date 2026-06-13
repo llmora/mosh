@@ -143,14 +143,14 @@ build_image_if_needed() {
 }
 
 build_image_if_needed \
-  "mmosh-discovery-tools:latest" \
+  "mosh-discovery-tools:latest" \
   "$ROOT_DIR/tools/discovery/Dockerfile" \
   "$ROOT_DIR/tools/discovery/katana-form-config.yaml" \
   "$ROOT_DIR/tools/discovery/js-endpoint-extractor/package.json" \
   "$ROOT_DIR/tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs"
 
 build_image_if_needed \
-  "mmosh-security-tools:latest" \
+  "mosh-security-tools:latest" \
   "$ROOT_DIR/tools/security/Dockerfile"
 
 echo "Setup complete. Activate the environment with: source .venv/bin/activate"

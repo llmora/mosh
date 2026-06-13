@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mmosh.models import CrawledPage, CrawlResult
-from mmosh.crews.discovery.reporting import update_report_with_security_testing_feedback, write_reports
+from mosh.models import CrawledPage, CrawlResult
+from mosh.crews.discovery.reporting import update_report_with_security_testing_feedback, write_reports
 
 
 class ReportingTests(unittest.TestCase):

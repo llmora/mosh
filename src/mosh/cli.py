@@ -4,13 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from mmosh.config import AppConfig
-from mmosh.models import Event
-from mmosh.crews.discovery.crew import DiscoveryOrchestrator
-from mmosh.crews.reporting.crew import FinalReportingOrchestrator
-from mmosh.scope import report_dir_name
-from mmosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
-from mmosh.crews.security_testing.crew import SecurityTestingOrchestrator
+from mosh.config import AppConfig
+from mosh.models import Event
+from mosh.crews.discovery.crew import DiscoveryOrchestrator
+from mosh.crews.reporting.crew import FinalReportingOrchestrator
+from mosh.scope import report_dir_name
+from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+from mosh.crews.security_testing.crew import SecurityTestingOrchestrator
 
 
 def main(argv: list[str] | None = None) -> int:

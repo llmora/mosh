@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Model-driven Open Security Harness logo" width="760">
+  <img src="assets/brand/social/mosh-readme-header.svg" alt="mosh logo" width="760">
 </p>
 
 # mosh: Model-driven Open Security Harness
@@ -29,7 +29,7 @@ When more advanced LLM models are released, you do not need to modify the harnes
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/llmora/mmosh.git
+git clone https://github.com/llmora/mosh.git
 cd mosh
 ```
 
@@ -65,7 +65,7 @@ export OPENROUTER_API_KEY="your-openrouter-api-key"
 
 ### Model Selection
 
-By default, `mosh` uses DeepSeek models to balance quality and cost. To choose different models, create `mmmosh.yaml` in the directory where you run the CLI:
+By default, `mosh` uses DeepSeek models to balance quality and cost. To choose different models, create `mosh.yaml` in the directory where you run the CLI:
 
 ```yaml
 models:

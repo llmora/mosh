@@ -6,20 +6,20 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from mmosh.config import AppConfig
-from mmosh.crews.definitions import AgentDefinition
-from mmosh.crews.discovery.crew import (
+from mosh.config import AppConfig
+from mosh.crews.definitions import AgentDefinition
+from mosh.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
     _llm,
     _load_crewai,
 )
-from mmosh.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
-from mmosh.memory import FileMemory
-from mmosh.models import Event
-from mmosh.scope import report_dir_name
-from mmosh.crews.security_planning.reporting import write_security_test_plan
+from mosh.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
+from mosh.memory import FileMemory
+from mosh.models import Event
+from mosh.scope import report_dir_name
+from mosh.crews.security_planning.reporting import write_security_test_plan
 
 
 @dataclass

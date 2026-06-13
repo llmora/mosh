@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from mmosh.scope import ScopePolicy, normalize_url, report_dir_name
+from mosh.scope import ScopePolicy, normalize_url, report_dir_name
 
 
 class ScopePolicyTests(unittest.TestCase):

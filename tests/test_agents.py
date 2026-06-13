@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mmosh.crews.discovery.agents import CrawlerAgent, discovery_agent_definitions
-from mmosh.config import AppConfig
-from mmosh.memory import FileMemory
-from mmosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
+from mosh.crews.discovery.agents import CrawlerAgent, discovery_agent_definitions
+from mosh.config import AppConfig
+from mosh.memory import FileMemory
+from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
 
 
 class FakeCrawlTool:

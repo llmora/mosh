@@ -48,8 +48,8 @@ class AppConfig:
     deepseek_api_key: str | None = None
     models: AgentModelConfig = field(default_factory=AgentModelConfig)
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    tool_image: str = "mmosh-discovery-tools:latest"
-    security_tool_image: str = "mmosh-security-tools:latest"
+    tool_image: str = "mosh-discovery-tools:latest"
+    security_tool_image: str = "mosh-security-tools:latest"
     security_command_timeout: int = 300
     security_execution_max_revisions: int = 2
     katana_crawl_duration: str = "270s"
@@ -62,14 +62,14 @@ class AppConfig:
     refine_engagement_template_with_llm: bool = True
 
     @classmethod
-    def from_env(cls, config_path: str | Path = "mmmosh.yaml") -> "AppConfig":
+    def from_env(cls, config_path: str | Path = "mosh.yaml") -> "AppConfig":
         models = _load_agent_model_config(Path(config_path))
         return cls(
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
             models=models,
             openrouter_base_url=os.getenv("MOSH_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            security_tool_image=os.getenv("MOSH_SECURITY_TOOL_IMAGE", "mmosh-security-tools:latest"),
+            security_tool_image=os.getenv("MOSH_SECURITY_TOOL_IMAGE", "mosh-security-tools:latest"),
             security_command_timeout=int(os.getenv("MOSH_SECURITY_COMMAND_TIMEOUT", "300")),
             security_execution_max_revisions=int(os.getenv("MOSH_SECURITY_EXECUTION_MAX_REVISIONS", "2")),
             katana_crawl_duration=os.getenv("MOSH_KATANA_CRAWL_DURATION", "270s"),
@@ -142,15 +142,15 @@ def _openrouter_model(model: str) -> str:
 def _load_agent_model_config(path: Path) -> AgentModelConfig:
     if not path.exists():
         return AgentModelConfig()
-    data = _parse_osh_yaml(path.read_text(encoding="utf-8"), path)
+    data = _parse_mosh_yaml(path.read_text(encoding="utf-8"), path)
     unknown_top_level = sorted(set(data) - {"models"})
     if unknown_top_level:
-        raise ValueError(f"Unknown mmmosh.yaml section(s): {', '.join(unknown_top_level)}.")
+        raise ValueError(f"Unknown mosh.yaml section(s): {', '.join(unknown_top_level)}.")
     raw_models = data.get("models", {})
     if raw_models is None:
         return AgentModelConfig()
     if not isinstance(raw_models, dict):
-        raise ValueError("mmmosh.yaml `models` must be grouped by crew.")
+        raise ValueError("mosh.yaml `models` must be grouped by crew.")
 
     defaults = AgentModelConfig()
     crew_configs = {
@@ -163,7 +163,7 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
     for crew_name, crew_values in raw_models.items():
         if crew_name not in crew_configs:
             valid = ", ".join(sorted(crew_configs))
-            raise ValueError(f"Unknown model crew `models.{crew_name}` in mmmosh.yaml. Valid crews: {valid}.")
+            raise ValueError(f"Unknown model crew `models.{crew_name}` in mosh.yaml. Valid crews: {valid}.")
         if not isinstance(crew_values, dict):
             raise ValueError(f"Model crew `models.{crew_name}` must be a mapping of agent names to model IDs.")
         crew_config = crew_configs[crew_name]
@@ -173,16 +173,16 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
             if key not in valid_model_keys:
                 valid = ", ".join(sorted(valid_model_keys))
                 raise ValueError(
-                    f"Unknown model key `models.{crew_name}.{key}` in mmmosh.yaml. Valid keys: {valid}."
+                    f"Unknown model key `models.{crew_name}.{key}` in mosh.yaml. Valid keys: {valid}."
                 )
             if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"Model key `models.{crew_name}.{key}` in mmmosh.yaml must be a non-empty string.")
+                raise ValueError(f"Model key `models.{crew_name}.{key}` in mosh.yaml must be a non-empty string.")
             crew_overrides[key] = value.strip()
         overrides[crew_name] = replace(crew_config, **crew_overrides)
     return replace(defaults, **overrides)
 
 
-def _parse_osh_yaml(text: str, path: Path) -> dict[str, Any]:
+def _parse_mosh_yaml(text: str, path: Path) -> dict[str, Any]:
     data: dict[str, Any] = {}
     current_section: str | None = None
     current_subsection: str | None = None
@@ -191,7 +191,7 @@ def _parse_osh_yaml(text: str, path: Path) -> dict[str, Any]:
         if not line.strip():
             continue
         if "\t" in raw_line:
-            raise ValueError(f"{path}:{line_number}: tabs are not supported in mmmosh.yaml.")
+            raise ValueError(f"{path}:{line_number}: tabs are not supported in mosh.yaml.")
         indent = len(line) - len(line.lstrip(" "))
         key, value = _split_yaml_key_value(line.strip(), path, line_number)
         if indent == 0:

@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mmosh.config import AppConfig
-from mmosh.crews.discovery.crew import DiscoveryOrchestrator
-from mmosh.scope import report_dir_name
+from mosh.config import AppConfig
+from mosh.crews.discovery.crew import DiscoveryOrchestrator
+from mosh.scope import report_dir_name
 from tests.fakes import FakeCrewRunner
 from tests.fixtures import fixture_server
 

@@ -6,7 +6,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from mmosh.memory import FileMemory
+from mosh.memory import FileMemory
 
 
 class FileMemoryTests(unittest.TestCase):

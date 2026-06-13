@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from mmosh.scope import normalize_url
+from mosh.scope import normalize_url
 
 
 def write_engagement_template(report_dir: Path, target_url: str, plan: dict[str, Any]) -> str:

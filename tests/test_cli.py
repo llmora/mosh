@@ -9,17 +9,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mmosh.cli import main
-from mmosh.engagement import write_engagement_template
-from mmosh.scope import report_dir_name
+from mosh.cli import main
+from mosh.engagement import write_engagement_template
+from mosh.scope import report_dir_name
 from tests.fakes import FakeCrewRunner, FakeFinalReportingRunner, FakeSecurityPlanningRunner, FakeSecurityTestingRunner
 from tests.fixtures import fixture_server
 
 
 class CliTests(unittest.TestCase):
-    def test_cli_reports_invalid_osh_yaml_without_traceback(self) -> None:
+    def test_cli_reports_invalid_mosh_yaml_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            Path(directory, "mmmosh.yaml").write_text(
+            Path(directory, "mosh.yaml").write_text(
                 "models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n",
                 encoding="utf-8",
             )
@@ -40,7 +40,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
-                with patch("mmosh.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                with patch("mosh.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main([url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
@@ -60,7 +60,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:
                 stdout = io.StringIO()
-                with patch("mmosh.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
+                with patch("mosh.crews.discovery.crew.build_discovery_crew_runner", return_value=FakeCrewRunner()):
                     with contextlib.redirect_stdout(stdout):
                         exit_code = main(["discover", url, "--output-root", str(Path(directory) / "report"), "--max-pages", "5"])
 
@@ -80,7 +80,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "mmosh.crews.security_planning.crew.build_security_test_planning_crew_runner",
+                "mosh.crews.security_planning.crew.build_security_test_planning_crew_runner",
                 return_value=FakeSecurityPlanningRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -125,7 +125,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "mmosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -172,7 +172,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "mmosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -191,7 +191,7 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "mmosh.crews.reporting.crew.build_final_reporting_crew_runner",
+                "mosh.crews.reporting.crew.build_final_reporting_crew_runner",
                 return_value=runner,
             ):
                 with contextlib.redirect_stdout(stdout):

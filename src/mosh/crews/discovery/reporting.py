@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mmosh.models import CrawlResult
+from mosh.models import CrawlResult
 
 
 REPORT_SCHEMA_VERSION = "1.0"

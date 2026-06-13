@@ -6,22 +6,22 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from mmosh.config import AppConfig
-from mmosh.crews.discovery.agents import (
+from mosh.config import AppConfig
+from mosh.crews.discovery.agents import (
     CrawlerAgent,
     DiscoveryReporterAgent,
     build_discovery_agents,
     discovery_agent_definitions,
 )
-from mmosh.memory import FileMemory
-from mmosh.models import Event
-from mmosh.models import CrawlResult
-from mmosh.crews.discovery.reporting import write_reports
-from mmosh.scope import report_dir_name
-from mmosh.scope import normalize_url
+from mosh.memory import FileMemory
+from mosh.models import Event
+from mosh.models import CrawlResult
+from mosh.crews.discovery.reporting import write_reports
+from mosh.scope import report_dir_name
+from mosh.scope import normalize_url
 
 
-CREW_CONFIG_PACKAGE = "mmosh.crews"
+CREW_CONFIG_PACKAGE = "mosh.crews"
 
 
 @dataclass

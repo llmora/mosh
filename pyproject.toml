@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mosh"
 version = "0.1.0"
-description = "Agent-coordinated application security discovery and testing workflow."
+description = "Model-driven Open Security Harness for agent-coordinated application security discovery and testing."
 requires-python = ">=3.11"
 dependencies = ["crewai>=1.0.0"]
 
 [project.scripts]
-mosh = "mmosh.cli:main"
+mosh = "mosh.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

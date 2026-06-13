@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from mmosh.docker_tools import DockerToolResult
-from mmosh.crews.discovery.tools import JsStaticEndpointDockerTool, parse_js_static_output
+from mosh.docker_tools import DockerToolResult
+from mosh.crews.discovery.tools import JsStaticEndpointDockerTool, parse_js_static_output
 
 
 class FakeDockerRunner:

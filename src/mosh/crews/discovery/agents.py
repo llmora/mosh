@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from mmosh.config import AppConfig
-from mmosh.crews.definitions import AgentDefinition
-from mmosh.memory import FileMemory
-from mmosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
-from mmosh.scope import normalize_url
-from mmosh.crews.discovery.tools import (
+from mosh.config import AppConfig
+from mosh.crews.definitions import AgentDefinition
+from mosh.memory import FileMemory
+from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
+from mosh.scope import normalize_url
+from mosh.crews.discovery.tools import (
     CrawlApplicationTool,
     DirbDockerDiscoveryTool,
     ExtractifyDockerTool,

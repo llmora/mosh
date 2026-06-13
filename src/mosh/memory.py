@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from mmosh.models import Event, MemoryItem
+from mosh.models import Event, MemoryItem
 
 
 EventSink = Callable[[Event], None]

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from mmosh.docker_tools import DockerToolResult
-from mmosh.crews.discovery.tools import DirbDockerDiscoveryTool, parse_dirb_output
+from mosh.docker_tools import DockerToolResult
+from mosh.crews.discovery.tools import DirbDockerDiscoveryTool, parse_dirb_output
 
 
 class FakeDockerRunner:

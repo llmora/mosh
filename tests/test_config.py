@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mmosh.config import AppConfig
+from mosh.config import AppConfig
 
 
 class AppConfigTests(unittest.TestCase):
@@ -47,9 +47,9 @@ class AppConfigTests(unittest.TestCase):
         self.assertTrue(config.refine_engagement_template_with_llm)
         self.assertEqual(config.models.security_planning.engagement_refiner, "deepseek/deepseek-v4-flash")
 
-    def test_models_can_be_loaded_from_osh_yaml(self) -> None:
+    def test_models_can_be_loaded_from_mosh_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "mmmosh.yaml"
+            config_path = Path(directory) / "mosh.yaml"
             config_path.write_text(
                 "\n".join(
                     [
@@ -76,16 +76,16 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.models.reporting.writer, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.discovery.reporter, "deepseek/deepseek-v4-flash")
 
-    def test_missing_osh_yaml_keeps_default_models(self) -> None:
+    def test_missing_mosh_yaml_keeps_default_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {}, clear=True):
                 config = AppConfig.from_env(config_path=Path(directory) / "missing.yaml")
 
         self.assertEqual(config.models.discovery.crawler, "deepseek/deepseek-v4-flash")
 
-    def test_unknown_model_key_in_osh_yaml_fails_clearly(self) -> None:
+    def test_unknown_model_key_in_mosh_yaml_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "mmmosh.yaml"
+            config_path = Path(directory) / "mosh.yaml"
             config_path.write_text("models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery.crawlerr`"):

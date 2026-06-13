@@ -6,8 +6,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from mmosh.models import CrawledPage, CrawlResult
-from mmosh.scope import ScopePolicy, normalize_url, strip_fragment
+from mosh.models import CrawledPage, CrawlResult
+from mosh.scope import ScopePolicy, normalize_url, strip_fragment
 
 
 USER_AGENT = "mosh/0.1 discovery"

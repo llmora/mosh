@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 
-FINAL_REPORT_SCHEMA_VERSION = "mmosh.final-report.v1"
+FINAL_REPORT_SCHEMA_VERSION = "mosh.final-report.v1"
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational", "unknown"]
 REMEDIATION_PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "Not recorded": 3}
 

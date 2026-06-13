@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mmosh.memory import FileMemory
-from mmosh.models import CrawlResult
-from mmosh.crews.discovery.reporting import write_reports
-from mmosh.crews.security_testing.crew import (
+from mosh.memory import FileMemory
+from mosh.models import CrawlResult
+from mosh.crews.discovery.reporting import write_reports
+from mosh.crews.security_testing.crew import (
     _archive_latest_report,
     _execution_metadata,
     _with_execution_metadata_mapping,
@@ -13,7 +13,7 @@ from mmosh.crews.security_testing.crew import (
     plan_revision_id,
     render_executed_test_report,
 )
-from mmosh.crews.security_planning.reporting import write_security_test_plan
+from mosh.crews.security_planning.reporting import write_security_test_plan
 
 
 class FakeCrewRunner:
@@ -36,7 +36,7 @@ class FakeCrewRunner:
                 "max_depth": max_depth,
             }
         )
-        from mmosh.crews.discovery.crawler import Crawler
+        from mosh.crews.discovery.crawler import Crawler
 
         crawl = Crawler(timeout=3).crawl(target_url, max_pages=max_pages, max_depth=max_depth)
         memory.record_event("crawler", "task_received", "Crawl the target and discover app surface")

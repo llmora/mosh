@@ -6,21 +6,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mmosh.config import AppConfig
-from mmosh.crews.reporting.crew import (
+from mosh.config import AppConfig
+from mosh.crews.reporting.crew import (
     CrewAIFinalReportingCrewRunner,
     FinalReportState,
     _build_submit_final_report_review_tool,
     _build_write_final_report_tool,
     build_final_report_bundle,
 )
-from mmosh.crews.reporting.reporting import render_final_report, validate_rendered_report
-from mmosh.crews.security_testing.crew import (
+from mosh.crews.reporting.reporting import render_final_report, validate_rendered_report
+from mosh.crews.security_testing.crew import (
     _with_execution_metadata_mapping,
     render_executed_test_report,
 )
-from mmosh.memory import FileMemory
-from mmosh.scope import report_dir_name
+from mosh.memory import FileMemory
+from mosh.scope import report_dir_name
 
 
 class FakeCrewAI:
@@ -127,7 +127,7 @@ class FinalReportingTests(unittest.TestCase):
             memory = FileMemory(report_dir)
             runner = CrewAIFinalReportingCrewRunner(AppConfig(openrouter_api_key="test-key"))
 
-            with patch("mmosh.crews.reporting.crew._load_crewai", return_value=FakeRuntimeCrewAI):
+            with patch("mosh.crews.reporting.crew._load_crewai", return_value=FakeRuntimeCrewAI):
                 report_path = runner.run("https://example.test", report_dir, memory, bundle)
 
             markdown = report_path.read_text(encoding="utf-8")
@@ -288,16 +288,6 @@ class FinalReportingTests(unittest.TestCase):
         self.assertEqual(findings[0]["severity"], "critical")
         self.assertIsNone(findings[0]["cvss"])
 
-    def test_final_report_bundle_reads_legacy_execution_metadata(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            domain_dir = _write_report_inputs(Path(directory), "https://example.test", legacy_metadata=True)
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
-
-        findings = [item for item in bundle["executed_tests"] if item["accepted_finding"]]
-        self.assertEqual([item["id"] for item in findings], ["AUTH-001"])
-        self.assertEqual(findings[0]["status"], "finding")
-        self.assertEqual(findings[0]["review_accepted"], True)
-
     def test_final_report_bundle_uses_executed_report_priority_when_plan_no_longer_has_test(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
@@ -411,7 +401,7 @@ class FinalReportingTests(unittest.TestCase):
         self.assertFalse(state.review["reviewer_accepted"])
 
 
-def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = False) -> Path:
+def _write_report_inputs(root: Path, target_url: str) -> Path:
     domain_dir = root / "report" / report_dir_name(target_url)
     discovery_dir = domain_dir / "discovery"
     planning_dir = domain_dir / "security-test-planning"
@@ -494,8 +484,8 @@ def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = Fa
         encoding="utf-8",
     )
 
-    _write_executed_report(executed_dir, "AUTH-001", "Private API requires authentication", "finding", True, legacy_metadata)
-    _write_executed_report(executed_dir, "HDR-001", "Security headers are present", "no-finding", True, legacy_metadata)
+    _write_executed_report(executed_dir, "AUTH-001", "Private API requires authentication", "finding", True)
+    _write_executed_report(executed_dir, "HDR-001", "Security headers are present", "no-finding", True)
     testing_dir.joinpath("preflight.md").write_text("# Preflight\n", encoding="utf-8")
     testing_dir.joinpath("memory.json").write_text(
         json.dumps(
@@ -551,7 +541,6 @@ def _write_executed_report(
     title: str,
     status: str,
     accepted: bool,
-    legacy_metadata: bool = False,
 ) -> None:
     markdown = render_executed_test_report(
         target_url="https://example.test",
@@ -576,17 +565,14 @@ def _write_executed_report(
         },
     )
     metadata = {
-        "schema": "mmosh.security-test-execution.v1" if legacy_metadata else "mmosh.security-test-execution.v1",
+        "schema": "mosh.security-test-execution.v1",
         "test_id": test_id,
         "status": status,
         "review_accepted": accepted,
         "report_path": str(executed_dir / f"{test_id}.md"),
         "executed_at": "2026-06-13T06:40:12+00:00",
     }
-    if legacy_metadata:
-        with_metadata = f"<!-- mmosh-execution\n{json.dumps(metadata, sort_keys=True)}\n-->\n\n{markdown}"
-    else:
-        with_metadata = _with_execution_metadata_mapping(markdown, metadata)
+    with_metadata = _with_execution_metadata_mapping(markdown, metadata)
     executed_dir.joinpath(f"{test_id}.md").write_text(with_metadata, encoding="utf-8")
 
 

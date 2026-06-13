@@ -7,12 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mmosh.config import AppConfig
-from mmosh.docker_tools import DockerToolResult
-from mmosh.engagement import write_engagement_template
-from mmosh.memory import FileMemory
-from mmosh.scope import report_dir_name
-from mmosh.crews.security_testing.crew import (
+from mosh.config import AppConfig
+from mosh.docker_tools import DockerToolResult
+from mosh.engagement import write_engagement_template
+from mosh.memory import FileMemory
+from mosh.scope import report_dir_name
+from mosh.crews.security_testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
     collect_security_testing_discovery_updates,
@@ -438,7 +438,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
 
-            with patch("mmosh.crews.security_testing.crew.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.security_testing.crew.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_security_command_tool(_FakeCrewAI, AppConfig(), state)
                 result = json.loads(tool._run("curl https://api.example.test/api/private/auth/me", "auth check"))
 
