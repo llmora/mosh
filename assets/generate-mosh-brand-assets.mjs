@@ -269,7 +269,7 @@ function openGraphSvg() {
   fill="${P.ORANGE}"
   font-family="JetBrains Mono, IBM Plex Mono, Menlo, monospace"
   font-size="25"
-  font-weight="700">Controlled chaos for application security testing.</text>`,
+  font-weight="700">Security testing. Driven by models. Grounded in evidence.</text>`,
   });
 }
 
