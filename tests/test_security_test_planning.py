@@ -89,7 +89,7 @@ class FakeRuntimeCrewAI(FakeCrewAI):
                             json.loads(inputs["security_test_plan"]),
                             json.loads(inputs["critic_review"]),
                         )
-                        raise RuntimeError("finalizer post-processing failed")
+                        raise RuntimeError("reporter post-processing failed")
             return None
 
     @staticmethod
@@ -235,7 +235,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("- **API auth baseline is missing.**", markdown)
         self.assertIn("- **Group tests by surface.**", markdown)
 
-    def test_write_plan_tool_preserves_structured_plan_when_finalizer_sends_markdown_content(self) -> None:
+    def test_write_plan_tool_preserves_structured_plan_when_reporter_sends_markdown_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
             state = SecurityTestPlanningState(
@@ -252,13 +252,13 @@ class SecurityTestPlanningTests(unittest.TestCase):
             tool = _build_write_security_test_plan_tool(FakeCrewAI, state)
 
             tool._run(
-                {"content": "# Finalizer-authored Markdown should not replace structured plan"},
-                {"content": "## Critic Review Markdown should not replace structured review"},
+                {"content": "# Reporter-authored Markdown should not replace structured plan"},
+                {"content": "## Reviewer Decision Markdown should not replace structured review"},
             )
 
             markdown = (report_dir / "security_test_plan.md").read_text(encoding="utf-8")
             self.assertIn("Private API rejects unauthenticated access", markdown)
-            self.assertIn("Planner/critic accepted: `true`", markdown)
+            self.assertIn("Planner/reviewer accepted: `true`", markdown)
             self.assertIn("- Summary: Accepted.", markdown)
 
     def test_refined_engagement_template_tool_rejects_invented_credentials(self) -> None:
@@ -437,7 +437,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
         self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
 
-    def test_crewai_runner_writes_engagement_template_before_finalizer_returns(self) -> None:
+    def test_crewai_runner_writes_engagement_template_before_reporter_returns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             FakeRuntimeCrewAI.critic_inputs = None
             report_dir = Path(directory) / "security-test-planning"
@@ -452,7 +452,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             )
 
             with patch("open_security_harness.crews.security_planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
-                with self.assertRaisesRegex(RuntimeError, "finalizer post-processing failed"):
+                with self.assertRaisesRegex(RuntimeError, "reporter post-processing failed"):
                     runner.run("https://example.test", discovery_dir, report_dir, memory)
 
             self.assertTrue((report_dir / "engagement_template.yaml").exists())
@@ -475,10 +475,10 @@ class SecurityTestPlanningTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("security_test_planner:", agents)
-        self.assertIn("security_test_critic:", agents)
-        self.assertIn("security_test_finalizer:", agents)
-        self.assertIn("engagement_template_refiner:", agents)
+        self.assertIn("planner:", agents)
+        self.assertIn("reviewer:", agents)
+        self.assertIn("reporter:", agents)
+        self.assertIn("engagement_refiner:", agents)
         self.assertIn("draft_security_test_plan_task:", tasks)
         self.assertIn("critique_security_test_plan_task:", tasks)
         self.assertIn("write_security_test_plan_task:", tasks)
@@ -506,7 +506,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             agents_path, tasks_path = _write_security_planning_subset_configs(
                 Path(directory),
                 "cycle",
-                agent_keys=["security_test_planner", "security_test_critic"],
+                agent_keys=["planner", "reviewer"],
                 task_keys=["draft_security_test_plan_task", "critique_security_test_plan_task"],
             )
 
@@ -515,16 +515,16 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
         self.assertTrue(Path(agents_path).is_absolute())
         self.assertTrue(Path(tasks_path).is_absolute())
-        self.assertIn("security_test_planner:", agents)
-        self.assertIn("security_test_critic:", agents)
-        self.assertNotIn("engagement_template_refiner:", agents)
+        self.assertIn("planner:", agents)
+        self.assertIn("reviewer:", agents)
+        self.assertNotIn("engagement_refiner:", agents)
         self.assertIn("draft_security_test_plan_task:", tasks)
         self.assertIn("critique_security_test_plan_task:", tasks)
         self.assertNotIn("refine_engagement_template_task:", tasks)
 
     def test_security_planning_yaml_subset_reports_missing_blocks(self) -> None:
         with self.assertRaisesRegex(KeyError, "missing_agent"):
-            _select_yaml_top_level_blocks("security_test_planner:\n  role: Planner\n", ["missing_agent"])
+            _select_yaml_top_level_blocks("planner:\n  role: Planner\n", ["missing_agent"])
 
 
 if __name__ == "__main__":

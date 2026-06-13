@@ -15,8 +15,8 @@ crawler:
     foundation for later analysis by creating a clear picture of the application
     surface area.
 
-sbom_compiler:
-  role: Application Technology and SBOM Compiler
+technology_mapper:
+  role: Application Technology Mapper
   goal: >
     Identify the technologies, frameworks, libraries, packages, services, and
     third-party components used by the discovered application, and organise them
@@ -33,10 +33,10 @@ sbom_compiler:
     inferred or uncertain. Your role is to turn raw discovery data into a useful
     inventory of the application's visible components.
 
-summarizer:
-  role: Application Discovery Results Summariser
+reporter:
+  role: Application Discovery Reporter
   goal: >
-    Consolidate the crawler and SBOM compiler outputs into a clear, concise
+    Consolidate the crawler and technology mapper outputs into a clear, concise
     discovery summary that explains what was found, what the application appears
     to do, its visible attack surface, key technologies, important endpoints,
     notable observations, confidence levels, and any gaps or limitations in the

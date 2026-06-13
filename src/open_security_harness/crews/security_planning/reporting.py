@@ -40,8 +40,8 @@ def render_security_test_plan(
             "",
             f"- Schema version: `{PLAN_SCHEMA_VERSION}`",
             f"- Target URL: `{target_url}`",
-            f"- Planner/critic accepted: `{str(accepted).lower()}`",
-            f"- Planner/critic iterations: `{iterations}`",
+            f"- Planner/reviewer accepted: `{str(accepted).lower()}`",
+            f"- Planner/reviewer iterations: `{iterations}`",
             "",
         ]
     )
@@ -163,9 +163,9 @@ def _add_bullets(lines: list[str], heading: str, value: Any) -> None:
 
 
 def _add_critic_review(lines: list[str], review: dict[str, Any] | None) -> None:
-    lines.extend(["## Critic Review", ""])
+    lines.extend(["## Reviewer Decision", ""])
     if not review:
-        lines.extend(["No critic review recorded.", ""])
+        lines.extend(["No reviewer decision recorded.", ""])
         return
     lines.extend(
         [
@@ -174,8 +174,8 @@ def _add_critic_review(lines: list[str], review: dict[str, Any] | None) -> None:
             "",
         ]
     )
-    _add_list_section(lines, "Blocking Critic Findings", review.get("blocking_findings"))
-    _add_list_section(lines, "Non-Blocking Critic Suggestions", review.get("non_blocking_suggestions"))
+    _add_list_section(lines, "Blocking Reviewer Findings", review.get("blocking_findings"))
+    _add_list_section(lines, "Non-Blocking Reviewer Suggestions", review.get("non_blocking_suggestions"))
 
 
 def _list(value: Any) -> list[Any]:

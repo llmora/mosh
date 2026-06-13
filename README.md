@@ -17,6 +17,8 @@ Using LLMs to test the security of an application is a lot more than pointing a 
 - **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
 - **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
 
+When more advanced LLM models are released, you do not need to modify the harness. Configure `osh` to use the new model IDs instead.
+
 ## Installation
 
 0. Install these prerequisites first:
@@ -60,6 +62,45 @@ Or route through OpenRouter, open an account at openrouter.ai and generate an AP
 ```bash
 export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
+
+### Model Selection
+
+By default, `osh` uses DeepSeek models. To choose different models, create `osh.yaml` in the directory where you run the CLI:
+
+```yaml
+models:
+  discovery:
+    crawler: deepseek/deepseek-v4-flash
+    technology_mapper: deepseek/deepseek-v4-flash
+    reporter: deepseek/deepseek-v4-flash
+
+  security_planning:
+    planner: deepseek/deepseek-v4-flash
+    reviewer: deepseek/deepseek-v4-pro
+    reporter: deepseek/deepseek-v4-flash
+    engagement_refiner: deepseek/deepseek-v4-flash
+
+  security_testing:
+    executor: deepseek/deepseek-v4-flash
+    reviewer: deepseek/deepseek-v4-pro
+    reporter: deepseek/deepseek-v4-flash
+```
+
+Only include the agents you want to override; omitted agents keep their defaults. For example:
+
+```yaml
+models:
+  discovery:
+    crawler: openai/gpt-5.2-mini
+
+  security_planning:
+    reviewer: openai/gpt-5.2
+
+  security_testing:
+    reviewer: openai/gpt-5.2
+```
+
+Use OpenRouter model IDs such as `openai/gpt-5.2` or `anthropic/claude-sonnet-4.5`. DeepSeek IDs such as `deepseek/deepseek-v4-flash` use `DEEPSEEK_API_KEY` directly when it is set; otherwise they route through OpenRouter and require `OPENROUTER_API_KEY`.
 
 ## Running A Security Scan
 

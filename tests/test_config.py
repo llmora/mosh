@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from open_security_harness.config import AppConfig
@@ -43,7 +45,48 @@ class AppConfigTests(unittest.TestCase):
             config = AppConfig.from_env()
 
         self.assertTrue(config.refine_engagement_template_with_llm)
-        self.assertEqual(config.models.engagement_template_refiner, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.security_planning.engagement_refiner, "deepseek/deepseek-v4-flash")
+
+    def test_models_can_be_loaded_from_osh_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "osh.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "models:",
+                        "  discovery:",
+                        "    crawler: openai/gpt-5.2-mini",
+                        "  security_planning:",
+                        "    reviewer: openai/gpt-5.2",
+                        "  security_testing:",
+                        "    reviewer: 'anthropic/claude-sonnet-4.5'",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(config_path=config_path)
+
+        self.assertEqual(config.models.discovery.crawler, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.security_planning.reviewer, "openai/gpt-5.2")
+        self.assertEqual(config.models.security_testing.reviewer, "anthropic/claude-sonnet-4.5")
+        self.assertEqual(config.models.discovery.reporter, "deepseek/deepseek-v4-flash")
+
+    def test_missing_osh_yaml_keeps_default_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(config_path=Path(directory) / "missing.yaml")
+
+        self.assertEqual(config.models.discovery.crawler, "deepseek/deepseek-v4-flash")
+
+    def test_unknown_model_key_in_osh_yaml_fails_clearly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "osh.yaml"
+            config_path.write_text("models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery.crawlerr`"):
+                AppConfig.from_env(config_path=config_path)
 
     def test_deepseek_models_use_direct_deepseek_when_key_is_available(self) -> None:
         config = AppConfig(deepseek_api_key="deepseek-key")

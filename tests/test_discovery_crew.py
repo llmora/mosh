@@ -7,7 +7,7 @@ from importlib import resources
 from pathlib import Path
 from unittest.mock import patch
 
-from open_security_harness.crews.discovery.agents import SummarizerAgent
+from open_security_harness.crews.discovery.agents import DiscoveryReporterAgent
 from open_security_harness.config import AppConfig
 from open_security_harness.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
@@ -151,11 +151,11 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
         self.assertTrue(planning_tasks_yaml.is_file())
         self.assertIn("crawler:", agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("crawl_application_task:", tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("security_test_planner:", planning_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("planner:", planning_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("draft_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("security_test_finalizer:", planning_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("reporter:", planning_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("write_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("engagement_template_refiner:", planning_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("engagement_refiner:", planning_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("refine_engagement_template_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
 
     def test_crawler_tool_skips_previously_crawled_url(self) -> None:
@@ -256,7 +256,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
                     robots=None,
                 ),
             )
-            tool = _build_report_tool(FakeCrewAI, state, SummarizerAgent())
+            tool = _build_report_tool(FakeCrewAI, state, DiscoveryReporterAgent())
             report = {
                 "title": "Application Discovery Results",
                 "executive_summary": "Summary",

@@ -58,7 +58,7 @@ execute_security_test_task:
   expected_output: >
     Confirmation that submit_security_test_evidence was called with structured
     evidence for the current hypothesis.
-  agent: security_test_executor
+  agent: executor
 
 review_security_test_evidence_task:
   description: >
@@ -109,7 +109,7 @@ review_security_test_evidence_task:
   expected_output: >
     Confirmation that submit_security_test_review was called with a structured
     review decision.
-  agent: security_test_reviewer
+  agent: reviewer
 
 write_executed_security_test_report_task:
   description: >
@@ -162,4 +162,4 @@ write_executed_security_test_report_task:
     - follow_up
   expected_output: >
     Confirmation that write_executed_test_report persisted executed_tests/{test_id}.md.
-  agent: security_test_reporter
+  agent: reporter

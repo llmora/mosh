@@ -478,7 +478,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             _kickoff_capturing_tool_state(
                 _FailingCrew("Input should be a valid string"),
                 state,
-                agent_name="security_test_executor",
+                agent_name="executor",
                 task_name="execute_security_test_task",
                 captured=lambda: state.evidence is not None,
                 inputs={"target_url": "https://example.test"},
@@ -506,7 +506,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             _kickoff_capturing_tool_state(
                 _FailingCrew("Input should be a valid string"),
                 state,
-                agent_name="security_test_executor",
+                agent_name="executor",
                 task_name="execute_security_test_task",
                 captured=lambda: state.evidence is not None or bool(state.commands),
                 inputs={"target_url": "https://example.test"},
@@ -534,7 +534,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 _kickoff_capturing_tool_state(
                     _FailingCrew("executor failed before submitting evidence"),
                     state,
-                    agent_name="security_test_executor",
+                    agent_name="executor",
                     task_name="execute_security_test_task",
                     captured=lambda: state.evidence is not None,
                     inputs={"target_url": "https://example.test"},
@@ -807,7 +807,7 @@ class _CountingPlanningRunner:
                 "structured": _refreshed_plan(),
                 "critic_review": {"accepted": True},
             },
-            "security_test_finalizer",
+            "reporter",
         )
         return _PlanningResult(_refreshed_plan(), {"accepted": True}, accepted=True, iterations=1)
 

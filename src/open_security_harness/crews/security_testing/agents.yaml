@@ -1,4 +1,4 @@
-security_test_executor:
+executor:
   role: Security Test Executor
   goal: >
     Execute one ready security test hypothesis using the disposable Docker
@@ -12,7 +12,7 @@ security_test_executor:
     compile small helper programs when that is the simplest way to test safely.
     You do not write the final report.
 
-security_test_reviewer:
+reviewer:
   role: Security Test Evidence Reviewer
   goal: >
     Review execution evidence for safety, completeness, and whether the result
@@ -23,7 +23,7 @@ security_test_reviewer:
     command output, and supported the conclusion with evidence. You can reject
     evidence and ask for concrete re-runs or missing observations.
 
-security_test_reporter:
+reporter:
   role: Security Test Reporter
   goal: >
     Write one stable Markdown artifact for the executed security test using the

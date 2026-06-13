@@ -31,7 +31,7 @@ class ReportingTests(unittest.TestCase):
             )
             report_content = {
                 "title": "Agent Report",
-                "executive_summary": "The summarizer wrote this.",
+                "executive_summary": "The reporter wrote this.",
                 "application_description": "A small example application.",
                 "confirmed_findings": [
                     {

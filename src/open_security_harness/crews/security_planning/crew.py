@@ -59,32 +59,32 @@ def security_test_planning_agent_definitions(config: AppConfig) -> list[AgentDef
         AgentDefinition(
             name="orchestrator",
             role="Security test planning coordinator",
-            goal="Coordinate security test planning work and persist planner/critic/finalizer outputs.",
-            model=config.models.orchestrator,
+            goal="Coordinate security test planning work and persist planner/reviewer/reporter outputs.",
+            model=config.models.security_planning.reporter,
         ),
         AgentDefinition(
-            name="security_test_planner",
+            name="planner",
             role="Security test hypothesis planner",
             goal="Turn discovery findings into detailed, evidence-backed security test hypotheses.",
-            model=config.models.security_test_planner,
+            model=config.models.security_planning.planner,
         ),
         AgentDefinition(
-            name="security_test_critic",
-            role="Security test plan critic",
+            name="reviewer",
+            role="Security test plan reviewer",
             goal="Review test hypotheses for clarity, evidence, scope, safety, and missing requirements.",
-            model=config.models.security_test_critic,
+            model=config.models.security_planning.reviewer,
         ),
         AgentDefinition(
-            name="security_test_finalizer",
-            role="Security test plan finalizer",
+            name="reporter",
+            role="Security test plan reporter",
             goal="Persist the agreed planning output as a stable Markdown security test plan.",
-            model=config.models.security_test_finalizer,
+            model=config.models.security_planning.reporter,
         ),
         AgentDefinition(
-            name="engagement_template_refiner",
+            name="engagement_refiner",
             role="Engagement template refiner",
             goal="Refine the generated engagement template for security test execution.",
-            model=config.models.engagement_template_refiner,
+            model=config.models.security_planning.engagement_refiner,
         ),
     ]
 
@@ -102,10 +102,10 @@ class CrewAISecurityTestPlanningCrewRunner:
     ) -> SecurityTestPlanningResult:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.security_test_planner,
-                self.config.models.security_test_critic,
-                self.config.models.security_test_finalizer,
-                self.config.models.engagement_template_refiner,
+                self.config.models.security_planning.planner,
+                self.config.models.security_planning.reviewer,
+                self.config.models.security_planning.reporter,
+                self.config.models.security_planning.engagement_refiner,
             ]
         )
         if missing_keys:
@@ -179,8 +179,8 @@ class CrewAISecurityTestPlanningCrewRunner:
             {"bytes": len(engagement_template.encode("utf-8"))},
         )
 
-        final_crew = _build_planning_finalizer_crew(crewai, self.config, state)
-        final_crew.crew().kickoff(
+        reporter_crew = _build_planning_reporter_crew(crewai, self.config, state)
+        reporter_crew.crew().kickoff(
             inputs={
                 "target_url": target_url,
                 "accepted": state.accepted,
@@ -208,7 +208,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                 if not (report_dir / "engagement_template.yaml").exists():
                     engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
                     memory.record_event(
-                        "engagement_template_refiner",
+                        "engagement_refiner",
                         "refinement_missing",
                         "Engagement template refiner did not write a template; wrote deterministic fallback",
                         {"bytes": len(engagement_template.encode("utf-8"))},
@@ -216,7 +216,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             except Exception as exc:
                 engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
                 memory.record_event(
-                    "engagement_template_refiner",
+                    "engagement_refiner",
                     "refinement_failed",
                     "Engagement template refinement failed; wrote deterministic fallback",
                     {"error": str(exc), "bytes": len(engagement_template.encode("utf-8"))},
@@ -318,7 +318,7 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
     agents_path, tasks_path = _write_security_planning_subset_configs(
         state.report_dir,
         "planner",
-        agent_keys=["security_test_planner"],
+        agent_keys=["planner"],
         task_keys=["draft_security_test_plan_task"],
     )
 
@@ -328,10 +328,10 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
         tasks_config = tasks_path
 
         @crewai.agent
-        def security_test_planner(self):
+        def planner(self):
             return crewai.Agent(
-                config=self.agents_config["security_test_planner"],
-                llm=_llm(crewai, config, config.models.security_test_planner),
+                config=self.agents_config["planner"],
+                llm=_llm(crewai, config, config.models.security_planning.planner),
                 tools=[plan_tool],
                 allow_delegation=False,
             )
@@ -342,15 +342,15 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
                 crewai,
                 state,
                 config=self.tasks_config["draft_security_test_plan_task"],
-                agent=self.security_test_planner(),
-                agent_name="security_test_planner",
+                agent=self.planner(),
+                agent_name="planner",
                 task_name="draft_security_test_plan_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.security_test_planner()],
+                agents=[self.planner()],
                 tasks=[self.draft_security_test_plan_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
@@ -364,7 +364,7 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
     agents_path, tasks_path = _write_security_planning_subset_configs(
         state.report_dir,
         "critic",
-        agent_keys=["security_test_critic"],
+        agent_keys=["reviewer"],
         task_keys=["critique_security_test_plan_task"],
     )
 
@@ -374,10 +374,10 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
         tasks_config = tasks_path
 
         @crewai.agent
-        def security_test_critic(self):
+        def reviewer(self):
             return crewai.Agent(
-                config=self.agents_config["security_test_critic"],
-                llm=_llm(crewai, config, config.models.security_test_critic),
+                config=self.agents_config["reviewer"],
+                llm=_llm(crewai, config, config.models.security_planning.reviewer),
                 tools=[critique_tool],
                 allow_delegation=False,
             )
@@ -388,15 +388,15 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
                 crewai,
                 state,
                 config=self.tasks_config["critique_security_test_plan_task"],
-                agent=self.security_test_critic(),
-                agent_name="security_test_critic",
+                agent=self.reviewer(),
+                agent_name="reviewer",
                 task_name="critique_security_test_plan_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.security_test_critic()],
+                agents=[self.reviewer()],
                 tasks=[self.critique_security_test_plan_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
@@ -405,25 +405,25 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
     return SecurityTestPlanningCriticCrew()
 
 
-def _build_planning_finalizer_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
+def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     write_tool = _build_write_security_test_plan_tool(crewai, state)
     agents_path, tasks_path = _write_security_planning_subset_configs(
         state.report_dir,
-        "finalizer",
-        agent_keys=["security_test_finalizer"],
+        "reporter",
+        agent_keys=["reporter"],
         task_keys=["write_security_test_plan_task"],
     )
 
     @crewai.CrewBase
-    class SecurityTestPlanningFinalizerCrew:
+    class SecurityTestPlanningReporterCrew:
         agents_config = agents_path
         tasks_config = tasks_path
 
         @crewai.agent
-        def security_test_finalizer(self):
+        def reporter(self):
             return crewai.Agent(
-                config=self.agents_config["security_test_finalizer"],
-                llm=_llm(crewai, config, config.models.security_test_finalizer),
+                config=self.agents_config["reporter"],
+                llm=_llm(crewai, config, config.models.security_planning.reporter),
                 tools=[write_tool],
                 allow_delegation=False,
             )
@@ -434,21 +434,21 @@ def _build_planning_finalizer_crew(crewai: Any, config: AppConfig, state: Securi
                 crewai,
                 state,
                 config=self.tasks_config["write_security_test_plan_task"],
-                agent=self.security_test_finalizer(),
-                agent_name="security_test_finalizer",
+                agent=self.reporter(),
+                agent_name="reporter",
                 task_name="write_security_test_plan_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.security_test_finalizer()],
+                agents=[self.reporter()],
                 tasks=[self.write_security_test_plan_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
             )
 
-    return SecurityTestPlanningFinalizerCrew()
+    return SecurityTestPlanningReporterCrew()
 
 
 def _build_engagement_template_refinement_crew(
@@ -461,7 +461,7 @@ def _build_engagement_template_refinement_crew(
     agents_path, tasks_path = _write_security_planning_subset_configs(
         state.report_dir,
         "engagement_refiner",
-        agent_keys=["engagement_template_refiner"],
+        agent_keys=["engagement_refiner"],
         task_keys=["refine_engagement_template_task"],
     )
 
@@ -471,10 +471,10 @@ def _build_engagement_template_refinement_crew(
         tasks_config = tasks_path
 
         @crewai.agent
-        def engagement_template_refiner(self):
+        def engagement_refiner(self):
             return crewai.Agent(
-                config=self.agents_config["engagement_template_refiner"],
-                llm=_llm(crewai, config, config.models.engagement_template_refiner),
+                config=self.agents_config["engagement_refiner"],
+                llm=_llm(crewai, config, config.models.security_planning.engagement_refiner),
                 tools=[write_tool],
                 allow_delegation=False,
             )
@@ -485,15 +485,15 @@ def _build_engagement_template_refinement_crew(
                 crewai,
                 state,
                 config=self.tasks_config["refine_engagement_template_task"],
-                agent=self.engagement_template_refiner(),
-                agent_name="engagement_template_refiner",
+                agent=self.engagement_refiner(),
+                agent_name="engagement_refiner",
                 task_name="refine_engagement_template_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.engagement_template_refiner()],
+                agents=[self.engagement_refiner()],
                 tasks=[self.refine_engagement_template_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
@@ -562,10 +562,10 @@ def _build_submit_plan_tool(crewai: Any, state: SecurityTestPlanningState):
             state.memory.add_item(
                 "security_test_plan_draft",
                 {"iteration": state.iterations, "structured": plan_content},
-                "security_test_planner",
+                "planner",
             )
             state.memory.record_event(
-                "security_test_planner",
+                "planner",
                 "plan_submitted",
                 "Security test planner submitted draft plan",
                 {
@@ -605,10 +605,10 @@ def _build_submit_critique_tool(crewai: Any, state: SecurityTestPlanningState):
             state.memory.add_item(
                 "security_test_plan_critique",
                 {"iteration": state.iterations, "structured": review_content},
-                "security_test_critic",
+                "reviewer",
             )
             state.memory.record_event(
-                "security_test_critic",
+                "reviewer",
                 "critique_submitted",
                 "Security test critic submitted plan review",
                 {
@@ -664,12 +664,12 @@ def _build_write_security_test_plan_tool(crewai: Any, state: SecurityTestPlannin
                     "structured": plan_content,
                     "critic_review": review_content,
                 },
-                "security_test_finalizer",
+                "reporter",
             )
             state.memory.record_event(
-                "security_test_finalizer",
+                "reporter",
                 "plan_written",
-                "Security test finalizer wrote Markdown plan",
+                "Security test reporter wrote Markdown plan",
                 {
                     "report_dir": str(state.report_dir),
                     "accepted": state.accepted,
@@ -715,7 +715,7 @@ def _build_write_refined_engagement_template_tool(
                 fallback_used = True
                 engagement_template = write_engagement_template_mapping(state.report_dir, deterministic_template)
                 state.memory.record_event(
-                    "engagement_template_refiner",
+                    "engagement_refiner",
                     "refinement_rejected",
                     "Refined engagement template was invalid; wrote deterministic fallback",
                     {"error": str(exc)},
@@ -727,10 +727,10 @@ def _build_write_refined_engagement_template_tool(
                     "bytes": len(engagement_template.encode("utf-8")),
                     "fallback_used": fallback_used,
                 },
-                "engagement_template_refiner",
+                "engagement_refiner",
             )
             state.memory.record_event(
-                "engagement_template_refiner",
+                "engagement_refiner",
                 "engagement_template_written",
                 "Engagement template refiner wrote engagement_template.yaml",
                 {

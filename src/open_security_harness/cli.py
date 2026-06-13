@@ -14,7 +14,11 @@ from open_security_harness.crews.security_testing.crew import SecurityTestingOrc
 
 def main(argv: list[str] | None = None) -> int:
     argv = _normalize_url_shorthand(argv)
-    config = AppConfig.from_env()
+    try:
+        config = AppConfig.from_env()
+    except Exception as exc:
+        print(f"osh failed: {exc}", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(prog="osh")
     subcommands = parser.add_subparsers(dest="command", required=True)
 

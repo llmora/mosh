@@ -45,9 +45,9 @@ class FakeCrewRunner:
             memory.add_item("crawled_page", page.to_dict(), "crawler")
         components: list[dict[str, str]] = []
         memory.record_event(
-            "sbom_compiler",
+            "technology_mapper",
             "agent_output",
-            "sbom_compiler completed compile_components_task",
+            "technology_mapper completed compile_components_task",
             {
                 "task": "compile_components_task",
                 "output": {
@@ -62,7 +62,7 @@ class FakeCrewRunner:
             "components_identified": len(components),
             "failed_requests": len(crawl.failed),
         }
-        memory.add_item("summary", summary, "summarizer")
+        memory.add_item("summary", summary, "reporter")
         report_content = {
             "title": "Application Discovery Report",
             "executive_summary": f"Discovery completed for {crawl.start_url}.",
@@ -84,7 +84,7 @@ class FakeCrewRunner:
                 }
             ],
         }
-        memory.add_item("llm_report", {"structured": report_content}, "summarizer")
+        memory.add_item("llm_report", {"structured": report_content}, "reporter")
         write_reports(report_dir, crawl.start_url, crawl, components, summary, report_content)
         return FakeCrewResult(crawl, components, summary)
 
@@ -135,7 +135,7 @@ class FakeSecurityPlanningRunner:
             "open_questions": [],
         }
         review = {"accepted": True, "summary": "Accepted.", "blocking_findings": [], "non_blocking_suggestions": []}
-        memory.add_item("security_test_plan_final", {"structured": plan, "critic_review": review}, "security_test_finalizer")
+        memory.add_item("security_test_plan_final", {"structured": plan, "critic_review": review}, "reporter")
         write_security_test_plan(report_dir, target_url, plan, review, accepted=True, iterations=1)
         return FakeSecurityPlanningResult(plan, review, accepted=True, iterations=1)
 
@@ -194,5 +194,5 @@ class FakeSecurityTestingRunner:
             memory.add_item(
                 "executed_security_test_report",
                 {"test_id": test_id, "path": str(report_path)},
-                "security_test_reporter",
+                "reporter",
             )

@@ -43,13 +43,13 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
             name="orchestrator",
             role="Discovery crew coordinator",
             goal="Coordinate appsec discovery work and route findings between agents.",
-            model=config.models.orchestrator,
+            model=config.models.discovery.reporter,
         ),
         AgentDefinition(
             name="crawler",
             role="Application surface crawler",
             goal="Discover in-scope pages, links, URLs, paths, references, and files.",
-            model=config.models.crawler,
+            model=config.models.discovery.crawler,
             tools=[
                 CrawlApplicationTool.definition,
                 KatanaDockerCrawlerTool.definition,
@@ -59,16 +59,16 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
             ],
         ),
         AgentDefinition(
-            name="sbom_compiler",
+            name="technology_mapper",
             role="Remote component inventory compiler",
             goal="Identify observable libraries, servers, frameworks, and application components.",
-            model=config.models.sbom_compiler,
+            model=config.models.discovery.technology_mapper,
         ),
         AgentDefinition(
-            name="summarizer",
-            role="Discovery report summarizer",
+            name="reporter",
+            role="Discovery reporter",
             goal="Summarize discovery findings into a stable Markdown report.",
-            model=config.models.summarizer,
+            model=config.models.discovery.reporter,
         ),
     ]
 
@@ -76,8 +76,8 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
 @dataclass(frozen=True)
 class DiscoveryAgents:
     crawler: "CrawlerAgent"
-    sbom_compiler: "SbomCompilerAgent"
-    summarizer: "SummarizerAgent"
+    technology_mapper: "TechnologyMapperAgent"
+    reporter: "DiscoveryReporterAgent"
 
 
 class CrawlerAgent:
@@ -454,12 +454,12 @@ def _safe_normalize(url: str) -> str:
         return url
 
 
-class SbomCompilerAgent:
-    name = "sbom_compiler"
+class TechnologyMapperAgent:
+    name = "technology_mapper"
 
 
-class SummarizerAgent:
-    name = "summarizer"
+class DiscoveryReporterAgent:
+    name = "reporter"
 
     def summarize(
         self,
@@ -500,6 +500,6 @@ def build_discovery_agents(config: AppConfig | None = None) -> DiscoveryAgents:
             ],
             candidate_follow_up_limit=config.candidate_follow_up_limit,
         ),
-        sbom_compiler=SbomCompilerAgent(),
-        summarizer=SummarizerAgent(),
+        technology_mapper=TechnologyMapperAgent(),
+        reporter=DiscoveryReporterAgent(),
     )

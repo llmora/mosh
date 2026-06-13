@@ -557,8 +557,8 @@ class AgentToolBoundaryTests(unittest.TestCase):
                 "js_static_endpoint_discovery",
             ],
         )
-        self.assertIsNone(definitions["sbom_compiler"].tools)
-        self.assertIsNone(definitions["summarizer"].tools)
+        self.assertIsNone(definitions["technology_mapper"].tools)
+        self.assertIsNone(definitions["reporter"].tools)
 
 
 if __name__ == "__main__":

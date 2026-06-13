@@ -29,7 +29,7 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
             self.assertEqual(report_dir.name, "discovery")
             self.assertEqual(report_dir.parent.name, report_dir_name(url))
             self.assertTrue(any(event["action"] == "start" and event["agent"] == "orchestrator" for event in events))
-            self.assertTrue(any(event["action"] == "agent_output" and event["agent"] == "sbom_compiler" for event in events))
+            self.assertTrue(any(event["action"] == "agent_output" and event["agent"] == "technology_mapper" for event in events))
             self.assertFalse(any(item["kind"] == "component_inventory" for item in memory))
             self.assertEqual(crew_runner.calls[0]["target_url"], url)
 

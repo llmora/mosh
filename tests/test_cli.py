@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,25 @@ from tests.fixtures import fixture_server
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_reports_invalid_osh_yaml_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "osh.yaml").write_text(
+                "models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            original_cwd = Path.cwd()
+            os.chdir(directory)
+            try:
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["discover", "https://example.test"])
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("osh failed: Unknown model key `models.discovery.crawlerr`", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_cli_writes_markdown_report_and_runtime_json_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with fixture_server() as url:

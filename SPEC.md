@@ -140,7 +140,34 @@ If a selected model is a DeepSeek model but `DEEPSEEK_API_KEY` is not present,
 the application should use OpenRouter for that model. If a crew uses any
 non-DeepSeek model, `OPENROUTER_API_KEY` is still required for that model.
 
-Each agent can be configured to use a specific LLM model. Model selection should not be exposed as a command-line option for now. It should be easy to change in application configuration or agent definitions.
+Each agent can be configured to use a specific LLM model through an optional
+`osh.yaml` file in the directory where the CLI is run. The file supports a
+single `models` mapping grouped by crew:
+
+```yaml
+models:
+  discovery:
+    crawler: openai/gpt-5.2-mini
+    technology_mapper: openai/gpt-5.2-mini
+    reporter: openai/gpt-5.2-mini
+
+  security_planning:
+    planner: openai/gpt-5.2-mini
+    reviewer: openai/gpt-5.2
+    reporter: openai/gpt-5.2-mini
+    engagement_refiner: openai/gpt-5.2-mini
+
+  security_testing:
+    executor: openai/gpt-5.2-mini
+    reviewer: openai/gpt-5.2
+    reporter: openai/gpt-5.2-mini
+```
+
+Omitted model keys keep their built-in defaults. Unknown model keys should fail
+clearly so misspelled crew or agent names do not silently select the wrong
+model. The user-facing model configuration should not expose a generic
+`orchestrator` model unless a crew has an explicit LLM-backed coordinator role.
+Model selection should not be exposed as a command-line option for now.
 
 CrewAI orchestration is mandatory. The application should not silently fall back to a deterministic agent sequence when CrewAI or the required LLM API key is unavailable. If the CrewAI discovery crew cannot run, the CLI should fail clearly and report the missing requirement.
 
@@ -228,10 +255,10 @@ Required outputs:
 
 The final report should summarize the discovery activities and findings.
 
-The final Markdown report is rendered by the summarizer-owned report-writing tool
-from structured content authored by the summarizer agent. The report-writing tool
+The final Markdown report is rendered by the discovery reporter-owned report-writing tool
+from structured content authored by the discovery reporter agent. The report-writing tool
 owns the Markdown section order and formatting so repeated runs remain comparable,
-while the summarizer agent owns the observations, narrative content, confidence
+while the discovery reporter agent owns the observations, narrative content, confidence
 levels, evidence, and recommendations.
 
 The application should not write a final `report.json` artifact. Structured
@@ -255,8 +282,8 @@ The initial discovery crew has these agents:
 
 - orchestrator: coordinates the discovery crew and routes work between agents
 - crawler agent: discovers pages, links, URLs, paths, references, files, and forms
-- SBOM/component inventory agent: identifies observable software components such as libraries, servers, frameworks, and related technologies
-- summarizer agent: summarizes findings and returns them to the orchestrator for reporting
+- technology mapper agent: identifies observable software components such as libraries, servers, frameworks, and related technologies
+- reporter agent: summarizes findings and returns them to the orchestrator for reporting
 
 ### Discovery Crew Tool Ownership
 
@@ -270,12 +297,12 @@ The crawler agent may have multiple crawler tools. Current crawler-owned tools a
 - Extractify Docker tool, run through the discovery tools container for JavaScript endpoint and URL extraction
 - static JavaScript endpoint discovery tool, run through the discovery tools container for AST-based endpoint resolution
 
-The SBOM/component inventory agent currently performs its analysis through the
+The technology mapper agent currently performs its analysis through the
 CrewAI task context and its LLM output. It should read crawler findings and
 produce an evidence-based SBOM-style analysis as agent output. There is no
 deterministic component inventory tool in the current implementation.
 
-The summarizer agent owns summarization behavior and the report-writing tool. The
+The discovery reporter agent owns summarization behavior and the report-writing tool. The
 orchestrator may request reporting, but it must not synthesize the final report by
 calling reporting helpers directly.
 

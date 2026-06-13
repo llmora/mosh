@@ -208,9 +208,9 @@ class CrewAISecurityTestingCrewRunner:
     ) -> None:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.security_test_executor,
-                self.config.models.security_test_reviewer,
-                self.config.models.security_test_reporter,
+                self.config.models.security_testing.executor,
+                self.config.models.security_testing.reviewer,
+                self.config.models.security_testing.reporter,
             ]
         )
         if missing_keys:
@@ -268,11 +268,11 @@ def _run_one_security_test(
         state.evidence = None
         state.review = None
         command_start = len(state.commands)
-        executor_crew = _build_security_test_executor_crew(crewai, config, state)
+        executor_crew = _build_executor_crew(crewai, config, state)
         _kickoff_capturing_tool_state(
             executor_crew,
             state,
-            agent_name="security_test_executor",
+            agent_name="executor",
             task_name="execute_security_test_task",
             captured=lambda: state.evidence is not None or bool(state.commands),
             inputs={
@@ -296,13 +296,13 @@ def _run_one_security_test(
                     "structured": state.evidence,
                     "fallback": True,
                 },
-                "security_test_executor",
+                "executor",
             )
-        reviewer_crew = _build_security_test_reviewer_crew(crewai, config, state)
+        reviewer_crew = _build_reviewer_crew(crewai, config, state)
         _kickoff_capturing_tool_state(
             reviewer_crew,
             state,
-            agent_name="security_test_reviewer",
+            agent_name="reviewer",
             task_name="review_security_test_evidence_task",
             captured=lambda: state.review is not None,
             inputs={
@@ -333,11 +333,11 @@ def _run_one_security_test(
         execution_bundle,
         "security_test_coordinator",
     )
-    reporter_crew = _build_security_test_reporter_crew(crewai, config, state)
+    reporter_crew = _build_reporter_crew(crewai, config, state)
     _kickoff_capturing_tool_state(
         reporter_crew,
         state,
-        agent_name="security_test_reporter",
+        agent_name="reporter",
         task_name="write_executed_security_test_report_task",
         captured=lambda: state.report_written,
         inputs={
@@ -365,7 +365,7 @@ def _run_one_security_test(
         state.executed_report_path.write_text(markdown, encoding="utf-8")
         state.report_written = True
         memory.record_event(
-            "security_test_reporter",
+            "reporter",
             "report_fallback_written",
             "Wrote fallback executed test report",
             {"test_id": test_id, "path": str(state.executed_report_path)},
@@ -795,7 +795,7 @@ def _preserve_evidence_artifacts(state: SecurityTestExecutionState, evidence: di
                     "test_id": _hypothesis_id(state.hypothesis),
                     "artifact": artifact,
                 },
-                "security_test_executor",
+                "executor",
             )
 
 
@@ -913,13 +913,13 @@ def _artifact_decision_names(value: Any) -> set[str]:
     return names
 
 
-def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     command_tool = _build_run_security_command_tool(crewai, config, state)
     evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
     agents_path, tasks_path = _write_security_testing_subset_configs(
         state.report_dir,
         f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_executor",
-        agent_keys=["security_test_executor"],
+        agent_keys=["executor"],
         task_keys=["execute_security_test_task"],
     )
 
@@ -929,10 +929,10 @@ def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: Se
         tasks_config = tasks_path
 
         @crewai.agent
-        def security_test_executor(self):
+        def executor(self):
             return crewai.Agent(
-                config=self.agents_config["security_test_executor"],
-                llm=_llm(crewai, config, config.models.security_test_executor),
+                config=self.agents_config["executor"],
+                llm=_llm(crewai, config, config.models.security_testing.executor),
                 tools=[command_tool, evidence_tool],
                 allow_delegation=False,
             )
@@ -943,15 +943,15 @@ def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: Se
                 crewai,
                 state,
                 config=self.tasks_config["execute_security_test_task"],
-                agent=self.security_test_executor(),
-                agent_name="security_test_executor",
+                agent=self.executor(),
+                agent_name="executor",
                 task_name="execute_security_test_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.security_test_executor()],
+                agents=[self.executor()],
                 tasks=[self.execute_security_test_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
@@ -960,12 +960,12 @@ def _build_security_test_executor_crew(crewai: Any, config: AppConfig, state: Se
     return SecurityTestExecutorCrew()
 
 
-def _build_security_test_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     review_tool = _build_submit_execution_review_tool(crewai, state)
     agents_path, tasks_path = _write_security_testing_subset_configs(
         state.report_dir,
         f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_reviewer",
-        agent_keys=["security_test_reviewer"],
+        agent_keys=["reviewer"],
         task_keys=["review_security_test_evidence_task"],
     )
 
@@ -975,10 +975,10 @@ def _build_security_test_reviewer_crew(crewai: Any, config: AppConfig, state: Se
         tasks_config = tasks_path
 
         @crewai.agent
-        def security_test_reviewer(self):
+        def reviewer(self):
             return crewai.Agent(
-                config=self.agents_config["security_test_reviewer"],
-                llm=_llm(crewai, config, config.models.security_test_reviewer),
+                config=self.agents_config["reviewer"],
+                llm=_llm(crewai, config, config.models.security_testing.reviewer),
                 tools=[review_tool],
                 allow_delegation=False,
             )
@@ -989,15 +989,15 @@ def _build_security_test_reviewer_crew(crewai: Any, config: AppConfig, state: Se
                 crewai,
                 state,
                 config=self.tasks_config["review_security_test_evidence_task"],
-                agent=self.security_test_reviewer(),
-                agent_name="security_test_reviewer",
+                agent=self.reviewer(),
+                agent_name="reviewer",
                 task_name="review_security_test_evidence_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.security_test_reviewer()],
+                agents=[self.reviewer()],
                 tasks=[self.review_security_test_evidence_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
@@ -1006,12 +1006,12 @@ def _build_security_test_reviewer_crew(crewai: Any, config: AppConfig, state: Se
     return SecurityTestReviewerCrew()
 
 
-def _build_security_test_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
+def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     report_tool = _build_write_executed_test_report_tool(crewai, state)
     agents_path, tasks_path = _write_security_testing_subset_configs(
         state.report_dir,
         f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_reporter",
-        agent_keys=["security_test_reporter"],
+        agent_keys=["reporter"],
         task_keys=["write_executed_security_test_report_task"],
     )
 
@@ -1021,10 +1021,10 @@ def _build_security_test_reporter_crew(crewai: Any, config: AppConfig, state: Se
         tasks_config = tasks_path
 
         @crewai.agent
-        def security_test_reporter(self):
+        def reporter(self):
             return crewai.Agent(
-                config=self.agents_config["security_test_reporter"],
-                llm=_llm(crewai, config, config.models.security_test_reporter),
+                config=self.agents_config["reporter"],
+                llm=_llm(crewai, config, config.models.security_testing.reporter),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -1035,15 +1035,15 @@ def _build_security_test_reporter_crew(crewai: Any, config: AppConfig, state: Se
                 crewai,
                 state,
                 config=self.tasks_config["write_executed_security_test_report_task"],
-                agent=self.security_test_reporter(),
-                agent_name="security_test_reporter",
+                agent=self.reporter(),
+                agent_name="reporter",
                 task_name="write_executed_security_test_report_task",
             )
 
         @crewai.crew
         def crew(self):
             return crewai.Crew(
-                agents=[self.security_test_reporter()],
+                agents=[self.reporter()],
                 tasks=[self.write_executed_security_test_report_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
@@ -1066,7 +1066,7 @@ def _build_run_security_command_tool(crewai: Any, config: AppConfig, state: Secu
             blocked_hosts = _disallowed_hosts(command, state.targets)
             if blocked_hosts:
                 state.memory.record_event(
-                    "security_test_executor",
+                    "executor",
                     "tool_blocked",
                     "Blocked security command because it referenced out-of-scope hosts",
                     {
@@ -1104,7 +1104,7 @@ def _build_run_security_command_tool(crewai: Any, config: AppConfig, state: Secu
             state.commands.append(command_record)
             _append_command_log(state.workspace_dir, command_record)
             state.memory.record_event(
-                "security_test_executor",
+                "executor",
                 "tool_result",
                 "run_security_command completed",
                 {
@@ -1142,10 +1142,10 @@ def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecut
                     "revision": state.revision,
                     "structured": content,
                 },
-                "security_test_executor",
+                "executor",
             )
             state.memory.record_event(
-                "security_test_executor",
+                "executor",
                 "evidence_submitted",
                 "Security test executor submitted evidence",
                 {
@@ -1182,10 +1182,10 @@ def _build_submit_execution_review_tool(crewai: Any, state: SecurityTestExecutio
                     "revision": state.revision,
                     "structured": content,
                 },
-                "security_test_reviewer",
+                "reviewer",
             )
             state.memory.record_event(
-                "security_test_reviewer",
+                "reviewer",
                 "review_submitted",
                 "Security test reviewer submitted review",
                 {
@@ -1233,10 +1233,10 @@ def _build_write_executed_test_report_tool(crewai: Any, state: SecurityTestExecu
                     "path": str(state.executed_report_path),
                     "bytes": len(markdown.encode("utf-8")),
                 },
-                "security_test_reporter",
+                "reporter",
             )
             state.memory.record_event(
-                "security_test_reporter",
+                "reporter",
                 "report_written",
                 "Security test reporter wrote executed test report",
                 {

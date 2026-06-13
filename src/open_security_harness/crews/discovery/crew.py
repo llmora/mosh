@@ -9,7 +9,7 @@ from typing import Any, Callable, Protocol
 from open_security_harness.config import AppConfig
 from open_security_harness.crews.discovery.agents import (
     CrawlerAgent,
-    SummarizerAgent,
+    DiscoveryReporterAgent,
     build_discovery_agents,
     discovery_agent_definitions,
 )
@@ -74,9 +74,9 @@ class CrewAIDiscoveryCrewRunner:
     ) -> DiscoveryCrewResult:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.crawler,
-                self.config.models.sbom_compiler,
-                self.config.models.summarizer,
+                self.config.models.discovery.crawler,
+                self.config.models.discovery.technology_mapper,
+                self.config.models.discovery.reporter,
             ]
         )
         if missing_keys:
@@ -100,14 +100,14 @@ class CrewAIDiscoveryCrewRunner:
 
         discovery_agents = build_discovery_agents(self.config)
         crawler_agent = discovery_agents.crawler
-        summarizer_agent = discovery_agents.summarizer
+        reporter_agent = discovery_agents.reporter
 
         crew = _build_yaml_discovery_crew(
             crewai=crewai,
             config=self.config,
             state=state,
             crawler_agent=crawler_agent,
-            summarizer_agent=summarizer_agent,
+            reporter_agent=reporter_agent,
         )
         crew.crew().kickoff(
             inputs={
@@ -120,7 +120,7 @@ class CrewAIDiscoveryCrewRunner:
         if not state.crawl:
             raise RuntimeError("CrewAI crawler agent did not produce crawl findings.")
         if state.summary is None:
-            raise RuntimeError("CrewAI summarizer agent did not write the report.")
+            raise RuntimeError("CrewAI reporter agent did not write the report.")
 
         memory.record_event(
             "orchestrator",
@@ -220,10 +220,10 @@ def _build_yaml_discovery_crew(
     config: AppConfig,
     state: DiscoveryCrewState,
     crawler_agent: CrawlerAgent,
-    summarizer_agent: SummarizerAgent,
+    reporter_agent: DiscoveryReporterAgent,
 ):
     crawler_tool = _build_crawler_tool(crewai, state, crawler_agent)
-    report_tool = _build_report_tool(crewai, state, summarizer_agent)
+    report_tool = _build_report_tool(crewai, state, reporter_agent)
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml"))
 
@@ -236,25 +236,25 @@ def _build_yaml_discovery_crew(
         def crawler(self):
             return crewai.Agent(
                 config=self.agents_config["crawler"],
-                llm=_llm(crewai, config, config.models.crawler),
+                llm=_llm(crewai, config, config.models.discovery.crawler),
                 tools=[crawler_tool],
                 allow_delegation=False,
             )
 
         @crewai.agent
-        def sbom_compiler(self):
+        def technology_mapper(self):
             return crewai.Agent(
-                config=self.agents_config["sbom_compiler"],
-                llm=_llm(crewai, config, config.models.sbom_compiler),
+                config=self.agents_config["technology_mapper"],
+                llm=_llm(crewai, config, config.models.discovery.technology_mapper),
                 tools=[],
                 allow_delegation=False,
             )
 
         @crewai.agent
-        def summarizer(self):
+        def reporter(self):
             return crewai.Agent(
-                config=self.agents_config["summarizer"],
-                llm=_llm(crewai, config, config.models.summarizer),
+                config=self.agents_config["reporter"],
+                llm=_llm(crewai, config, config.models.discovery.reporter),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -276,8 +276,8 @@ def _build_yaml_discovery_crew(
                 crewai,
                 state,
                 config=self.tasks_config["compile_components_task"],
-                agent=self.sbom_compiler(),
-                agent_name="sbom_compiler",
+                agent=self.technology_mapper(),
+                agent_name="technology_mapper",
                 task_name="compile_components_task",
             )
 
@@ -287,8 +287,8 @@ def _build_yaml_discovery_crew(
                 crewai,
                 state,
                 config=self.tasks_config["write_report_task"],
-                agent=self.summarizer(),
-                agent_name="summarizer",
+                agent=self.reporter(),
+                agent_name="reporter",
                 task_name="write_report_task",
             )
 
@@ -372,7 +372,7 @@ def _build_crawler_tool(crewai: Any, state: DiscoveryCrewState, crawler_agent: C
     return DiscoveryCrawlerTool()
 
 
-def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent: SummarizerAgent):
+def _build_report_tool(crewai: Any, state: DiscoveryCrewState, reporter_agent: DiscoveryReporterAgent):
     class NarrativeItem(crewai.BaseModel):
         title: str = crewai.Field(..., description="Short stable item title.")
         detail: str = crewai.Field(..., description="Concise item detail.")
@@ -442,20 +442,20 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent:
 
     class WriteDiscoveryReportTool(crewai.BaseTool):
         name: str = "write_discovery_report"
-        description: str = "Persist the summarizer agent's structured discovery content as a stable Markdown report."
+        description: str = "Persist the reporter agent's structured discovery content as a stable Markdown report."
         args_schema: type[crewai.BaseModel] = ReportInput
 
         def _run(self, report: Any) -> str:
             if not state.crawl:
                 raise RuntimeError("Crawler findings are required before writing the report.")
-            state.summary = summarizer_agent.summarize(state.crawl, state.components, state.memory)
+            state.summary = reporter_agent.summarize(state.crawl, state.components, state.memory)
             report_content = _coerce_report_content(report)
             state.memory.add_item(
                 "llm_report",
                 {
                     "structured": report_content,
                 },
-                "summarizer",
+                "reporter",
             )
             markdown_report = write_reports(
                 state.report_dir,
@@ -466,9 +466,9 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, summarizer_agent:
                 report_content,
             )
             state.memory.record_event(
-                "summarizer",
+                "reporter",
                 "report_written",
-                "Summarizer agent wrote Markdown discovery report",
+                "Discovery reporter wrote Markdown discovery report",
                 {
                     "report_dir": str(state.report_dir),
                     "markdown_bytes": len(markdown_report.encode("utf-8")),
