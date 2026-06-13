@@ -381,3 +381,7 @@ If you are working on docker tool image improvements, make sure you regularly re
 ```bash
 ./scripts/setup.sh --force-docker
 ```
+
+## License
+
+mosh is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
