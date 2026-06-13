@@ -6,21 +6,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from open_security_harness.config import AppConfig
-from open_security_harness.crews.reporting.crew import (
+from mmosh.config import AppConfig
+from mmosh.crews.reporting.crew import (
     CrewAIFinalReportingCrewRunner,
     FinalReportState,
     _build_submit_final_report_review_tool,
     _build_write_final_report_tool,
     build_final_report_bundle,
 )
-from open_security_harness.crews.reporting.reporting import render_final_report, validate_rendered_report
-from open_security_harness.crews.security_testing.crew import (
+from mmosh.crews.reporting.reporting import render_final_report, validate_rendered_report
+from mmosh.crews.security_testing.crew import (
     _with_execution_metadata_mapping,
     render_executed_test_report,
 )
-from open_security_harness.memory import FileMemory
-from open_security_harness.scope import report_dir_name
+from mmosh.memory import FileMemory
+from mmosh.scope import report_dir_name
 
 
 class FakeCrewAI:
@@ -127,11 +127,11 @@ class FinalReportingTests(unittest.TestCase):
             memory = FileMemory(report_dir)
             runner = CrewAIFinalReportingCrewRunner(AppConfig(openrouter_api_key="test-key"))
 
-            with patch("open_security_harness.crews.reporting.crew._load_crewai", return_value=FakeRuntimeCrewAI):
+            with patch("mmosh.crews.reporting.crew._load_crewai", return_value=FakeRuntimeCrewAI):
                 report_path = runner.run("https://example.test", report_dir, memory, bundle)
 
             markdown = report_path.read_text(encoding="utf-8")
-            self.assertIn("# Open Security Harness Security Assessment Report", markdown)
+            self.assertIn("# Model-driven Open Security Harness Security Assessment Report", markdown)
             self.assertIn("## Executive Summary", markdown)
             self.assertIn("### At A Glance", markdown)
             self.assertIn("| Report Context | Details |", markdown)
@@ -576,7 +576,7 @@ def _write_executed_report(
         },
     )
     metadata = {
-        "schema": "appsec-harness.security-test-execution.v1" if legacy_metadata else "osh.security-test-execution.v1",
+        "schema": "mmosh.security-test-execution.v1" if legacy_metadata else "mmosh.security-test-execution.v1",
         "test_id": test_id,
         "status": status,
         "review_accepted": accepted,
@@ -584,7 +584,7 @@ def _write_executed_report(
         "executed_at": "2026-06-13T06:40:12+00:00",
     }
     if legacy_metadata:
-        with_metadata = f"<!-- appsec-harness-execution\n{json.dumps(metadata, sort_keys=True)}\n-->\n\n{markdown}"
+        with_metadata = f"<!-- mmosh-execution\n{json.dumps(metadata, sort_keys=True)}\n-->\n\n{markdown}"
     else:
         with_metadata = _with_execution_metadata_mapping(markdown, metadata)
     executed_dir.joinpath(f"{test_id}.md").write_text(with_metadata, encoding="utf-8")

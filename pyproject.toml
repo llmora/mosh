@@ -3,18 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "open-security-harness"
+name = "mosh"
 version = "0.1.0"
 description = "Agent-coordinated application security discovery and testing workflow."
 requires-python = ">=3.11"
 dependencies = ["crewai>=1.0.0"]
 
 [project.scripts]
-osh = "open_security_harness.cli:main"
+mosh = "mmosh.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["open_security_harness*"]
+include = ["mosh*"]
 
 [tool.setuptools.package-data]
-open_security_harness = ["crews/**/*.yaml"]
+mosh = ["crews/**/*.yaml"]

@@ -9,7 +9,7 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/setup.sh [--skip-docker] [--force-docker] [--help]
 
-Sets up Open Security Harness for local use.
+Sets up Model-driven Open Security Harness for local use.
 
 Options:
   --skip-docker   Install Python package only; do not build tool images.
@@ -62,7 +62,7 @@ fi
 # shellcheck disable=SC1091
 source "$ROOT_DIR/.venv/bin/activate"
 
-echo "Installing Open Security Harness in editable mode"
+echo "Installing Model-driven Open Security Harness in editable mode"
 python -m pip install --upgrade pip
 python -m pip install -e "$ROOT_DIR"
 
@@ -143,14 +143,14 @@ build_image_if_needed() {
 }
 
 build_image_if_needed \
-  "osh-discovery-tools:latest" \
+  "mmosh-discovery-tools:latest" \
   "$ROOT_DIR/tools/discovery/Dockerfile" \
   "$ROOT_DIR/tools/discovery/katana-form-config.yaml" \
   "$ROOT_DIR/tools/discovery/js-endpoint-extractor/package.json" \
   "$ROOT_DIR/tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs"
 
 build_image_if_needed \
-  "osh-security-tools:latest" \
+  "mmosh-security-tools:latest" \
   "$ROOT_DIR/tools/security/Dockerfile"
 
 echo "Setup complete. Activate the environment with: source .venv/bin/activate"

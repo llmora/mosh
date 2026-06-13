@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from open_security_harness.crews.discovery.crawler import Crawler
-from open_security_harness.docker_tools import DockerToolRunner
-from open_security_harness.models import CrawledPage, CrawlResult, DiscoveryCandidate
-from open_security_harness.scope import ScopePolicy, normalize_url, strip_fragment
+from mmosh.crews.discovery.crawler import Crawler
+from mmosh.docker_tools import DockerToolRunner
+from mmosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
+from mmosh.scope import ScopePolicy, normalize_url, strip_fragment
 
 
 @dataclass(frozen=True)

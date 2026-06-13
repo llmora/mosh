@@ -6,22 +6,22 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from open_security_harness.config import AppConfig
-from open_security_harness.crews.discovery.agents import (
+from mmosh.config import AppConfig
+from mmosh.crews.discovery.agents import (
     CrawlerAgent,
     DiscoveryReporterAgent,
     build_discovery_agents,
     discovery_agent_definitions,
 )
-from open_security_harness.memory import FileMemory
-from open_security_harness.models import Event
-from open_security_harness.models import CrawlResult
-from open_security_harness.crews.discovery.reporting import write_reports
-from open_security_harness.scope import report_dir_name
-from open_security_harness.scope import normalize_url
+from mmosh.memory import FileMemory
+from mmosh.models import Event
+from mmosh.models import CrawlResult
+from mmosh.crews.discovery.reporting import write_reports
+from mmosh.scope import report_dir_name
+from mmosh.scope import normalize_url
 
 
-CREW_CONFIG_PACKAGE = "open_security_harness.crews"
+CREW_CONFIG_PACKAGE = "mmosh.crews"
 
 
 @dataclass

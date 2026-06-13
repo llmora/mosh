@@ -1,4 +1,4 @@
-# Open Security Harness Specification
+# Model-driven Open Security Harness Specification
 
 ## Goal
 
@@ -7,7 +7,7 @@ Build an application security testing harness that uses coordinated agents to pe
 The first working prototype is a CLI-only discovery harness for a single URL:
 
 ```bash
-osh <URL>
+mosh <URL>
 ```
 
 The system should be built in small, testable steps. Do not over-engineer early versions, but keep the core architecture clear enough to support future crews.
@@ -141,7 +141,7 @@ the application should use OpenRouter for that model. If a crew uses any
 non-DeepSeek model, `OPENROUTER_API_KEY` is still required for that model.
 
 Each agent can be configured to use a specific LLM model through an optional
-`osh.yaml` file in the directory where the CLI is run. The file supports a
+`mmmosh.yaml` file in the directory where the CLI is run. The file supports a
 single `models` mapping grouped by crew:
 
 ```yaml
@@ -180,23 +180,23 @@ The discovery workflow must run as a CrewAI crew. Agents, exchanges, tasks, and 
 CrewAI agent and task definitions should use CrewAI's built-in YAML configuration pattern. Configuration is grouped by crew, so each crew's agents and tasks are kept together for future reference:
 
 - Discovery crew:
-  - `src/open_security_harness/crews/discovery/agents.yaml`
-  - `src/open_security_harness/crews/discovery/tasks.yaml`
+  - `src/mosh/crews/discovery/agents.yaml`
+  - `src/mosh/crews/discovery/tasks.yaml`
 - Security planning crew:
-  - `src/open_security_harness/crews/security_planning/agents.yaml`
-  - `src/open_security_harness/crews/security_planning/tasks.yaml`
+  - `src/mosh/crews/security_planning/agents.yaml`
+  - `src/mosh/crews/security_planning/tasks.yaml`
 - Security testing crew:
-  - `src/open_security_harness/crews/security_testing/agents.yaml`
-  - `src/open_security_harness/crews/security_testing/tasks.yaml`
+  - `src/mosh/crews/security_testing/agents.yaml`
+  - `src/mosh/crews/security_testing/tasks.yaml`
 
 Python should bind live tool implementations to the YAML-defined agents, but agent roles, goals, backstories, task descriptions, and expected outputs should live in YAML.
 
 Crew-specific Python code should also live with the crew. For example, the
 discovery crew owns its `crew.py`, `agents.py`, `crawler.py`, `tools.py`, and
-`reporting.py` modules under `src/open_security_harness/crews/discovery/`. Shared
+`reporting.py` modules under `src/mosh/crews/discovery/`. Shared
 application primitives such as configuration, Docker execution, engagement
 files, file-backed memory, shared models, and scope helpers stay at the
-`open_security_harness` package root.
+`mosh` package root.
 
 ## Shared Memory
 
@@ -436,7 +436,7 @@ discover -> plan-security -> test-security -> report
 The CLI command is:
 
 ```bash
-osh report https://app.example.com
+mosh report https://app.example.com
 ```
 
 The output path is:

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from open_security_harness.config import AppConfig
+from mmosh.config import AppConfig
 
 
 class AppConfigTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.max_depth, 5)
 
     def test_max_depth_can_be_overridden_from_env(self) -> None:
-        with patch.dict(os.environ, {"OSH_MAX_DEPTH": "7"}, clear=True):
+        with patch.dict(os.environ, {"MOSH_MAX_DEPTH": "7"}, clear=True):
             config = AppConfig.from_env()
 
         self.assertEqual(config.max_depth, 7)
@@ -26,10 +26,10 @@ class AppConfigTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "OSH_DIRB_WORDLIST": "/tmp/words.txt",
-                "OSH_DIRB_DOCKER_TIMEOUT": "45",
-                "OSH_CANDIDATE_FOLLOW_UP_LIMIT": "2",
-                "OSH_PLANNING_MAX_REVISIONS": "4",
+                "MOSH_DIRB_WORDLIST": "/tmp/words.txt",
+                "MOSH_DIRB_DOCKER_TIMEOUT": "45",
+                "MOSH_CANDIDATE_FOLLOW_UP_LIMIT": "2",
+                "MOSH_PLANNING_MAX_REVISIONS": "4",
             },
             clear=True,
         ):
@@ -49,7 +49,7 @@ class AppConfigTests(unittest.TestCase):
 
     def test_models_can_be_loaded_from_osh_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "osh.yaml"
+            config_path = Path(directory) / "mmmosh.yaml"
             config_path.write_text(
                 "\n".join(
                     [
@@ -85,7 +85,7 @@ class AppConfigTests(unittest.TestCase):
 
     def test_unknown_model_key_in_osh_yaml_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "osh.yaml"
+            config_path = Path(directory) / "mmmosh.yaml"
             config_path.write_text("models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery.crawlerr`"):
@@ -134,7 +134,7 @@ class AppConfigTests(unittest.TestCase):
     def test_engagement_template_refinement_can_be_disabled_from_env(self) -> None:
         with patch.dict(
             os.environ,
-            {"OSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM": "false"},
+            {"MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM": "false"},
             clear=True,
         ):
             config = AppConfig.from_env()
@@ -145,9 +145,9 @@ class AppConfigTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "OSH_SECURITY_TOOL_IMAGE": "security-tools:test",
-                "OSH_SECURITY_COMMAND_TIMEOUT": "45",
-                "OSH_SECURITY_EXECUTION_MAX_REVISIONS": "3",
+                "MOSH_SECURITY_TOOL_IMAGE": "security-tools:test",
+                "MOSH_SECURITY_COMMAND_TIMEOUT": "45",
+                "MOSH_SECURITY_EXECUTION_MAX_REVISIONS": "3",
             },
             clear=True,
         ):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from open_security_harness.scope import ScopePolicy, normalize_url, report_dir_name
+from mmosh.scope import ScopePolicy, normalize_url, report_dir_name
 
 
 class ScopePolicyTests(unittest.TestCase):

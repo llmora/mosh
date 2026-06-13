@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from open_security_harness.config import AppConfig
-from open_security_harness.crews.discovery.crew import DiscoveryOrchestrator
-from open_security_harness.scope import report_dir_name
+from mmosh.config import AppConfig
+from mmosh.crews.discovery.crew import DiscoveryOrchestrator
+from mmosh.scope import report_dir_name
 from tests.fakes import FakeCrewRunner
 from tests.fixtures import fixture_server
 

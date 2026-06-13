@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 
-FINAL_REPORT_SCHEMA_VERSION = "osh.final-report.v1"
+FINAL_REPORT_SCHEMA_VERSION = "mmosh.final-report.v1"
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "informational", "unknown"]
 REMEDIATION_PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "Not recorded": 3}
 
@@ -21,7 +21,7 @@ def render_final_report(target_url: str, bundle: dict[str, Any], report_content:
     severity_counts = _severity_counts(findings)
     outcome_counts = _outcome_counts(bundle)
     lines = [
-        "# Open Security Harness Security Assessment Report",
+        "# Model-driven Open Security Harness Security Assessment Report",
         "",
     ]
     lines.extend(_report_metadata_lines(target_url, bundle))
@@ -258,7 +258,7 @@ def _report_metadata_lines(target_url: str, bundle: dict[str, Any]) -> list[str]
         f"| Assessment target | `{target_url}` |",
         "| Assessment type | Web application security assessment |",
         f"| Engagement timeline | `{report_period}` |",
-        "| Prepared with | Open Security Harness (`osh`) |",
+        "| Prepared with | Model-driven Open Security Harness (`mosh`) |",
     ]
 
 
@@ -466,7 +466,7 @@ def _detailed_finding_lines(finding: dict[str, Any], report_content: dict[str, A
     retest_guidance = (
         _text(writer_detail.get("verification_guidance"))
         or _text(writer_detail.get("retest_guidance"))
-        or "Rerun `osh test-security` for the affected test and then `osh report` after remediation."
+        or "Rerun `mosh test-security` for the affected test and then `mosh report` after remediation."
     )
     references = _references(writer_detail, finding)
     cvss = _cvss_label(finding.get("cvss"))
@@ -670,7 +670,7 @@ def _default_testing_approach(bundle: dict[str, Any]) -> str:
 
 def _default_methodology() -> str:
     return (
-        "The report is assembled from Open Security Harness discovery, security planning, "
+        "The report is assembled from Model-driven Open Security Harness discovery, security planning, "
         "preflight, execution, and review artifacts. Findings are included only when "
         "the executed test outcome is a finding and the review stage confirms it for reporting."
     )
@@ -862,7 +862,7 @@ def _tools_used_lines(bundle: dict[str, Any]) -> list[str]:
             name = _text(tool)
             if name:
                 tools.add(name)
-    lines = ["- Open Security Harness"]
+    lines = ["- Model-driven Open Security Harness"]
     lines.extend(f"- {tool}" for tool in sorted(tools))
     return lines
 

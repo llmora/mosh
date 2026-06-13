@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from open_security_harness.docker_tools import DockerToolResult
-from open_security_harness.crews.discovery.tools import ExtractifyDockerTool, parse_extractify_output
+from mmosh.docker_tools import DockerToolResult
+from mmosh.crews.discovery.tools import ExtractifyDockerTool, parse_extractify_output
 
 
 class FakeDockerRunner:

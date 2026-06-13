@@ -7,12 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from open_security_harness.config import AppConfig
-from open_security_harness.docker_tools import DockerToolResult
-from open_security_harness.engagement import write_engagement_template
-from open_security_harness.memory import FileMemory
-from open_security_harness.scope import report_dir_name
-from open_security_harness.crews.security_testing.crew import (
+from mmosh.config import AppConfig
+from mmosh.docker_tools import DockerToolResult
+from mmosh.engagement import write_engagement_template
+from mmosh.memory import FileMemory
+from mmosh.scope import report_dir_name
+from mmosh.crews.security_testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
     collect_security_testing_discovery_updates,
@@ -438,7 +438,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
 
-            with patch("open_security_harness.crews.security_testing.crew.DockerToolRunner", return_value=fake_runner):
+            with patch("mmosh.crews.security_testing.crew.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_security_command_tool(_FakeCrewAI, AppConfig(), state)
                 result = json.loads(tool._run("curl https://api.example.test/api/private/auth/me", "auth check"))
 
@@ -542,7 +542,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
     def test_security_testing_tasks_treat_effective_targets_as_canonical(self) -> None:
         task_yaml = (
-            Path("src/open_security_harness/crews/security_testing/tasks.yaml")
+            Path("src/mosh/crews/security_testing/tasks.yaml")
             .read_text(encoding="utf-8")
             .lower()
         )

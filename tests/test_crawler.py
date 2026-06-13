@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from open_security_harness.crews.discovery.crawler import Crawler
+from mmosh.crews.discovery.crawler import Crawler
 from tests.fixtures import fixture_server
 
 

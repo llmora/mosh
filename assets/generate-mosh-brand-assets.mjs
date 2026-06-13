@@ -34,7 +34,7 @@ function svg({ w, h, title, bg, content }) {
 
 function moshMark({ left = P.BLACK, right = P.ORANGE, harness = P.ORANGE } = {}) {
   return `
-<g id="mosh-mark">
+<g id="mmosh-mark">
   <!-- Split abstract M silhouette.
        Two filled halves create a clear center split and a lower center point. -->
 
@@ -418,20 +418,20 @@ async function exportPngs() {
   await png("favicon/favicon.svg", "favicon/apple-touch-icon.png", 180, 180);
   await png("favicon/favicon.svg", "png/social/github-avatar.png", 512, 512);
 
-  await png("svg/mosh-logo-horizontal-light.svg", "png/logo/logo-horizontal-light-transparent.png", 1200);
-  await png("svg/mosh-logo-horizontal-dark.svg", "png/logo/logo-horizontal-dark-transparent.png", 1200);
-  await png("svg/mosh-logo-horizontal-on-light.svg", "png/logo/logo-horizontal-on-light.png", 1200);
-  await png("svg/mosh-logo-horizontal-on-dark.svg", "png/logo/logo-horizontal-on-dark.png", 1200);
+  await png("svg/mmosh-logo-horizontal-light.svg", "png/logo/logo-horizontal-light-transparent.png", 1200);
+  await png("svg/mmosh-logo-horizontal-dark.svg", "png/logo/logo-horizontal-dark-transparent.png", 1200);
+  await png("svg/mmosh-logo-horizontal-on-light.svg", "png/logo/logo-horizontal-on-light.png", 1200);
+  await png("svg/mmosh-logo-horizontal-on-dark.svg", "png/logo/logo-horizontal-on-dark.png", 1200);
 
-  await png("svg/mosh-wordmark-light.svg", "png/logo/wordmark-light-transparent.png", 900);
-  await png("svg/mosh-wordmark-dark.svg", "png/logo/wordmark-dark-transparent.png", 900);
+  await png("svg/mmosh-wordmark-light.svg", "png/logo/wordmark-light-transparent.png", 900);
+  await png("svg/mmosh-wordmark-dark.svg", "png/logo/wordmark-dark-transparent.png", 900);
 
-  await png("svg/mosh-icon-light.svg", "png/icon/icon-light-transparent.png", 1024, 1024);
-  await png("svg/mosh-icon-dark.svg", "png/icon/icon-dark-transparent.png", 1024, 1024);
+  await png("svg/mmosh-icon-light.svg", "png/icon/icon-light-transparent.png", 1024, 1024);
+  await png("svg/mmosh-icon-dark.svg", "png/icon/icon-dark-transparent.png", 1024, 1024);
 
-  await png("social/mosh-readme-header.svg", "png/social/readme-header.png", 1600, 640);
-  await png("social/mosh-open-graph-card.svg", "png/social/open-graph-card.png", 1200, 630);
-  await png("usage-guide/mosh-usage-guide.svg", "usage-guide/mosh-usage-guide.png", 1600, 1000);
+  await png("social/mmosh-readme-header.svg", "png/social/readme-header.png", 1600, 640);
+  await png("social/mmosh-open-graph-card.svg", "png/social/open-graph-card.png", 1200, 630);
+  await png("usage-guide/mmosh-usage-guide.svg", "usage-guide/mmosh-usage-guide.png", 1600, 1000);
 
   try {
     const pngToIco = (await import("png-to-ico")).default;
@@ -449,26 +449,26 @@ async function exportPngs() {
 async function main() {
   await fs.rm(OUT, { recursive: true, force: true });
 
-  await write("svg/mosh-icon-dark.svg", iconSvg({ mode: "dark" }));
-  await write("svg/mosh-icon-light.svg", iconSvg({ mode: "light" }));
-  await write("svg/mosh-icon-mono-black.svg", iconSvg({ mode: "mono-black" }));
-  await write("svg/mosh-icon-mono-white.svg", iconSvg({ mode: "mono-white" }));
+  await write("svg/mmosh-icon-dark.svg", iconSvg({ mode: "dark" }));
+  await write("svg/mmosh-icon-light.svg", iconSvg({ mode: "light" }));
+  await write("svg/mmosh-icon-mono-black.svg", iconSvg({ mode: "mono-black" }));
+  await write("svg/mmosh-icon-mono-white.svg", iconSvg({ mode: "mono-white" }));
 
-  await write("svg/mosh-logo-horizontal-dark.svg", horizontalLogoSvg({ mode: "dark", background: false }));
-  await write("svg/mosh-logo-horizontal-light.svg", horizontalLogoSvg({ mode: "light", background: false }));
-  await write("svg/mosh-logo-horizontal-on-dark.svg", horizontalLogoSvg({ mode: "dark", background: true }));
-  await write("svg/mosh-logo-horizontal-on-light.svg", horizontalLogoSvg({ mode: "light", background: true }));
+  await write("svg/mmosh-logo-horizontal-dark.svg", horizontalLogoSvg({ mode: "dark", background: false }));
+  await write("svg/mmosh-logo-horizontal-light.svg", horizontalLogoSvg({ mode: "light", background: false }));
+  await write("svg/mmosh-logo-horizontal-on-dark.svg", horizontalLogoSvg({ mode: "dark", background: true }));
+  await write("svg/mmosh-logo-horizontal-on-light.svg", horizontalLogoSvg({ mode: "light", background: true }));
 
-  await write("svg/mosh-wordmark-dark.svg", wordmarkSvg({ mode: "dark" }));
-  await write("svg/mosh-wordmark-light.svg", wordmarkSvg({ mode: "light" }));
-  await write("svg/mosh-wordmark-mono-black.svg", wordmarkSvg({ mode: "mono-black" }));
-  await write("svg/mosh-wordmark-mono-white.svg", wordmarkSvg({ mode: "mono-white" }));
+  await write("svg/mmosh-wordmark-dark.svg", wordmarkSvg({ mode: "dark" }));
+  await write("svg/mmosh-wordmark-light.svg", wordmarkSvg({ mode: "light" }));
+  await write("svg/mmosh-wordmark-mono-black.svg", wordmarkSvg({ mode: "mono-black" }));
+  await write("svg/mmosh-wordmark-mono-white.svg", wordmarkSvg({ mode: "mono-white" }));
 
   await write("favicon/favicon.svg", faviconSvg());
-  await write("social/mosh-readme-header.svg", readmeHeaderSvg());
-  await write("social/mosh-open-graph-card.svg", openGraphSvg());
-  await write("usage-guide/mosh-usage-guide.svg", usageGuideSvg());
-  await write("usage-guide/mosh-usage-guide.md", usageGuideMd());
+  await write("social/mmosh-readme-header.svg", readmeHeaderSvg());
+  await write("social/mmosh-open-graph-card.svg", openGraphSvg());
+  await write("usage-guide/mmosh-usage-guide.svg", usageGuideSvg());
+  await write("usage-guide/mmosh-usage-guide.md", usageGuideMd());
 
   await exportPngs();
 

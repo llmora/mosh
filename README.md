@@ -1,23 +1,23 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Open Security Harness logo" width="760">
+  <img src="assets/logo.svg" alt="Model-driven Open Security Harness logo" width="760">
 </p>
 
-# osh: Open Security Harness
+# mosh: Model-driven Open Security Harness
 
 Find security vulnerabilities in your applications and resolve them, using AI to simulate the tasks a security researcher runs.
 
 ## Why do I need a harness?
 
-Using LLMs to test the security of an application is a lot more than just pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, the model needs tools to interact with the application under test and execution needs to be controlled, evidenced, and repeatable. `osh` implements the harness that wraps around models to conduct a security test.
+Using LLMs to test the security of an application is a lot more than just pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, the model needs tools to interact with the application under test and execution needs to be controlled, evidenced, and repeatable. `mosh` implements the harness that wraps around models to conduct a security test.
 
-`osh` simulates the core tasks a security researcher performs when testing an application:
+`mosh` simulates the core tasks a security researcher performs when testing an application:
 
 - **Discovery:** map the application surface, routes, links, forms, JavaScript assets, third-party services, and observable technologies.
 - **Security planning:** turn discovery evidence into scoped, testable security hypotheses.
 - **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
 - **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
 
-When more advanced LLM models are released, you do not need to modify the harness, just configure `osh` to use the new models instead.
+When more advanced LLM models are released, you do not need to modify the harness, just configure `mosh` to use the new models instead.
 
 ## Installation
 
@@ -29,8 +29,8 @@ When more advanced LLM models are released, you do not need to modify the harnes
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/llmora/open-security-harness.git
-cd open-security-harness
+git clone https://github.com/llmora/mmosh.git
+cd mosh
 ```
 
 2. Run setup:
@@ -39,7 +39,7 @@ cd open-security-harness
 ./scripts/setup.sh
 ```
 
-The setup script creates `.venv`, installs Open Security Harness in editable mode, and builds the Docker tool images.
+The setup script creates `.venv`, installs Model-driven Open Security Harness in editable mode, and builds the Docker tool images.
 
 3. Activate the environment:
 
@@ -65,7 +65,7 @@ export OPENROUTER_API_KEY="your-openrouter-api-key"
 
 ### Model Selection
 
-By default, `osh` uses DeepSeek models to balance quality and cost. To choose different models, create `osh.yaml` in the directory where you run the CLI:
+By default, `mosh` uses DeepSeek models to balance quality and cost. To choose different models, create `mmmosh.yaml` in the directory where you run the CLI:
 
 ```yaml
 models:
@@ -116,7 +116,7 @@ Use OpenRouter model IDs such as `openai/gpt-5.2` or `anthropic/claude-sonnet-4.
 Start by mapping the application:
 
 ```bash
-osh discover https://app.example.com
+mosh discover https://app.example.com
 ```
 
 Discovery writes:
@@ -128,15 +128,15 @@ report/<host>/discovery/report.md
 Optional tuning flags:
 
 ```bash
-osh discover https://app.example.com --max-pages 100 --max-depth 4 --output-root report
+mosh discover https://app.example.com --max-pages 100 --max-depth 4 --output-root report
 ```
 
 ### 2. Create A Security Test Plan
 
-Once discovery has produced evidence, ask `osh` to turn it into testable hypotheses:
+Once discovery has produced evidence, ask `mosh` to turn it into testable hypotheses:
 
 ```bash
-osh plan-security https://app.example.com
+mosh plan-security https://app.example.com
 ```
 
 This reads from `report/<host>/discovery/` and writes:
@@ -171,7 +171,7 @@ The security testing crew treats this file as execution configuration. If you ma
 When the plan and engagement file are ready, run:
 
 ```bash
-osh test-security https://app.example.com
+mosh test-security https://app.example.com
 ```
 
 Security testing writes:
@@ -192,19 +192,19 @@ Open `preflight.md` after the first run. It tells you which tests were ready, wh
 You can run security testing repeatedly to incrementally complete the test:
 
 ```bash
-osh test-security https://app.example.com
+mosh test-security https://app.example.com
 ```
 
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
 
-If executed tests discover new application surface area, `osh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
+If executed tests discover new application surface area, `mosh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
 
 ### 5. Create The Final Report
 
 When security testing is complete, create the customer-facing engagement report:
 
 ```bash
-osh report https://app.example.com
+mosh report https://app.example.com
 ```
 
 Final reporting writes:
@@ -229,24 +229,24 @@ The report is structured as a customer deliverable:
 
 CVSS is included only when it is present in the source execution evidence. Otherwise the final report marks it as `Not scored`.
 
-Qualitative severity is taken from source evidence. If a finding no longer appears in the latest security plan, `osh` falls back to the executed test report metadata and Scope section rather than losing the severity.
+Qualitative severity is taken from source evidence. If a finding no longer appears in the latest security plan, `mosh` falls back to the executed test report metadata and Scope section rather than losing the severity.
 
 The Markdown report is intended to be readable as-is. Source evidence and remediation snippets are fenced when needed so malformed Markdown from an execution artifact cannot quote the rest of the report. A styled HTML/PDF export can sit on top later, but the Markdown remains the source deliverable so it is easy to review, diff, and version.
 
 ## End-To-End Example
 
 ```bash
-osh discover https://app.example.com
-osh plan-security https://app.example.com
+mosh discover https://app.example.com
+mosh plan-security https://app.example.com
 
 # Review and edit report/app.example.com/security-test-planning/engagement_template.yaml.
 
-osh test-security https://app.example.com
+mosh test-security https://app.example.com
 
 # If preflight reports blocked tests, add the missing engagement details and run it again.
-osh test-security https://app.example.com
+mosh test-security https://app.example.com
 
-osh report https://app.example.com
+mosh report https://app.example.com
 ```
 
 ## What You Get
@@ -284,24 +284,24 @@ A practical remediation loop looks like this:
 4. Run security testing again:
 
 ```bash
-osh test-security https://app.example.com
+mosh test-security https://app.example.com
 ```
 
-`osh` compares the current plan and execution metadata with previous reports. Tests that are already current and accepted are skipped, while tests that need fresh evidence can run again. This makes repeat testing useful after a fix: you keep the historical reports, but the current run shows whether the issue still reproduces.
+`mosh` compares the current plan and execution metadata with previous reports. Tests that are already current and accepted are skipped, while tests that need fresh evidence can run again. This makes repeat testing useful after a fix: you keep the historical reports, but the current run shows whether the issue still reproduces.
 
 If a fix changes the application surface, run discovery and planning again before retesting:
 
 ```bash
-osh discover https://app.example.com
-osh plan-security https://app.example.com
-osh test-security https://app.example.com
+mosh discover https://app.example.com
+mosh plan-security https://app.example.com
+mosh test-security https://app.example.com
 ```
 
-Keep the engagement file up to date as the application changes. New roles, test accounts, safe test data, or staging mappings can unblock additional tests and give `osh` enough context to validate more of the application.
+Keep the engagement file up to date as the application changes. New roles, test accounts, safe test data, or staging mappings can unblock additional tests and give `mosh` enough context to validate more of the application.
 
 ## Implementation
 
-Open Security Harness keeps the runtime architecture simple:
+Model-driven Open Security Harness keeps the runtime architecture simple:
 
 ```text
 orchestrator -> agent -> tools
@@ -344,7 +344,7 @@ Force rebuild Docker tool images when working on Docker-backed functionality:
 
 ## Contributing
 
-Open Security Harness is easy to explain, practical, and intentionally focused. Good contributions make it more useful without making it harder to understand.
+Model-driven Open Security Harness is easy to explain, practical, and intentionally focused. Good contributions make it more useful without making it harder to understand.
 
 Please follow these guidelines:
 

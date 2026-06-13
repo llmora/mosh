@@ -4,13 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from open_security_harness.config import AppConfig
-from open_security_harness.models import Event
-from open_security_harness.crews.discovery.crew import DiscoveryOrchestrator
-from open_security_harness.crews.reporting.crew import FinalReportingOrchestrator
-from open_security_harness.scope import report_dir_name
-from open_security_harness.crews.security_planning.crew import SecurityTestPlanningOrchestrator
-from open_security_harness.crews.security_testing.crew import SecurityTestingOrchestrator
+from mmosh.config import AppConfig
+from mmosh.models import Event
+from mmosh.crews.discovery.crew import DiscoveryOrchestrator
+from mmosh.crews.reporting.crew import FinalReportingOrchestrator
+from mmosh.scope import report_dir_name
+from mmosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+from mmosh.crews.security_testing.crew import SecurityTestingOrchestrator
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,9 +18,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = AppConfig.from_env()
     except Exception as exc:
-        print(f"osh failed: {exc}", file=sys.stderr)
+        print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
-    parser = argparse.ArgumentParser(prog="osh")
+    parser = argparse.ArgumentParser(prog="mosh")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     discover_parser = subcommands.add_parser("discover", help="Run the discovery crew")
@@ -65,7 +65,7 @@ def _run_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         report_dir = orchestrator.run(args.url, max_pages=args.max_pages, max_depth=args.max_depth)
     except Exception as exc:
-        print(f"osh failed: {exc}", file=sys.stderr)
+        print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Report written to {report_dir}")
     return 0
@@ -80,7 +80,7 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
     try:
         report_dir = orchestrator.run(args.url)
     except Exception as exc:
-        print(f"osh failed: {exc}", file=sys.stderr)
+        print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Security test plan written to {report_dir}")
     return 0
@@ -101,7 +101,7 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         report_dir = orchestrator.run(args.url, engagement_file=engagement_file)
     except Exception as exc:
-        print(f"osh failed: {exc}", file=sys.stderr)
+        print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Security testing preflight written to {report_dir}")
     return 0
@@ -116,7 +116,7 @@ def _run_final_reporting(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         report_dir = orchestrator.run(args.url)
     except Exception as exc:
-        print(f"osh failed: {exc}", file=sys.stderr)
+        print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Final report written to {report_dir / 'report.md'}")
     return 0
