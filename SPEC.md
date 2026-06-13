@@ -161,6 +161,10 @@ models:
     executor: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
     reporter: openai/gpt-5.2-mini
+
+  reporting:
+    writer: openai/gpt-5.2-mini
+    reviewer: openai/gpt-5.2
 ```
 
 Omitted model keys keep their built-in defaults. Unknown model keys should fail
@@ -419,6 +423,96 @@ trigger another discovery update or security-planning refresh. Only feedback
 facts not already present in discovery memory should cause the discovery report
 to update and the security planning crew to refresh.
 
+## Final Reporting Crew
+
+The final reporting crew produces the customer-facing deliverable for a security
+testing engagement. It runs after discovery, security planning, and security
+testing:
+
+```text
+discover -> plan-security -> test-security -> report
+```
+
+The CLI command is:
+
+```bash
+osh report https://app.example.com
+```
+
+The output path is:
+
+```text
+report/<host>/final-report/report.md
+```
+
+The final report should include:
+
+- Executive Summary:
+  - at-a-glance target, execution, finding, and severity metrics
+  - what was tested
+  - overall security posture
+  - headline risks
+  - number of findings by severity
+  - remediation priorities ordered by qualitative severity
+- Engagement Overview:
+  - target URL
+  - effective target mappings
+  - dates or run timestamps
+  - scope and limitations
+  - testing approach
+- Summary of Findings:
+  - table with ID, title, severity, status, affected area, and remediation priority
+  - severity counts
+  - accepted, inconclusive, failed, and no-finding breakdown
+- Key Discovery Areas:
+  - important routes, auth areas, APIs, forms, technologies, and exposed surfaces
+  - relevant limitations
+- Detailed Findings for accepted findings only:
+  - title
+  - severity and rationale
+  - affected target/component
+  - evidence summary
+  - reproduction summary
+  - impact
+  - remediation guidance
+  - verification/retest guidance
+  - references, such as OWASP WSTG, ASVS, or CWE, when available from source evidence
+- Tests With No Finding / Inconclusive:
+  - concise appendix for no-finding, inconclusive, failed, or reviewer-rejected tests
+- Appendix:
+  - methodology
+  - tools used
+  - evidence index
+  - raw report references
+
+Final reporting must assemble a deterministic evidence bundle before the LLM
+agents run. The bundle is built from discovery reports and memory, security test
+planning reports and memory, security-testing preflight output, security-testing
+memory, and current executed test reports. The bundle determines which executed
+tests are accepted findings. No-finding, inconclusive, failed, or reviewer
+rejected tests must not be promoted into detailed findings.
+
+The final reporting crew has these agents:
+
+- writer: writes the customer-facing report through the `write_final_report`
+  tool
+- reviewer: reviews the generated report through the
+  `submit_final_report_review` tool
+
+Both agents must be constrained by the deterministic bundle. The writer may make
+the report easier to read, but must not invent findings, affected systems,
+severity, evidence, remediation, or CVSS scores. The reviewer must reject reports
+that introduce unsupported claims or omit accepted findings.
+
+Qualitative severity should be sourced deterministically. Use current security
+plan priority when available, then executed test metadata, then the executed
+test report Scope priority. This preserves severity for accepted historical
+findings that no longer appear in the latest refreshed plan.
+
+CVSS is optional. It may be included only when already present in source
+execution evidence. If the bundle does not contain a CVSS score/vector for a
+finding, the final report must state `Not scored`.
+
 ## Discovery Scope
 
 The only current target type is a URL.
@@ -527,4 +621,9 @@ At minimum, tests should cover:
 
 # Roadmap
 
-No pending roadmap items.
+* Implement security testing for source code, based on a repo URL or a local filesystem path
+* If the user provides the source code repo and a live URL for testing use a combined approach that uses the source code and the live systems to complement each other. This needs to be just more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific)
+* We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
+* Move the tool execution to docker, e.g. remove local dependencies
+* Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF.
+* We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.

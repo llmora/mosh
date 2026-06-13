@@ -60,6 +60,8 @@ class AppConfigTests(unittest.TestCase):
                         "    reviewer: openai/gpt-5.2",
                         "  security_testing:",
                         "    reviewer: 'anthropic/claude-sonnet-4.5'",
+                        "  reporting:",
+                        "    writer: openai/gpt-5.2-mini",
                     ]
                 ),
                 encoding="utf-8",
@@ -71,6 +73,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.models.discovery.crawler, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.security_planning.reviewer, "openai/gpt-5.2")
         self.assertEqual(config.models.security_testing.reviewer, "anthropic/claude-sonnet-4.5")
+        self.assertEqual(config.models.reporting.writer, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.discovery.reporter, "deepseek/deepseek-v4-flash")
 
     def test_missing_osh_yaml_keeps_default_models(self) -> None:

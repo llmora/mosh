@@ -6,9 +6,9 @@
 
 Find security vulnerabilities in your applications and resolve them, using AI to simulate the tasks a security researcher runs.
 
-## Harness what?
+## Why do I need a harness?
 
-Using LLMs to test the security of an application is a lot more than pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, and execution needs to be controlled, evidenced, and repeatable. `osh` implements that harness.
+Using LLMs to test the security of an application is a lot more than just pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, the model needs tools to interact with the application under test and execution needs to be controlled, evidenced, and repeatable. `osh` implements the harness that wraps around models to conduct a security test.
 
 `osh` simulates the core tasks a security researcher performs when testing an application:
 
@@ -17,7 +17,7 @@ Using LLMs to test the security of an application is a lot more than pointing a 
 - **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
 - **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
 
-When more advanced LLM models are released, you do not need to modify the harness. Configure `osh` to use the new model IDs instead.
+When more advanced LLM models are released, you do not need to modify the harness, just configure `osh` to use the new models instead.
 
 ## Installation
 
@@ -65,7 +65,7 @@ export OPENROUTER_API_KEY="your-openrouter-api-key"
 
 ### Model Selection
 
-By default, `osh` uses DeepSeek models. To choose different models, create `osh.yaml` in the directory where you run the CLI:
+By default, `osh` uses DeepSeek models to balance quality and cost. To choose different models, create `osh.yaml` in the directory where you run the CLI:
 
 ```yaml
 models:
@@ -84,6 +84,10 @@ models:
     executor: deepseek/deepseek-v4-flash
     reviewer: deepseek/deepseek-v4-pro
     reporter: deepseek/deepseek-v4-flash
+
+  reporting:
+    writer: deepseek/deepseek-v4-flash
+    reviewer: deepseek/deepseek-v4-pro
 ```
 
 Only include the agents you want to override; omitted agents keep their defaults. For example:
@@ -97,6 +101,9 @@ models:
     reviewer: openai/gpt-5.2
 
   security_testing:
+    reviewer: openai/gpt-5.2
+
+  reporting:
     reviewer: openai/gpt-5.2
 ```
 
@@ -157,7 +164,7 @@ This file is deliberately small. It is where you confirm:
 - credentials by role
 - safe test data
 
-The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target (useful if you want to run the tests against a pre-prod environment).
+The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target (useful if you want to run the tests against a pre-prod environment). You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing.
 
 ### 4. Run Security Testing
 
@@ -182,7 +189,7 @@ Every security-testing run starts with a preflight. The preflight reads the secu
 
 Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
 
-You can run security testing repeatedly:
+You can run security testing repeatedly to incrementally complete the test:
 
 ```bash
 osh test-security https://app.example.com
@@ -191,6 +198,38 @@ osh test-security https://app.example.com
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, accepted execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not accepted, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
 
 If executed tests discover new application surface area, `osh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
+
+### 5. Create The Final Report
+
+When security testing is complete, create the customer-facing engagement report:
+
+```bash
+osh report https://app.example.com
+```
+
+Final reporting writes:
+
+```text
+report/<host>/final-report/report.md
+```
+
+The final report is different from the working documents used during testing. It incorporates the main discovery context, the executed test outcomes, the accepted findings, severity, remediation guidance, and an appendix for tests that produced no finding, were inconclusive, failed, or were not accepted by review.
+
+The report is structured as a customer deliverable:
+
+- Executive Summary: what was tested, overall posture, headline risks, and finding counts by severity
+- At A Glance: target, executed tests, accepted findings, highest qualitative severity, and inconclusive/no-finding counts
+- Remediation Priorities: accepted findings ordered by qualitative severity with an owner-action prompt
+- Engagement Overview: target URL, effective target mappings, run timestamps, scope, limitations, and testing approach
+- Summary of Findings: findings table, severity counts, and accepted/inconclusive/failed/no-finding breakdown
+- Key Discovery Areas: important routes, auth areas, APIs, forms, technologies, exposed surfaces, and limitations
+- Detailed Findings: accepted findings only, with evidence, impact, remediation, retest guidance, and references when available
+- Tests With No Finding / Inconclusive: concise appendix for tests that are not confirmed findings
+- Appendix: methodology, tools used, evidence index, and raw report references
+
+CVSS is included only when it is present in the source execution evidence. Otherwise the final report marks it as `Not scored`.
+
+Qualitative severity is taken from source evidence. If a finding no longer appears in the latest security plan, `osh` falls back to the executed test report metadata and Scope section rather than losing the severity.
 
 ## End-To-End Example
 
@@ -204,6 +243,8 @@ osh test-security https://app.example.com
 
 # If preflight reports blocked tests, add the missing engagement details and run it again.
 osh test-security https://app.example.com
+
+osh report https://app.example.com
 ```
 
 ## What You Get
@@ -214,6 +255,7 @@ After a full run, you have:
 - a security test plan grounded in discovery evidence
 - an editable engagement template for permissions, targets, credentials, limits, and safe test data
 - executed test reports, including resolution
+- a final customer-facing Markdown report
 
 ## Resolving vulnerabilities
 
@@ -275,7 +317,7 @@ The discovery image includes Katana, Dirb, Extractify, a static JavaScript endpo
 
 ## Future Roadmap
 
-Planned areas of expansion include deeper browser-driven SPA discovery, richer API endpoint extraction, additional Docker-backed security tools, and broader reporting support. The roadmap should stay focused: small steps, tested behavior, and no broad framework churn without a clear product reason.
+Planned areas of expansion include assessments of source code, deeper browser-driven SPA discovery, richer API endpoint extraction, additional Docker-backed security tools, web-based GUI and broader reporting support.
 
 ## Development
 
@@ -300,7 +342,7 @@ Force rebuild Docker tool images when working on Docker-backed functionality:
 
 ## Contributing
 
-Open Security Harness is early, practical, and intentionally focused. Good contributions make it more useful without making it harder to understand.
+Open Security Harness is easy to explain, practical, and intentionally focused. Good contributions make it more useful without making it harder to understand.
 
 Please follow these guidelines:
 

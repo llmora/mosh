@@ -12,7 +12,7 @@ from unittest.mock import patch
 from open_security_harness.cli import main
 from open_security_harness.engagement import write_engagement_template
 from open_security_harness.scope import report_dir_name
-from tests.fakes import FakeCrewRunner, FakeSecurityPlanningRunner, FakeSecurityTestingRunner
+from tests.fakes import FakeCrewRunner, FakeFinalReportingRunner, FakeSecurityPlanningRunner, FakeSecurityTestingRunner
 from tests.fixtures import fixture_server
 
 
@@ -182,6 +182,25 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("Security testing preflight written to", stdout.getvalue())
             self.assertTrue((report_dir / "preflight.md").exists())
+
+    def test_cli_report_subcommand_writes_final_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            runner = FakeFinalReportingRunner()
+            stdout = io.StringIO()
+
+            with patch(
+                "open_security_harness.crews.reporting.crew.build_final_reporting_crew_runner",
+                return_value=runner,
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["report", target_url, "--output-root", str(output_root)])
+
+            report_path = output_root / report_dir_name(target_url) / "final-report" / "report.md"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Final report written to", stdout.getvalue())
+            self.assertTrue(report_path.exists())
 
 
 if __name__ == "__main__":

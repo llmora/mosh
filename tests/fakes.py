@@ -196,3 +196,35 @@ class FakeSecurityTestingRunner:
                 {"test_id": test_id, "path": str(report_path)},
                 "reporter",
             )
+
+
+class FakeFinalReportingRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, target_url: str, report_dir: Path, memory: FileMemory, bundle: dict[str, object]) -> Path:
+        self.calls.append(
+            {
+                "target_url": target_url,
+                "report_dir": str(report_dir),
+                "executed_tests": len(bundle.get("executed_tests", [])),
+            }
+        )
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / "report.md"
+        report_path.write_text(
+            "\n".join(
+                [
+                    f"# Security Testing Report: {target_url}",
+                    "",
+                    "## Summary of Findings",
+                    "",
+                    "Fake final report.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        memory.add_item("final_report", {"path": str(report_path)}, "writer")
+        memory.add_item("final_report_review", {"accepted": True}, "reviewer")
+        return report_path

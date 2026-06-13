@@ -29,10 +29,17 @@ class SecurityTestingModelConfig:
 
 
 @dataclass(frozen=True)
+class ReportingModelConfig:
+    writer: str = "deepseek/deepseek-v4-flash"
+    reviewer: str = "deepseek/deepseek-v4-pro"
+
+
+@dataclass(frozen=True)
 class AgentModelConfig:
     discovery: DiscoveryModelConfig = field(default_factory=DiscoveryModelConfig)
     security_planning: SecurityPlanningModelConfig = field(default_factory=SecurityPlanningModelConfig)
     security_testing: SecurityTestingModelConfig = field(default_factory=SecurityTestingModelConfig)
+    reporting: ReportingModelConfig = field(default_factory=ReportingModelConfig)
 
 
 @dataclass(frozen=True)
@@ -148,6 +155,7 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
     defaults = AgentModelConfig()
     crew_configs = {
         "discovery": defaults.discovery,
+        "reporting": defaults.reporting,
         "security_planning": defaults.security_planning,
         "security_testing": defaults.security_testing,
     }
