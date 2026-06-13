@@ -448,33 +448,36 @@ report/<host>/final-report/report.md
 The final report should include:
 
 - Executive Summary:
-  - at-a-glance target, execution, finding, and severity metrics
-  - what was tested
+  - prose at-a-glance summary for security executives, not a raw metrics table
+  - assertive application/business context understood from discovery
+  - what was tested in business-risk terms, not internal tool/process terms
   - overall security posture
   - headline risks
   - number of findings by severity
   - remediation priorities ordered by qualitative severity
 - Engagement Overview:
-  - target URL
+  - prose explanation of the target and engagement setup
   - effective target mappings
-  - dates or run timestamps
+  - human-readable lifecycle dates covering discovery, planning, security testing, and final reporting
   - scope and limitations
   - testing approach
 - Summary of Findings:
-  - table with ID, title, severity, status, affected area, and remediation priority
+  - table with ID, title, severity, status, affected area, and remediation priority, sorted by severity and remediation priority
   - severity counts
-  - accepted, inconclusive, failed, and no-finding breakdown
+  - confirmed, inconclusive, failed, and no-finding breakdown
 - Key Discovery Areas:
+  - short explanatory introduction before the discovery bullets
   - important routes, auth areas, APIs, forms, technologies, and exposed surfaces
   - relevant limitations
-- Detailed Findings for accepted findings only:
+- Detailed Findings for confirmed findings only:
   - title
   - severity and rationale
   - affected target/component
   - evidence summary
   - reproduction summary
   - impact
-  - remediation guidance
+  - technical remediation guidance
+  - source-specific fix guidance or pseudo-code when available from source evidence
   - verification/retest guidance
   - references, such as OWASP WSTG, ASVS, or CWE, when available from source evidence
 - Tests With No Finding / Inconclusive:
@@ -489,8 +492,17 @@ Final reporting must assemble a deterministic evidence bundle before the LLM
 agents run. The bundle is built from discovery reports and memory, security test
 planning reports and memory, security-testing preflight output, security-testing
 memory, and current executed test reports. The bundle determines which executed
-tests are accepted findings. No-finding, inconclusive, failed, or reviewer
-rejected tests must not be promoted into detailed findings.
+tests are confirmed findings for the final report. No-finding, inconclusive,
+failed, or reviewer-rejected tests must not be promoted into detailed findings.
+
+The Markdown report should read as a customer-facing document, not a raw tool
+export. Avoid generic `Field`/`Value` table headings, include short explanatory
+text before dense tables or bullet lists, and keep long generated paragraphs
+split into readable blocks. Markdown remains the source deliverable for now;
+HTML/PDF export may be added later as a presentation layer. Free-form source
+evidence, reproduction notes, impact text, and remediation snippets must be
+escaped or fenced when needed so malformed backticks from an execution artifact
+cannot break the remainder of the report.
 
 The final reporting crew has these agents:
 
@@ -502,7 +514,12 @@ The final reporting crew has these agents:
 Both agents must be constrained by the deterministic bundle. The writer may make
 the report easier to read, but must not invent findings, affected systems,
 severity, evidence, remediation, or CVSS scores. The reviewer must reject reports
-that introduce unsupported claims or omit accepted findings.
+that introduce unsupported claims or omit confirmed findings.
+
+Customer-facing language should use `findings` or `confirmed findings`, not
+`accepted findings`. In implementation, a confirmed finding means the executed
+test status is `finding` and the review stage accepted it for inclusion in the
+report; it does not mean the customer has accepted or agreed with the finding.
 
 Qualitative severity should be sourced deterministically. Use current security
 plan priority when available, then executed test metadata, then the executed
@@ -624,6 +641,7 @@ At minimum, tests should cover:
 * Implement security testing for source code, based on a repo URL or a local filesystem path
 * If the user provides the source code repo and a live URL for testing use a combined approach that uses the source code and the live systems to complement each other. This needs to be just more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific)
 * We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
+* We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies
 * Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF.
 * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.

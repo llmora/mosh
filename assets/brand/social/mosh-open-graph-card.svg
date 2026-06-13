@@ -1,0 +1,82 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mosh social preview card">
+  <title>mosh social preview card</title>
+  <rect width="1200" height="630" fill="#0D0F12"/>
+  
+<defs>
+  <radialGradient id="ogGlow" cx="76%" cy="48%" r="60%">
+    <stop offset="0%" stop-color="#FF5A1F" stop-opacity="0.24"/>
+    <stop offset="64%" stop-color="#FF5A1F" stop-opacity="0.07"/>
+    <stop offset="100%" stop-color="#0D0F12" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<rect width="1200" height="630" fill="url(#ogGlow)"/>
+
+<g opacity="0.42" stroke="#FF5A1F" stroke-width="3" fill="none">
+  <path d="M610 300C720 300 760 210 870 210H1120"/>
+  <path d="M610 350C760 350 785 430 905 430H1110"/>
+  <path d="M610 250H740C825 250 850 310 930 310H1130"/>
+</g>
+
+<g fill="#FF5A1F">
+  <circle cx="870" cy="210" r="8"/>
+  <circle cx="905" cy="430" r="8"/>
+  <circle cx="930" cy="310" r="8"/>
+</g>
+
+<g transform="translate(72 104) scale(0.56)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#FFFFFF"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FF5A1F"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FF5A1F"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FF5A1F"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FF5A1F"/>
+</g>
+</g>
+
+<text x="350" y="300"
+  fill="#FFFFFF"
+  font-family="Space Grotesk, Sora, Inter, Arial, sans-serif"
+  font-size="134"
+  font-weight="800"
+  letter-spacing="5">mosh</text>
+
+<text x="360" y="356"
+  fill="#C9CED6"
+  font-family="JetBrains Mono, IBM Plex Mono, Menlo, monospace"
+  font-size="24"
+  font-weight="600"
+  letter-spacing="1.4">MODEL-DRIVEN OPEN SECURITY HARNESS</text>
+
+<text x="76" y="510"
+  fill="#FF5A1F"
+  font-family="JetBrains Mono, IBM Plex Mono, Menlo, monospace"
+  font-size="25"
+  font-weight="700">Controlled chaos for application security testing.</text>
+</svg>

@@ -195,7 +195,7 @@ You can run security testing repeatedly to incrementally complete the test:
 osh test-security https://app.example.com
 ```
 
-If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, accepted execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not accepted, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
+If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
 
 If executed tests discover new application surface area, `osh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
 
@@ -213,23 +213,25 @@ Final reporting writes:
 report/<host>/final-report/report.md
 ```
 
-The final report is different from the working documents used during testing. It incorporates the main discovery context, the executed test outcomes, the accepted findings, severity, remediation guidance, and an appendix for tests that produced no finding, were inconclusive, failed, or were not accepted by review.
+The final report is different from the working documents used during testing. It incorporates the main discovery context, the executed test outcomes, the confirmed findings, severity, remediation guidance, and an appendix for tests that produced no finding, were inconclusive, failed, or were not confirmed by review.
 
 The report is structured as a customer deliverable:
 
-- Executive Summary: what was tested, overall posture, headline risks, and finding counts by severity
-- At A Glance: target, executed tests, accepted findings, highest qualitative severity, and inconclusive/no-finding counts
-- Remediation Priorities: accepted findings ordered by qualitative severity with an owner-action prompt
-- Engagement Overview: target URL, effective target mappings, run timestamps, scope, limitations, and testing approach
-- Summary of Findings: findings table, severity counts, and accepted/inconclusive/failed/no-finding breakdown
+- Executive Summary: security-executive prose covering application context, what was tested, overall posture, headline risks, and finding counts by severity
+- At A Glance: short prose summary of the business/application context, confirmed findings, highest qualitative severity, no-finding tests, inconclusive tests, and human-readable engagement timeline
+- Remediation Priorities: findings ordered by qualitative severity so fixes can be prioritized quickly
+- Engagement Overview: prose explanation of target, effective target mappings, lifecycle dates from discovery through final reporting, scope, limitations, and testing approach
+- Summary of Findings: findings table sorted by severity and remediation priority, severity counts, and confirmed/inconclusive/failed/no-finding breakdown
 - Key Discovery Areas: important routes, auth areas, APIs, forms, technologies, exposed surfaces, and limitations
-- Detailed Findings: accepted findings only, with evidence, impact, remediation, retest guidance, and references when available
+- Detailed Findings: confirmed findings only, with evidence, impact, technical remediation guidance, source-specific fix details or pseudo-code when available, retest guidance, and references when available
 - Tests With No Finding / Inconclusive: concise appendix for tests that are not confirmed findings
 - Appendix: methodology, tools used, evidence index, and raw report references
 
 CVSS is included only when it is present in the source execution evidence. Otherwise the final report marks it as `Not scored`.
 
 Qualitative severity is taken from source evidence. If a finding no longer appears in the latest security plan, `osh` falls back to the executed test report metadata and Scope section rather than losing the severity.
+
+The Markdown report is intended to be readable as-is. Source evidence and remediation snippets are fenced when needed so malformed Markdown from an execution artifact cannot quote the rest of the report. A styled HTML/PDF export can sit on top later, but the Markdown remains the source deliverable so it is easy to review, diff, and version.
 
 ## End-To-End Example
 

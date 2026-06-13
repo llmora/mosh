@@ -1,0 +1,195 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mosh one-page usage guide">
+  <title>mosh one-page usage guide</title>
+  <rect width="1600" height="1000" fill="#F6F7F8"/>
+  
+<text x="72" y="90" fill="#0D0F12" font-family="Space Grotesk, Sora, Inter, Arial, sans-serif" font-size="54" font-weight="800">mosh brand usage guide</text>
+<text x="72" y="134" fill="#2A2E33" font-family="Inter, Arial, sans-serif" font-size="24">Controlled chaos for application security testing.</text>
+
+<rect x="72" y="190" width="680" height="250" rx="24" fill="#0D0F12"/>
+<g transform="translate(120 216) scale(0.38)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#FFFFFF"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FF5A1F"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FF5A1F"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FF5A1F"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FF5A1F"/>
+</g>
+</g>
+<text x="335" y="345" fill="#FFFFFF" font-family="Space Grotesk, Sora, Inter, Arial, sans-serif" font-size="94" font-weight="800" letter-spacing="3">mosh</text>
+<text x="340" y="385" fill="#C9CED6" font-family="JetBrains Mono, Menlo, monospace" font-size="19" font-weight="600">MODEL-DRIVEN OPEN SECURITY HARNESS</text>
+
+<rect x="832" y="190" width="316" height="250" rx="24" fill="#FFFFFF" stroke="#D9DDE4"/>
+<g transform="translate(885 216) scale(0.38)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#0D0F12"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FF5A1F"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FF5A1F"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FF5A1F"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FF5A1F"/>
+</g>
+</g>
+
+<rect x="1210" y="190" width="316" height="250" rx="24" fill="#0D0F12"/>
+<g transform="translate(1263 216) scale(0.38)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#FFFFFF"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FFFFFF"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FFFFFF"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FFFFFF"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FFFFFF"/>
+</g>
+</g>
+
+<text x="72" y="520" fill="#0D0F12" font-family="Space Grotesk, Sora, Inter, Arial, sans-serif" font-size="34" font-weight="800">Palette</text>
+
+<rect x="72" y="555" width="120" height="80" rx="14" fill="#0D0F12" stroke="#CBD0D8"/>
+<text x="72" y="670" fill="#2A2E33" font-family="JetBrains Mono, Menlo, monospace" font-size="18">#0D0F12</text>
+<text x="72" y="698" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="17">Near black</text>
+
+<rect x="302" y="555" width="120" height="80" rx="14" fill="#2A2E33" stroke="#CBD0D8"/>
+<text x="302" y="670" fill="#2A2E33" font-family="JetBrains Mono, Menlo, monospace" font-size="18">#2A2E33</text>
+<text x="302" y="698" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="17">Charcoal</text>
+
+<rect x="532" y="555" width="120" height="80" rx="14" fill="#FFFFFF" stroke="#CBD0D8"/>
+<text x="532" y="670" fill="#2A2E33" font-family="JetBrains Mono, Menlo, monospace" font-size="18">#FFFFFF</text>
+<text x="532" y="698" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="17">White</text>
+
+<rect x="762" y="555" width="120" height="80" rx="14" fill="#FF5A1F" stroke="#CBD0D8"/>
+<text x="762" y="670" fill="#2A2E33" font-family="JetBrains Mono, Menlo, monospace" font-size="18">#FF5A1F</text>
+<text x="762" y="698" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="17">Signal orange</text>
+
+<rect x="992" y="555" width="120" height="80" rx="14" fill="#D92027" stroke="#CBD0D8"/>
+<text x="992" y="670" fill="#2A2E33" font-family="JetBrains Mono, Menlo, monospace" font-size="18">#D92027</text>
+<text x="992" y="698" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="17">Deep red</text>
+
+<rect x="1222" y="555" width="120" height="80" rx="14" fill="#8A9099" stroke="#CBD0D8"/>
+<text x="1222" y="670" fill="#2A2E33" font-family="JetBrains Mono, Menlo, monospace" font-size="18">#8A9099</text>
+<text x="1222" y="698" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="17">Cool gray</text>
+
+<text x="72" y="790" fill="#0D0F12" font-family="Space Grotesk, Sora, Inter, Arial, sans-serif" font-size="34" font-weight="800">Usage rules</text>
+
+<text x="72" y="840" fill="#2A2E33" font-family="Inter, Arial, sans-serif" font-size="24">Do: use strong contrast, preserve proportions, keep clear space, use SVG for web/docs.</text>
+<text x="72" y="882" fill="#2A2E33" font-family="Inter, Arial, sans-serif" font-size="24">Don’t: stretch, skew, rotate, recolor randomly, add effects, or place on busy backgrounds.</text>
+<text x="72" y="924" fill="#2A2E33" font-family="Inter, Arial, sans-serif" font-size="24">Typography: Space Grotesk or Sora for brand; JetBrains Mono for CLI/documentation accents.</text>
+
+<text x="1040" y="790" fill="#0D0F12" font-family="Space Grotesk, Sora, Inter, Arial, sans-serif" font-size="34" font-weight="800">Clear space</text>
+<rect x="1040" y="820" width="360" height="120" rx="18" fill="#FFFFFF" stroke="#CBD0D8" stroke-dasharray="8 8"/>
+<g transform="translate(1168 800) scale(0.22)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#0D0F12"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FF5A1F"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FF5A1F"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FF5A1F"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FF5A1F"/>
+</g>
+</g>
+<text x="1040" y="972" fill="#8A9099" font-family="Inter, Arial, sans-serif" font-size="18">Use generous padding around the mark, especially in app icons.</text>
+</svg>

@@ -14,7 +14,7 @@ from open_security_harness.crews.reporting.crew import (
     _build_write_final_report_tool,
     build_final_report_bundle,
 )
-from open_security_harness.crews.reporting.reporting import render_final_report
+from open_security_harness.crews.reporting.reporting import render_final_report, validate_rendered_report
 from open_security_harness.crews.security_testing.crew import (
     _with_execution_metadata_mapping,
     render_executed_test_report,
@@ -66,7 +66,7 @@ class FakeRuntimeCrewAI(FakeCrewAI):
                     if tool.name == "write_final_report":
                         tool._run(
                             {
-                                "executive_summary": "The engagement found one accepted finding.",
+                                "executive_summary": "The engagement found one confirmed finding.",
                                 "detailed_findings": [
                                     {
                                         "id": "AUTH-001",
@@ -134,22 +134,148 @@ class FinalReportingTests(unittest.TestCase):
             self.assertIn("# Open Security Harness Security Assessment Report", markdown)
             self.assertIn("## Executive Summary", markdown)
             self.assertIn("### At A Glance", markdown)
+            self.assertIn("| Report Context | Details |", markdown)
+            self.assertNotIn("| Executive Question | Answer |", markdown)
+            self.assertIn("This assessment reviewed `https://example.test`.", markdown)
+            self.assertIn("The application provides the following business capability:", markdown)
+            self.assertNotIn("| Field | Value |", markdown)
             self.assertIn("### What Was Tested", markdown)
+            self.assertIn("The assessment covered `https://example.test` and the areas of the service most relevant", markdown)
+            self.assertIn("Example is a private API used for customer account operations.", markdown)
             self.assertIn("### Overall Security Posture", markdown)
             self.assertIn("### Remediation Priorities", markdown)
+            self.assertIn("The engagement confirmed 1 finding", markdown)
+            self.assertIn("The assessment confirmed 1 finding.", markdown)
+            self.assertNotIn("accepted finding", markdown.lower())
+            self.assertNotIn("accepted findings", markdown.lower())
+            self.assertIn("Engagement timeline", markdown)
+            self.assertIn("13th June 2026 06:00 UTC", markdown)
+            self.assertIn("Discovery: `13th June 2026`", markdown)
+            self.assertIn("Security test planning: `13th June 2026`", markdown)
+            self.assertNotIn("Discovery: `13th June 2026 06:00 UTC`", markdown)
+            self.assertIn("Final reporting:", markdown)
             self.assertIn("## Engagement Overview", markdown)
+            self.assertIn("The engagement assessed `https://example.test` using the target mappings", markdown)
+            self.assertIn("The recorded engagement activity ran from", markdown)
+            self.assertIn("Scope and limitations:", markdown)
+            self.assertIn("Testing approach:", markdown)
+            self.assertIn("Lifecycle detail:", markdown)
             self.assertIn("## Summary of Findings", markdown)
+            self.assertIn("The findings table is intended for prioritization.", markdown)
             self.assertIn("| ID | Title | Severity | Status | Affected Area | Remediation Priority |", markdown)
             self.assertIn("## Key Discovery Areas", markdown)
+            self.assertIn("Discovery provides the context for interpreting the findings.", markdown)
             self.assertIn("## Detailed Findings", markdown)
             self.assertIn("## Tests With No Finding / Inconclusive", markdown)
+            self.assertIn("They are not confirmed vulnerabilities", markdown)
             self.assertIn("## Appendix", markdown)
             self.assertIn("AUTH-001", markdown)
             self.assertIn("Critical", markdown)
             self.assertIn("CVSS: `Not scored`", markdown)
+            self.assertIn("Technical fix guidance:", markdown)
+            self.assertIn("Expected corrected behavior:", markdown)
+            self.assertIn("Regression check:", markdown)
+            self.assertNotIn("Recommended remediation plan:", markdown)
+            self.assertNotIn("Assign an owner for `AUTH-001`", markdown)
             self.assertNotIn("### HDR-001:", markdown)
             memory_items = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
             self.assertTrue(any(item["kind"] == "final_report_review" for item in memory_items))
+
+    def test_rendered_report_fences_unclosed_markdown_from_source_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            domain_dir = _write_report_inputs(Path(directory), "https://example.test")
+            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle["executed_tests"][0]["resolution"] = (
+                "Update the API authorization guard:\n\n"
+                "```python\n"
+                "if not request.user:\n"
+                "    return deny()\n"
+            )
+
+            markdown = render_final_report("https://example.test", bundle, {})
+
+        self.assertIn("````text\nUpdate the API authorization guard:", markdown)
+        self.assertIn("```python", markdown)
+        self.assertEqual(validate_rendered_report(bundle, markdown), [])
+
+    def test_findings_table_is_sorted_by_severity_and_remediation_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            domain_dir = _write_report_inputs(Path(directory), "https://example.test")
+            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle["executed_tests"].extend(
+                [
+                    {
+                        "id": "AAA-LOW",
+                        "title": "Low severity finding",
+                        "status": "finding",
+                        "accepted_finding": True,
+                        "review_accepted": True,
+                        "severity": "low",
+                        "surface": "headers",
+                        "report_path": "AAA-LOW.md",
+                    },
+                    {
+                        "id": "ZZZ-HIGH",
+                        "title": "High severity finding",
+                        "status": "finding",
+                        "accepted_finding": True,
+                        "review_accepted": True,
+                        "severity": "high",
+                        "surface": "api",
+                        "report_path": "ZZZ-HIGH.md",
+                    },
+                ]
+            )
+
+            markdown = render_final_report("https://example.test", bundle, {})
+
+        findings_table = markdown.split("### Findings Table", 1)[1].split("### Severity Counts", 1)[0]
+        self.assertLess(findings_table.index("| AUTH-001 |"), findings_table.index("| ZZZ-HIGH |"))
+        self.assertLess(findings_table.index("| ZZZ-HIGH |"), findings_table.index("| AAA-LOW |"))
+
+    def test_executive_summary_long_plain_text_is_split_into_paragraphs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            domain_dir = _write_report_inputs(Path(directory), "https://example.test")
+            bundle = build_final_report_bundle("https://example.test", domain_dir)
+
+            markdown = render_final_report(
+                "https://example.test",
+                bundle,
+                {
+                    "what_was_tested": (
+                        "The assessment covered the customer account API, authentication boundary, administrative workflows, and browser-facing controls. "
+                        "Testing focused on the places where customer data could be exposed or modified without the expected authorization checks. "
+                        "The review also considered exposed application routes, forms, headers, and API behavior observed during discovery. "
+                        "These areas were selected because they carry the highest business risk for the service."
+                    ),
+                    "overall_security_posture": (
+                        "The assessment confirmed an authentication weakness affecting private API access. "
+                        "The finding should be treated as a priority because it concerns access to customer account data. "
+                        "Other completed tests did not confirm additional vulnerabilities, but inconclusive areas should be revisited if new credentials or evidence become available. "
+                        "The overall posture therefore depends on correcting the confirmed access-control behavior and retesting the affected path."
+                    ),
+                },
+            )
+
+        what_was_tested = markdown.split("### What Was Tested", 1)[1].split("### Overall Security Posture", 1)[0]
+        posture = markdown.split("### Overall Security Posture", 1)[1].split("### Headline Risks", 1)[0]
+        self.assertIn("\n\nTesting focused on", what_was_tested)
+        self.assertIn("\n\nOther completed tests", posture)
+
+    def test_long_source_detail_is_not_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            domain_dir = _write_report_inputs(Path(directory), "https://example.test")
+            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle["executed_tests"][0]["evidence_summary"] = " ".join(
+                f"Evidence sentence {index}." for index in range(300)
+            )
+
+            markdown = render_final_report("https://example.test", bundle, {})
+
+        self.assertIn("Evidence sentence 0.", markdown)
+        self.assertIn("Evidence sentence 299.", markdown)
+        self.assertNotIn("truncated", markdown.lower())
+        self.assertNotIn("raw executed test report", markdown)
 
     def test_final_report_bundle_promotes_only_accepted_findings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -262,8 +388,8 @@ class FinalReportingTests(unittest.TestCase):
             markdown = render_final_report("https://example.test", bundle, {})
 
         outcome_section = markdown.split("### Outcome Breakdown", 1)[1].split("## Key Discovery Areas", 1)[0]
-        self.assertIn("| Inconclusive | 1 |", outcome_section)
-        self.assertIn("| Reviewer-Rejected Finding | 0 |", outcome_section)
+        self.assertIn("| Inconclusive / more evidence needed | 1 |", outcome_section)
+        self.assertIn("| Rejected by review | 0 |", outcome_section)
 
     def test_review_tool_does_not_fail_on_unstructured_false_decision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -290,10 +416,12 @@ def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = Fa
     discovery_dir = domain_dir / "discovery"
     planning_dir = domain_dir / "security-test-planning"
     testing_dir = domain_dir / "security-testing"
+    final_report_dir = domain_dir / "final-report"
     executed_dir = testing_dir / "executed_tests"
     discovery_dir.mkdir(parents=True)
     planning_dir.mkdir(parents=True)
     executed_dir.mkdir(parents=True)
+    final_report_dir.mkdir(parents=True)
 
     discovery_dir.joinpath("report.md").write_text("# Discovery\n", encoding="utf-8")
     discovery_dir.joinpath("memory.json").write_text(
@@ -304,6 +432,7 @@ def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = Fa
                     "content": {
                         "structured": {
                             "executive_summary": "Discovery found an API surface.",
+                            "application_description": "Example is a private API used for customer account operations.",
                             "key_discovered_areas": [{"title": "Private API", "detail": "/api/private"}],
                         }
                     },
@@ -312,7 +441,20 @@ def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = Fa
         ),
         encoding="utf-8",
     )
-    discovery_dir.joinpath("events.json").write_text("[]", encoding="utf-8")
+    discovery_dir.joinpath("events.json").write_text(
+        json.dumps(
+            [
+                {
+                    "agent": "orchestrator",
+                    "action": "complete",
+                    "message": "Discovery completed",
+                    "timestamp": "2026-06-13T06:00:00+00:00",
+                    "data": {},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     plan = {
         "title": "Security Test Plan",
@@ -337,6 +479,20 @@ def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = Fa
         encoding="utf-8",
     )
     planning_dir.joinpath("security_test_plan.md").write_text("# Security Test Plan\n", encoding="utf-8")
+    planning_dir.joinpath("events.json").write_text(
+        json.dumps(
+            [
+                {
+                    "agent": "orchestrator",
+                    "action": "complete",
+                    "message": "Planning completed",
+                    "timestamp": "2026-06-13T06:10:00+00:00",
+                    "data": {},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     _write_executed_report(executed_dir, "AUTH-001", "Private API requires authentication", "finding", True, legacy_metadata)
     _write_executed_report(executed_dir, "HDR-001", "Security headers are present", "no-finding", True, legacy_metadata)
@@ -368,6 +524,20 @@ def _write_report_inputs(root: Path, target_url: str, legacy_metadata: bool = Fa
                         "final_review": {"accepted": True},
                     },
                 },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    final_report_dir.joinpath("events.json").write_text(
+        json.dumps(
+            [
+                {
+                    "agent": "orchestrator",
+                    "action": "start",
+                    "message": "Starting final report generation",
+                    "timestamp": "2026-06-13T06:50:00+00:00",
+                    "data": {},
+                }
             ]
         ),
         encoding="utf-8",

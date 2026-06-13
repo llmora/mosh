@@ -1,0 +1,92 @@
+<svg width="1600" height="640" viewBox="0 0 1600 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mosh GitHub README header">
+  <title>mosh GitHub README header</title>
+  <rect width="1600" height="640" fill="#0D0F12"/>
+  
+<defs>
+  <radialGradient id="glow" cx="75%" cy="48%" r="55%">
+    <stop offset="0%" stop-color="#FF5A1F" stop-opacity="0.22"/>
+    <stop offset="58%" stop-color="#FF5A1F" stop-opacity="0.06"/>
+    <stop offset="100%" stop-color="#0D0F12" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+
+<rect width="1600" height="640" fill="url(#glow)"/>
+
+<g opacity="0.46" stroke="#FF5A1F" stroke-width="3" fill="none">
+  <path d="M760 320C900 320 930 230 1060 230H1470"/>
+  <path d="M760 360C940 360 970 430 1110 430H1490"/>
+  <path d="M760 280C900 280 940 170 1100 170H1450"/>
+  <path d="M760 400C900 400 950 520 1110 520H1430"/>
+  <path d="M760 240H940C1020 240 1070 310 1170 310H1490"/>
+</g>
+
+<g fill="#FF5A1F">
+  <circle cx="1060" cy="230" r="8"/>
+  <circle cx="1110" cy="430" r="8"/>
+  <circle cx="1100" cy="170" r="8"/>
+  <circle cx="1110" cy="520" r="8"/>
+  <circle cx="1170" cy="310" r="8"/>
+  <circle cx="1470" cy="230" r="6"/>
+  <circle cx="1490" cy="430" r="6"/>
+  <circle cx="1450" cy="170" r="6"/>
+  <circle cx="1430" cy="520" r="6"/>
+  <circle cx="1490" cy="310" r="6"/>
+</g>
+
+<g transform="translate(80 82) scale(0.60)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#FFFFFF"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FF5A1F"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FF5A1F"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FF5A1F"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FF5A1F"/>
+</g>
+</g>
+
+<text x="390" y="245"
+  fill="#FFFFFF"
+  font-family="Space Grotesk, Sora, Inter, Arial, sans-serif"
+  font-size="150"
+  font-weight="800"
+  letter-spacing="5">mosh</text>
+
+<text x="400" y="305"
+  fill="#C9CED6"
+  font-family="JetBrains Mono, IBM Plex Mono, Menlo, monospace"
+  font-size="25"
+  font-weight="600"
+  letter-spacing="1.5">MODEL-DRIVEN OPEN SECURITY HARNESS</text>
+
+<text x="82" y="505"
+  fill="#FF5A1F"
+  font-family="JetBrains Mono, IBM Plex Mono, Menlo, monospace"
+  font-size="26"
+  font-weight="600">Security testing. Driven by models. Grounded in evidence.</text>
+</svg>

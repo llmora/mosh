@@ -1,0 +1,55 @@
+<svg width="1320" height="420" viewBox="0 0 1320 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mosh horizontal logo dark">
+  <title>mosh horizontal logo dark</title>
+  
+  
+<g transform="translate(44 30) scale(0.66)">
+  
+<g id="mosh-mark">
+  <!-- Split abstract M silhouette.
+       Two filled halves create a clear center split and a lower center point. -->
+
+  <path
+    d="M92 390
+       L92 112
+       L256 248
+       L256 340
+       L158 258
+       L158 390
+       Z"
+    fill="#FFFFFF"
+  />
+
+  <path
+    d="M256 248
+       L420 112
+       L420 390
+       L354 390
+       L354 258
+       L256 340
+       Z"
+    fill="#FF5A1F"
+  />
+
+  <!-- Perspective harness path / controlled execution steps.
+       Wider toward the viewer, like a zebra crossing in perspective. -->
+
+  <path d="M226 358H286L300 378H212L226 358Z" fill="#FF5A1F"/>
+  <path d="M206 398H306L326 426H186L206 398Z" fill="#FF5A1F"/>
+  <path d="M184 442H328L354 474H158L184 442Z" fill="#FF5A1F"/>
+</g>
+</g>
+
+<text x="410" y="210"
+  fill="#FFFFFF"
+  font-family="Space Grotesk, Sora, Inter, Arial, sans-serif"
+  font-size="146"
+  font-weight="800"
+  letter-spacing="5">mosh</text>
+
+<text x="418" y="270"
+  fill="#C9CED6"
+  font-family="JetBrains Mono, IBM Plex Mono, Menlo, monospace"
+  font-size="26"
+  font-weight="600"
+  letter-spacing="1.6">MODEL-DRIVEN OPEN SECURITY HARNESS</text>
+</svg>
