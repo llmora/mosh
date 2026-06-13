@@ -363,3 +363,7 @@ python -m unittest discover -v
 ```
 
 Also run the relevant CLI flow against an application you are authorized to test when your change affects runtime behavior.
+
+## License
+
+mosh is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
