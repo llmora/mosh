@@ -144,11 +144,15 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
         tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml")
         planning_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml")
         planning_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml")
+        source_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/agents.yaml")
+        source_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/tasks.yaml")
 
         self.assertTrue(agents_yaml.is_file())
         self.assertTrue(tasks_yaml.is_file())
         self.assertTrue(planning_agents_yaml.is_file())
         self.assertTrue(planning_tasks_yaml.is_file())
+        self.assertTrue(source_agents_yaml.is_file())
+        self.assertTrue(source_tasks_yaml.is_file())
         self.assertIn("crawler:", agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("crawl_application_task:", tasks_yaml.read_text(encoding="utf-8"))
         self.assertIn("planner:", planning_agents_yaml.read_text(encoding="utf-8"))
@@ -157,6 +161,14 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
         self.assertIn("write_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
         self.assertIn("engagement_refiner:", planning_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("refine_engagement_template_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("source_intake:", source_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("source_route_resolver:", source_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("source_component_mapper:", source_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("source_gap_analyst:", source_agents_yaml.read_text(encoding="utf-8"))
+        self.assertIn("validate_source_task:", source_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("resolve_source_routes_task:", source_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("map_source_components_task:", source_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("analyze_source_discovery_gaps_task:", source_tasks_yaml.read_text(encoding="utf-8"))
 
     def test_crawler_tool_skips_previously_crawled_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

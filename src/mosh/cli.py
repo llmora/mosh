@@ -9,6 +9,7 @@ from mosh.config import AppConfig
 from mosh.models import Event
 from mosh.crews.discovery.crew import DiscoveryOrchestrator
 from mosh.crews.reporting.crew import FinalReportingOrchestrator
+from mosh.crews.source_discovery.crew import SourceDiscoveryOrchestrator
 from mosh.scope import report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.security_testing.crew import (
@@ -34,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     discover_parser.add_argument("--max-depth", type=int, default=config.max_depth, help=argparse.SUPPRESS)
     discover_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    discover_source_parser = subcommands.add_parser("discover-source", help="Run the source discovery crew")
+    discover_source_parser.add_argument("source", help="Local source tree path to discover")
+    discover_source_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+
     plan_parser = subcommands.add_parser("plan-security", help="Create a security test plan from discovery output")
     plan_parser.add_argument("url", help="Target application URL to plan from")
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
@@ -51,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "discover":
         return _run_discovery(config, args)
+    if args.command == "discover-source":
+        return _run_source_discovery(config, args)
     if args.command == "plan-security":
         return _run_security_test_planning(config, args)
     if args.command == "test-security":
@@ -73,6 +80,21 @@ def _run_discovery(config: AppConfig, args: argparse.Namespace) -> int:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Report written to {report_dir}")
+    return 0
+
+
+def _run_source_discovery(config: AppConfig, args: argparse.Namespace) -> int:
+    orchestrator = SourceDiscoveryOrchestrator(
+        config,
+        output_root=Path(args.output_root),
+        event_sink=_print_event,
+    )
+    try:
+        report_dir = orchestrator.run(args.source)
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Source discovery report written to {report_dir}")
     return 0
 
 
@@ -165,7 +187,7 @@ def _normalize_url_shorthand(argv: list[str] | None) -> list[str]:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         return args
-    commands = {"discover", "plan-security", "test-security", "report"}
+    commands = {"discover", "discover-source", "plan-security", "test-security", "report"}
     if args[0] in commands or args[0].startswith("-"):
         return args
     return ["discover", *args]

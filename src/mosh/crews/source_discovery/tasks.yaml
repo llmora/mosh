@@ -1,0 +1,151 @@
+validate_source_task:
+  description: >
+    Validate the source tree before any other source discovery work runs.
+
+    Source:
+    {source}
+
+    You must call validate_source_path exactly once with the source path. Do not
+    inspect files directly.
+  expected_output: >
+    Confirmation that validate_source_path was called and source identity
+    metadata was recorded.
+  agent: source_intake
+
+map_source_task:
+  description: >
+    Build the source surface map for the validated source tree.
+
+    Source:
+    {source}
+
+    You must call source_inventory exactly once and route_api_extractor exactly
+    once. Use source_search or read_source_slice only for focused follow-up if
+    the inventory or route output needs clarification. Do not request or paste
+    whole source files.
+  expected_output: >
+    Confirmation that source_inventory and route_api_extractor were called, with
+    a concise summary of indexed files, languages, entrypoints, and route/API
+    candidates.
+  agent: source_mapper
+
+resolve_source_routes_task:
+  description: >
+    Resolve API candidates to full source paths where deterministic extraction
+    may have missed a router mount, blueprint prefix, application base path, or
+    framework-specific nesting.
+
+    Source:
+    {source}
+
+    You must call get_route_resolution_context first. Use source_search and
+    read_source_slice only for focused follow-up on router mounts, app
+    entrypoints, route registration files, and framework configuration. Then
+    call submit_route_resolution exactly once with a structured object that may
+    include:
+    - resolved_routes
+    - notes
+
+    Each resolved_routes item must reference an existing route_id from the
+    route resolution context. It may include route_id, full_route, mount_prefix,
+    confidence, reason, and evidence. Do not add new routes, remove routes,
+    invent deployment base paths, or change a route without source evidence.
+  expected_output: >
+    Confirmation that submit_route_resolution recorded any evidence-backed full
+    path corrections for existing route candidates.
+  agent: source_route_resolver
+
+inspect_dependency_config_task:
+  description: >
+    Inspect dependency and configuration evidence for the validated source tree.
+
+    Source:
+    {source}
+
+    You must call dependency_inventory exactly once and config_inventory exactly
+    once. Preserve manifest, lockfile, deployment, environment-template, and CI
+    file paths as evidence. Do not invent dependency versions, deployment
+    settings, credentials, or secrets.
+  expected_output: >
+    Confirmation that dependency_inventory and config_inventory were called,
+    with a concise summary of dependency manifests and configuration files.
+  agent: dependency_config
+
+map_source_components_task:
+  description: >
+    Build a model-assisted source component map from deterministic source
+    discovery evidence.
+
+    Source:
+    {source}
+
+    You must call get_source_discovery_context first. Then call
+    submit_source_component_map exactly once with a structured object that may
+    include:
+    - application_purpose
+    - business_domain
+    - key_components
+    - sensitive_data
+    - trust_boundaries
+    - external_integrations
+    - open_questions
+
+    Every concrete claim must be grounded in paths, route records, manifest
+    names, dependency/config entries, or evidence_refs from the source discovery
+    context. Do not invent files, routes, apps, dependencies, credentials,
+    production behavior, or vulnerabilities.
+  expected_output: >
+    Confirmation that submit_source_component_map recorded a bounded,
+    evidence-backed application purpose and component map.
+  agent: source_component_mapper
+
+analyze_source_discovery_gaps_task:
+  description: >
+    Identify source discovery limitations and follow-up needed before
+    source-backed security planning.
+
+    Source:
+    {source}
+
+    You must call get_source_discovery_context first. Include the submitted
+    component map when available. Then call submit_source_gap_analysis exactly
+    once with a structured object that may include:
+    - gaps
+    - limitations
+    - recommended_follow_up
+    - deterministic_tool_opportunities
+
+    Focus on missing app boundaries, likely unparsed entrypoints, framework
+    patterns not covered by deterministic extraction, route mount uncertainty,
+    mobile app coverage gaps, configuration blind spots, and places where
+    source evidence should later be correlated with live discovery. Do not make
+    vulnerability claims during discovery.
+  expected_output: >
+    Confirmation that submit_source_gap_analysis recorded source discovery gaps,
+    limitations, and follow-up recommendations.
+  agent: source_gap_analyst
+
+write_source_discovery_report_task:
+  description: >
+    Write the source discovery report after source intake, source mapping,
+    route resolution, dependency/config inspection, component mapping, and gap
+    analysis have completed.
+
+    Source:
+    {source}
+
+    You must call write_source_discovery_report exactly once with a structured
+    report object or JSON string. The report object may include:
+    - title
+    - executive_summary
+    - limitations
+    - recommended_next_steps
+
+    Do not write Markdown yourself. Do not invent source files, dependencies,
+    routes, route prefixes, configuration, components, or gaps. The
+    report-writing tool owns the stable Markdown layout and source index
+    persistence.
+  expected_output: >
+    Confirmation that write_source_discovery_report persisted report.md and the
+    source index.
+  agent: reporter

@@ -81,6 +81,15 @@ models:
     technology_mapper: deepseek/deepseek-v4-flash
     reporter: deepseek/deepseek-v4-flash
 
+  source_discovery:
+    intake: deepseek/deepseek-v4-flash
+    mapper: deepseek/deepseek-v4-flash
+    route_resolver: deepseek/deepseek-v4-flash
+    dependency_config: deepseek/deepseek-v4-flash
+    component_mapper: deepseek/deepseek-v4-flash
+    gap_analyst: deepseek/deepseek-v4-flash
+    reporter: deepseek/deepseek-v4-flash
+
   security_planning:
     planner: deepseek/deepseek-v4-flash
     reviewer: deepseek/deepseek-v4-pro
@@ -103,6 +112,9 @@ Only include the agents you want to override; omitted agents keep their defaults
 models:
   discovery:
     crawler: openai/gpt-5.2-mini
+
+  source_discovery:
+    mapper: openai/gpt-5.2-mini
 
   security_planning:
     reviewer: openai/gpt-5.2
@@ -137,6 +149,35 @@ Optional tuning flags:
 ```bash
 mosh discover https://app.example.com --max-pages 100 --max-depth 4 --output-root report
 ```
+
+### Source Discovery
+
+You can also map a local source tree:
+
+```bash
+mosh discover-source /path/to/repo
+```
+
+Source discovery writes:
+
+```text
+report/<source>/source-discovery/report.md
+```
+
+This first source increment builds a compact source index, including files,
+languages, manifests, lockfiles, likely entrypoints, route/API candidates,
+dependencies, and configuration/deployment files. It then uses bounded
+model-assisted steps to resolve route candidates to full paths when router
+mounts are ambiguous, summarize the application's apparent purpose, map key
+business/security components, identify sensitive data and trust boundaries, and
+record discovery gaps that need follow-up. Source evidence is stored as file
+paths, line numbers, and snippet hashes so later planning and reporting can
+refer back to code without putting an entire repository in model context.
+Deterministic discovery also tags test/example routes, records simple
+middleware chains, expands common custom route wrapper patterns, detects Python
+web services such as FastAPI, inventories environment variable references and
+Docker Compose service topology, and parses npm, Python, Gradle, CocoaPods, and
+Swift Package dependency manifests.
 
 ### 2. Create A Security Test Plan
 
