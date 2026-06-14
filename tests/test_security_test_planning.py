@@ -16,16 +16,16 @@ from mosh.engagement import (
     write_engagement_template_mapping,
 )
 from mosh.memory import FileMemory
-from mosh.scope import report_dir_name
+from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import (
     CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
     SecurityTestPlanningState,
     _build_write_refined_engagement_template_tool,
     _build_write_security_test_plan_tool,
-    _select_yaml_top_level_blocks,
-    _write_security_planning_subset_configs,
+    load_assessment_evidence_bundle,
     load_discovery_context,
+    load_source_discovery_context,
 )
 from mosh.crews.security_planning.reporting import render_security_test_plan, write_security_test_plan
 from tests.fakes import FakeSecurityPlanningRunner
@@ -154,6 +154,11 @@ def _plan() -> dict[str, object]:
                 "interesting_failure_modes": ["200 OK without credentials."],
                 "safety_notes": ["Do not brute force credentials."],
                 "stopping_conditions": ["Stop after confirming auth enforcement or unexpected access."],
+                "execution_mode": "live",
+                "evidence_sources": ["live"],
+                "affected_runtime": [{"method": "GET", "url": "https://api.example.test/api/private/auth/me"}],
+                "affected_source": [],
+                "verification_strategy": "live-verification",
                 "status": "planned",
             }
         ],
@@ -194,6 +199,11 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("could expose sensitive account data", markdown)
         self.assertIn("#### Business Value", markdown)
         self.assertIn("before deeper API testing", markdown)
+        self.assertIn("Execution mode: `live`", markdown)
+        self.assertIn("Evidence sources: `live`", markdown)
+        self.assertIn("Verification strategy: `live-verification`", markdown)
+        self.assertIn("#### Affected Runtime", markdown)
+        self.assertIn("GET https://api.example.test/api/private/auth/me", markdown)
         self.assertIn("## Deferred Test Opportunities", markdown)
         self.assertIn("### Review linked customer portal", markdown)
         self.assertIn("Needs explicit scope confirmation", markdown)
@@ -371,6 +381,58 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(context["memory"][0]["kind"], "summary")
             self.assertEqual(context["events"][0]["action"], "complete")
 
+    def test_load_source_discovery_context_reads_source_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_dir = Path(directory)
+            (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+            (source_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {"kind": "source_info", "content": {"path": "/tmp/source"}},
+                        {
+                            "kind": "source_index",
+                            "content": {
+                                "schema": "mosh.source-index.v1",
+                                "evidence_refs": [{"path": "app.py", "start_line": 1, "end_line": 2}],
+                            },
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (source_dir / "events.json").write_text('[{"action":"complete"}]', encoding="utf-8")
+
+            context = load_source_discovery_context(source_dir)
+
+            self.assertEqual(context["report_markdown"], "# Source Discovery\n")
+            self.assertEqual(context["source_index"]["schema"], "mosh.source-index.v1")
+            self.assertEqual(context["source_index"]["evidence_refs"][0]["path"], "app.py")
+
+    def test_assessment_evidence_bundle_can_combine_live_and_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            discovery_dir = root / "discovery"
+            source_dir = root / "source-discovery"
+            discovery_dir.mkdir()
+            source_dir.mkdir()
+            for path, title in ((discovery_dir, "Discovery"), (source_dir, "Source Discovery")):
+                (path / "report.md").write_text(f"# {title}\n", encoding="utf-8")
+                (path / "events.json").write_text("[]", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (source_dir / "memory.json").write_text(
+                '[{"kind":"source_index","content":{"schema":"mosh.source-index.v1"}}]',
+                encoding="utf-8",
+            )
+
+            bundle = load_assessment_evidence_bundle(
+                live_discovery_dir=discovery_dir,
+                source_discovery_dir=source_dir,
+            )
+
+            self.assertEqual(bundle["schema"], "mosh.assessment-evidence-bundle.v1")
+            self.assertIn("live_discovery", bundle)
+            self.assertEqual(bundle["source_discovery"]["source_index"]["schema"], "mosh.source-index.v1")
+
     def test_orchestrator_writes_under_security_test_planning_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
@@ -394,6 +456,56 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(runner.calls[0]["discovery_dir"], str(discovery_dir))
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "start" for event in events))
+
+    def test_orchestrator_can_plan_with_source_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            source = "/tmp/example-source"
+            output_root = Path(directory) / "report"
+            discovery_dir = output_root / report_dir_name(target_url) / "discovery"
+            source_dir = output_root / source_report_dir_name(source) / "source-discovery"
+            discovery_dir.mkdir(parents=True)
+            source_dir.mkdir(parents=True)
+            for path in (discovery_dir, source_dir):
+                (path / "report.md").write_text("# Discovery\n", encoding="utf-8")
+                (path / "memory.json").write_text("[]", encoding="utf-8")
+                (path / "events.json").write_text("[]", encoding="utf-8")
+            runner = FakeSecurityPlanningRunner()
+
+            report_dir = SecurityTestPlanningOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=runner,
+            ).run(target_url, source=source)
+
+            self.assertEqual(report_dir, output_root / report_dir_name(target_url) / "security-test-planning")
+            self.assertEqual(runner.calls[0]["source"], source)
+            self.assertEqual(runner.calls[0]["source_discovery_dir"], str(source_dir))
+            markdown = (report_dir / "security_test_plan.md").read_text(encoding="utf-8")
+            self.assertIn("Execution mode: `combined`", markdown)
+            self.assertIn("#### Affected Source", markdown)
+
+    def test_orchestrator_can_plan_source_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = "/tmp/example-source"
+            output_root = Path(directory) / "report"
+            source_root = output_root / source_report_dir_name(source)
+            source_dir = source_root / "source-discovery"
+            source_dir.mkdir(parents=True)
+            (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+            (source_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (source_dir / "events.json").write_text("[]", encoding="utf-8")
+
+            report_dir = SecurityTestPlanningOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=FakeSecurityPlanningRunner(),
+            ).run(source=source)
+
+            self.assertEqual(report_dir, source_root / "security-test-planning")
+            template = load_engagement_file(report_dir / "engagement_template.yaml")
+            self.assertEqual(template["targets"]["production"]["source"], source)
+            self.assertFalse(template["engagement"]["active_testing_allowed"])
 
     def test_engagement_template_contains_alternative_target_overrides_and_credential_placeholders(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -462,6 +574,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(critic_plan["test_hypotheses"][0]["id"], "API-001")
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "engagement_template_written" for event in events))
+            self.assertFalse((report_dir / ".crew_config").exists())
 
     def test_missing_discovery_directory_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -501,31 +614,6 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("generic security checklist", tasks)
         self.assertIn("{security_test_plan}", tasks)
         self.assertIn("Do not review the planner's prose summary", tasks)
-
-    def test_security_planning_runtime_config_subsets_only_include_relevant_blocks(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            agents_path, tasks_path = _write_security_planning_subset_configs(
-                Path(directory),
-                "cycle",
-                agent_keys=["planner", "reviewer"],
-                task_keys=["draft_security_test_plan_task", "critique_security_test_plan_task"],
-            )
-
-            agents = Path(agents_path).read_text(encoding="utf-8")
-            tasks = Path(tasks_path).read_text(encoding="utf-8")
-
-        self.assertTrue(Path(agents_path).is_absolute())
-        self.assertTrue(Path(tasks_path).is_absolute())
-        self.assertIn("planner:", agents)
-        self.assertIn("reviewer:", agents)
-        self.assertNotIn("engagement_refiner:", agents)
-        self.assertIn("draft_security_test_plan_task:", tasks)
-        self.assertIn("critique_security_test_plan_task:", tasks)
-        self.assertNotIn("refine_engagement_template_task:", tasks)
-
-    def test_security_planning_yaml_subset_reports_missing_blocks(self) -> None:
-        with self.assertRaisesRegex(KeyError, "missing_agent"):
-            _select_yaml_top_level_blocks("planner:\n  role: Planner\n", ["missing_agent"])
 
 
 if __name__ == "__main__":

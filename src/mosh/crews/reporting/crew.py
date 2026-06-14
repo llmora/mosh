@@ -172,12 +172,8 @@ def build_final_report_bundle(target_url: str, domain_dir: Path) -> dict[str, An
 
 def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
     write_tool = _build_write_final_report_tool(crewai, state)
-    agents_path, tasks_path = _write_reporting_subset_configs(
-        state.report_dir,
-        "writer",
-        agent_keys=["writer"],
-        task_keys=["write_final_report_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/tasks.yaml"))
 
     @crewai.CrewBase
     class FinalReportWriterCrew:
@@ -219,12 +215,8 @@ def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
     review_tool = _build_submit_final_report_review_tool(crewai, state)
-    agents_path, tasks_path = _write_reporting_subset_configs(
-        state.report_dir,
-        "reviewer",
-        agent_keys=["reviewer"],
-        task_keys=["review_final_report_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/tasks.yaml"))
 
     @crewai.CrewBase
     class FinalReportReviewerCrew:
@@ -339,43 +331,6 @@ def _build_submit_final_report_review_tool(crewai: Any, state: FinalReportState)
             return json.dumps(state.review, sort_keys=True)
 
     return SubmitFinalReportReviewTool()
-
-
-def _write_reporting_subset_configs(
-    report_dir: Path,
-    name: str,
-    agent_keys: list[str],
-    task_keys: list[str],
-) -> tuple[str, str]:
-    config_dir = report_dir / ".crew_config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    source_agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/agents.yaml").read_text(encoding="utf-8")
-    source_tasks = resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/tasks.yaml").read_text(encoding="utf-8")
-    agents_path = config_dir / f"{name}_agents.yaml"
-    tasks_path = config_dir / f"{name}_tasks.yaml"
-    agents_path.write_text(_select_yaml_top_level_blocks(source_agents, agent_keys), encoding="utf-8")
-    tasks_path.write_text(_select_yaml_top_level_blocks(source_tasks, task_keys), encoding="utf-8")
-    return str(agents_path.resolve()), str(tasks_path.resolve())
-
-
-def _select_yaml_top_level_blocks(source: str, keys: list[str]) -> str:
-    blocks: dict[str, list[str]] = {}
-    current_key: str | None = None
-    current_block: list[str] = []
-    for line in source.splitlines():
-        if line and not line[0].isspace() and line.rstrip().endswith(":"):
-            if current_key is not None:
-                blocks[current_key] = current_block
-            current_key = line.rstrip()[:-1]
-            current_block = [line]
-        elif current_key is not None:
-            current_block.append(line)
-    if current_key is not None:
-        blocks[current_key] = current_block
-    missing = [key for key in keys if key not in blocks]
-    if missing:
-        raise KeyError(f"Missing reporting YAML config block(s): {', '.join(missing)}")
-    return "\n\n".join("\n".join(blocks[key]).rstrip() for key in keys) + "\n"
 
 
 def _load_discovery_summary(discovery_dir: Path) -> dict[str, Any]:

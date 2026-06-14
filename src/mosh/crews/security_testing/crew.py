@@ -932,12 +932,8 @@ def _artifact_decision_names(value: Any) -> set[str]:
 def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     command_tool = _build_run_security_command_tool(crewai, config, state)
     evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
-    agents_path, tasks_path = _write_security_testing_subset_configs(
-        state.report_dir,
-        f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_executor",
-        agent_keys=["executor"],
-        task_keys=["execute_security_test_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestExecutorCrew:
@@ -979,12 +975,8 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     review_tool = _build_submit_execution_review_tool(crewai, state)
-    agents_path, tasks_path = _write_security_testing_subset_configs(
-        state.report_dir,
-        f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_reviewer",
-        agent_keys=["reviewer"],
-        task_keys=["review_security_test_evidence_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestReviewerCrew:
@@ -1026,12 +1018,8 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
 
 def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     report_tool = _build_write_executed_test_report_tool(crewai, state)
-    agents_path, tasks_path = _write_security_testing_subset_configs(
-        state.report_dir,
-        f"{_safe_test_id(_hypothesis_id(state.hypothesis))}_reporter",
-        agent_keys=["reporter"],
-        task_keys=["write_executed_security_test_report_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestReporterCrew:
@@ -1983,44 +1971,3 @@ def _split_inline_numbered_list(value: str) -> list[str]:
         if item:
             items.append(item)
     return items
-
-
-def _write_security_testing_subset_configs(
-    report_dir: Path,
-    name: str,
-    agent_keys: list[str],
-    task_keys: list[str],
-) -> tuple[str, str]:
-    config_dir = report_dir / ".crew_config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    source_agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml").read_text(
-        encoding="utf-8"
-    )
-    source_tasks = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml").read_text(
-        encoding="utf-8"
-    )
-    agents_path = config_dir / f"{name}_agents.yaml"
-    tasks_path = config_dir / f"{name}_tasks.yaml"
-    agents_path.write_text(_select_yaml_top_level_blocks(source_agents, agent_keys), encoding="utf-8")
-    tasks_path.write_text(_select_yaml_top_level_blocks(source_tasks, task_keys), encoding="utf-8")
-    return str(agents_path.resolve()), str(tasks_path.resolve())
-
-
-def _select_yaml_top_level_blocks(source: str, keys: list[str]) -> str:
-    blocks: dict[str, list[str]] = {}
-    current_key: str | None = None
-    current_block: list[str] = []
-    for line in source.splitlines():
-        if line and not line[0].isspace() and line.rstrip().endswith(":"):
-            if current_key is not None:
-                blocks[current_key] = current_block
-            current_key = line.rstrip()[:-1]
-            current_block = [line]
-        elif current_key is not None:
-            current_block.append(line)
-    if current_key is not None:
-        blocks[current_key] = current_block
-    missing = [key for key in keys if key not in blocks]
-    if missing:
-        raise KeyError(f"Missing security testing YAML config block(s): {', '.join(missing)}")
-    return "\n\n".join("\n".join(blocks[key]).rstrip() for key in keys) + "\n"

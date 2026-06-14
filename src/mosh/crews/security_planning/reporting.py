@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,9 @@ def _add_hypotheses(lines: list[str], value: Any) -> None:
                 f"- Surface: `{_text(hypothesis.get('surface')) or 'unknown'}`",
                 f"- Priority: `{_text(hypothesis.get('priority')) or 'unknown'}`",
                 f"- Status: `{_text(hypothesis.get('status')) or 'planned'}`",
+                f"- Execution mode: `{_text(hypothesis.get('execution_mode')) or 'live'}`",
+                f"- Evidence sources: `{', '.join(_string_list(hypothesis.get('evidence_sources'))) or 'live'}`",
+                f"- Verification strategy: `{_text(hypothesis.get('verification_strategy')) or 'live-verification'}`",
                 "",
             ]
         )
@@ -117,6 +121,8 @@ def _add_hypotheses(lines: list[str], value: Any) -> None:
         _add_inline_text(lines, "Business Value", hypothesis.get("business_value"))
         _add_inline_text(lines, "Expected Secure Behavior", hypothesis.get("expected_secure_behavior"))
         _add_bullets(lines, "Evidence", hypothesis.get("evidence"))
+        _add_bullets(lines, "Affected Runtime", _format_structured_items(hypothesis.get("affected_runtime")))
+        _add_bullets(lines, "Affected Source", _format_structured_items(hypothesis.get("affected_source")))
         _add_bullets(lines, "Requirements", hypothesis.get("requirements"))
         _add_bullets(lines, "Tools Expected", hypothesis.get("tools_expected"))
         _add_bullets(lines, "Preconditions", hypothesis.get("preconditions"))
@@ -200,6 +206,31 @@ def _is_placeholder_text(value: Any) -> bool:
 
 def _string_list(value: Any) -> list[str]:
     return [_text(item) for item in _list(value) if _text(item) and not _is_placeholder_item(item)]
+
+
+def _format_structured_items(value: Any) -> list[str]:
+    items = []
+    for item in _list(value):
+        if _is_placeholder_item(item):
+            continue
+        if isinstance(item, dict):
+            path = _text(item.get("path"))
+            method = _text(item.get("method"))
+            url = _text(item.get("url") or item.get("route") or item.get("full_route"))
+            line = _text(item.get("start_line") or item.get("line"))
+            end_line = _text(item.get("end_line"))
+            if path:
+                suffix = f":{line}" if line and line == end_line else f":{line}-{end_line}" if line and end_line else ""
+                label = f"{path}{suffix}"
+            elif method or url:
+                label = f"{method} {url}".strip()
+            else:
+                label = json.dumps(item, sort_keys=True)
+            reason = _text(item.get("reason") or item.get("symbol"))
+            items.append(f"{label} ({reason})" if reason else label)
+        else:
+            items.append(_text(item))
+    return [item for item in items if item]
 
 
 def _text(value: Any) -> str:

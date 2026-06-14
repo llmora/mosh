@@ -181,6 +181,7 @@ class FinalReportingTests(unittest.TestCase):
             self.assertNotIn("### HDR-001:", markdown)
             memory_items = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
             self.assertTrue(any(item["kind"] == "final_report_review" for item in memory_items))
+            self.assertFalse((report_dir / ".crew_config").exists())
 
     def test_rendered_report_fences_unclosed_markdown_from_source_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

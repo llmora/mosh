@@ -329,8 +329,8 @@ mosh discover-source https://github.com/example/app.git
 2. Add source model configuration keys to `mosh.yaml` validation.
 3. Implement local-path `source-discovery` with deterministic tools and tests.
 4. Write `source-discovery/report.md`, `events.json`, and `memory.json`.
-5. Change planning to build an assessment evidence bundle.
-6. Extend planner/reviewer prompt contracts with `execution_mode`,
+5. Done: Change planning to build an assessment evidence bundle.
+6. Done: Extend planner/reviewer prompt contracts with `execution_mode`,
    `evidence_sources`, `affected_runtime`, `affected_source`, and
    `verification_strategy`.
 7. Extend preflight to route source, live, combined, and deferred hypotheses.
