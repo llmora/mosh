@@ -5,6 +5,13 @@ from pathlib import Path
 from mosh.memory import FileMemory
 from mosh.models import CrawlResult
 from mosh.crews.discovery.reporting import write_reports
+from mosh.crews.source_discovery.agents import (
+    DependencyConfigAgent,
+    SourceDiscoveryReporterAgent,
+    SourceIntakeAgent,
+    SourceMapperAgent,
+)
+from mosh.crews.source_discovery.reporting import write_source_discovery_report
 from mosh.crews.security_testing.crew import (
     _archive_latest_report,
     _execution_metadata,
@@ -93,6 +100,125 @@ class FakeCrewResult:
     def __init__(self, crawl: CrawlResult, components: list[dict[str, str]], summary: dict[str, int]) -> None:
         self.crawl = crawl
         self.components = components
+        self.summary = summary
+
+
+class FakeSourceDiscoveryRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, source: str, report_dir: Path, memory: FileMemory):
+        self.calls.append({"source": source, "report_dir": str(report_dir)})
+        intake = SourceIntakeAgent()
+        mapper = SourceMapperAgent()
+        dependency_config = DependencyConfigAgent()
+        reporter = SourceDiscoveryReporterAgent()
+        source_info = intake.validate(source, memory)
+        inventory = mapper.inventory(str(source_info["path"]), memory)
+        routes = mapper.routes(str(source_info["path"]), memory)
+        resolved_route_records = []
+        for route in routes.get("routes", []):
+            if isinstance(route, dict) and route.get("full_route") == "/api/v1/users":
+                resolved_route_records.append(
+                    {
+                        **route,
+                        "route_resolution_source": "model-assisted",
+                        "route_resolution_confidence": "high",
+                        "route_resolution_reason": "Fixture confirms mounted Express router path.",
+                    }
+                )
+            else:
+                resolved_route_records.append(route)
+        routes = {**routes, "routes": resolved_route_records}
+        route_resolution = {
+            "schema": "mosh.source-route-resolution.v1",
+            "resolved_routes": [
+                {
+                    "full_route": "/api/v1/users",
+                    "confidence": "high",
+                    "reason": "Fixture confirms mounted Express router path.",
+                    "evidence": ["apps/api/src/server.ts"],
+                }
+            ],
+            "applied_count": 1,
+        }
+        dependencies = dependency_config.dependencies(str(source_info["path"]), memory)
+        configuration = dependency_config.configuration(str(source_info["path"]), memory)
+        component_map = {
+            "schema": "mosh.source-component-map.v1",
+            "application_purpose": "Fixture application used by the source discovery test harness.",
+            "business_domain": "test fixture",
+            "key_components": [
+                {
+                    "title": "HTTP API",
+                    "detail": "Express and Flask route candidates were identified.",
+                    "evidence": ["app.py", "apps/api/src/server.ts"],
+                }
+            ],
+            "sensitive_data": [
+                {
+                    "title": "User records",
+                    "detail": "User API route candidates are present.",
+                    "evidence": ["/api/v1/users"],
+                }
+            ],
+            "trust_boundaries": [
+                {
+                    "title": "Client to API",
+                    "detail": "HTTP route candidates cross the external request boundary.",
+                    "evidence": ["/api/v1/users"],
+                }
+            ],
+        }
+        gap_analysis = {
+            "schema": "mosh.source-gap-analysis.v1",
+            "gaps": [
+                {
+                    "title": "Source-only discovery needs live correlation",
+                    "detail": "Route candidates should be correlated with deployed paths when a live URL is available.",
+                    "evidence": ["/api/v1/users"],
+                }
+            ],
+            "limitations": ["Fixture gap analysis is deterministic for tests."],
+            "recommended_follow_up": ["Use source discovery output during security planning."],
+        }
+        memory.add_item("source_route_resolution", route_resolution, "source_route_resolver")
+        memory.add_item("source_routes_resolved", routes, "source_route_resolver")
+        memory.add_item("source_component_map", component_map, "source_component_mapper")
+        memory.add_item("source_gap_analysis", gap_analysis, "source_gap_analyst")
+        summary = reporter.summarize(source_info, inventory, routes, dependencies, configuration, memory)
+        source_index = reporter.build_source_index(
+            source_info,
+            inventory,
+            routes,
+            dependencies,
+            configuration,
+            memory,
+            route_resolution=route_resolution,
+            component_map=component_map,
+            gap_analysis=gap_analysis,
+        )
+        memory.add_item(
+            "llm_report",
+            {
+                "structured": {
+                    "title": "Source Discovery Report",
+                    "executive_summary": "Fake source discovery completed.",
+                }
+            },
+            "reporter",
+        )
+        write_source_discovery_report(
+            report_dir,
+            source_index,
+            {"title": "Source Discovery Report", "executive_summary": "Fake source discovery completed."},
+        )
+        return FakeSourceDiscoveryResult(source_index, summary)
+
+
+class FakeSourceDiscoveryResult:
+    def __init__(self, source_index: dict[str, object], summary: dict[str, object]) -> None:
+        self.source_index = source_index
         self.summary = summary
 
 

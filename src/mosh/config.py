@@ -29,6 +29,17 @@ class SecurityTestingModelConfig:
 
 
 @dataclass(frozen=True)
+class SourceDiscoveryModelConfig:
+    intake: str = "deepseek/deepseek-v4-flash"
+    mapper: str = "deepseek/deepseek-v4-flash"
+    route_resolver: str = "deepseek/deepseek-v4-flash"
+    dependency_config: str = "deepseek/deepseek-v4-flash"
+    component_mapper: str = "deepseek/deepseek-v4-flash"
+    gap_analyst: str = "deepseek/deepseek-v4-flash"
+    reporter: str = "deepseek/deepseek-v4-flash"
+
+
+@dataclass(frozen=True)
 class ReportingModelConfig:
     writer: str = "deepseek/deepseek-v4-pro"
     reviewer: str = "deepseek/deepseek-v4-pro"
@@ -39,6 +50,7 @@ class AgentModelConfig:
     discovery: DiscoveryModelConfig = field(default_factory=DiscoveryModelConfig)
     security_planning: SecurityPlanningModelConfig = field(default_factory=SecurityPlanningModelConfig)
     security_testing: SecurityTestingModelConfig = field(default_factory=SecurityTestingModelConfig)
+    source_discovery: SourceDiscoveryModelConfig = field(default_factory=SourceDiscoveryModelConfig)
     reporting: ReportingModelConfig = field(default_factory=ReportingModelConfig)
 
 
@@ -158,6 +170,7 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
         "reporting": defaults.reporting,
         "security_planning": defaults.security_planning,
         "security_testing": defaults.security_testing,
+        "source_discovery": defaults.source_discovery,
     }
     overrides: dict[str, object] = {}
     for crew_name, crew_values in raw_models.items():

@@ -11,9 +11,15 @@ from unittest.mock import patch
 
 from mosh.cli import main
 from mosh.engagement import write_engagement_template
-from mosh.scope import report_dir_name
-from tests.fakes import FakeCrewRunner, FakeFinalReportingRunner, FakeSecurityPlanningRunner, FakeSecurityTestingRunner
-from tests.fixtures import fixture_server
+from mosh.scope import report_dir_name, source_report_dir_name
+from tests.fakes import (
+    FakeCrewRunner,
+    FakeFinalReportingRunner,
+    FakeSecurityPlanningRunner,
+    FakeSecurityTestingRunner,
+    FakeSourceDiscoveryRunner,
+)
+from tests.fixtures import fixture_server, fixture_source_tree
 
 
 class CliTests(unittest.TestCase):
@@ -67,6 +73,26 @@ class CliTests(unittest.TestCase):
                 report_dir = Path(directory) / "report" / report_dir_name(url) / "discovery"
                 self.assertEqual(exit_code, 0)
                 self.assertTrue((report_dir / "report.md").exists())
+
+    def test_cli_discover_source_subcommand_writes_source_discovery_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with fixture_source_tree() as source:
+                stdout = io.StringIO()
+                with patch(
+                    "mosh.crews.source_discovery.crew.build_source_discovery_crew_runner",
+                    return_value=FakeSourceDiscoveryRunner(),
+                ):
+                    with contextlib.redirect_stdout(stdout):
+                        exit_code = main(["discover-source", str(source), "--output-root", str(Path(directory) / "report")])
+
+                report_dir = Path(directory) / "report" / source_report_dir_name(source) / "source-discovery"
+                self.assertEqual(exit_code, 0)
+                self.assertIn("Source discovery report written to", stdout.getvalue())
+                self.assertTrue((report_dir / "report.md").exists())
+                self.assertTrue((report_dir / "events.json").exists())
+                self.assertTrue((report_dir / "memory.json").exists())
+                memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+                self.assertTrue(any(item["kind"] == "source_index" for item in memory))
 
     def test_cli_plan_security_subcommand_writes_security_test_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
