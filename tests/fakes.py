@@ -226,13 +226,32 @@ class FakeSecurityPlanningRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def run(self, target_url: str, discovery_dir: Path, report_dir: Path, memory: FileMemory):
+    def run(
+        self,
+        target_url: str,
+        discovery_dir: Path,
+        report_dir: Path,
+        memory: FileMemory,
+        source: str | None = None,
+        source_discovery_dir: Path | None = None,
+    ):
         self.calls.append(
             {
                 "target_url": target_url,
                 "discovery_dir": str(discovery_dir),
                 "report_dir": str(report_dir),
+                "source": source,
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
             }
+        )
+        execution_mode = "source" if target_url.startswith("source:") else "combined" if source else "live"
+        evidence_sources = ["source"] if execution_mode == "source" else ["live", "source"] if source else ["live"]
+        verification_strategy = (
+            "source-inspection"
+            if execution_mode == "source"
+            else "source-guided-live-verification"
+            if execution_mode == "combined"
+            else "live-verification"
         )
         plan = {
             "title": "Security Test Plan",
@@ -254,9 +273,17 @@ class FakeSecurityPlanningRunner:
                     "interesting_failure_modes": ["200 OK without credentials."],
                     "safety_notes": ["Do not brute force credentials."],
                     "stopping_conditions": ["Stop after observing authentication enforcement."],
+                    "execution_mode": execution_mode,
+                    "evidence_sources": evidence_sources,
+                    "affected_runtime": [{"method": "GET", "url": "https://api.example.test/api/private/auth/me"}],
+                    "affected_source": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}]
+                    if source
+                    else [],
+                    "verification_strategy": verification_strategy,
                     "status": "planned",
                 }
             ],
+            "deferred_test_opportunities": [],
             "not_in_scope": [],
             "open_questions": [],
         }

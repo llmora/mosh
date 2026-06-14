@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -19,7 +20,7 @@ from mosh.crews.events import MoshCrewAIEventListener
 from mosh.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
 from mosh.memory import FileMemory
 from mosh.models import Event
-from mosh.scope import report_dir_name
+from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.reporting import write_security_test_plan
 
 
@@ -30,6 +31,8 @@ class SecurityTestPlanningState:
     report_dir: Path
     memory: FileMemory
     discovery_context: dict[str, Any]
+    source: str | None = None
+    source_discovery_dir: Path | None = None
     current_plan: dict[str, Any] | None = None
     current_review: dict[str, Any] | None = None
     accepted: bool = False
@@ -51,6 +54,8 @@ class SecurityTestPlanningCrewRunner(Protocol):
         discovery_dir: Path,
         report_dir: Path,
         memory: FileMemory,
+        source: str | None = None,
+        source_discovery_dir: Path | None = None,
     ) -> SecurityTestPlanningResult:
         pass
 
@@ -100,6 +105,8 @@ class CrewAISecurityTestPlanningCrewRunner:
         discovery_dir: Path,
         report_dir: Path,
         memory: FileMemory,
+        source: str | None = None,
+        source_discovery_dir: Path | None = None,
     ) -> SecurityTestPlanningResult:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
@@ -112,7 +119,10 @@ class CrewAISecurityTestPlanningCrewRunner:
         if missing_keys:
             raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
 
-        discovery_context = load_discovery_context(discovery_dir)
+        discovery_context = load_assessment_evidence_bundle(
+            live_discovery_dir=discovery_dir if target_url and not target_url.startswith("source:") else None,
+            source_discovery_dir=source_discovery_dir,
+        )
         crewai = _load_crewai()
         state = SecurityTestPlanningState(
             target_url=target_url,
@@ -120,13 +130,20 @@ class CrewAISecurityTestPlanningCrewRunner:
             report_dir=report_dir,
             memory=memory,
             discovery_context=discovery_context,
+            source=source,
+            source_discovery_dir=source_discovery_dir,
         )
 
         memory.record_event(
             "orchestrator",
             "crew_start",
             "Starting CrewAI security test planning crew",
-            {"target": target_url, "discovery_dir": str(discovery_dir)},
+            {
+                "target": target_url,
+                "source": source,
+                "discovery_dir": str(discovery_dir),
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
+            },
         )
 
         max_attempts = self.config.planning_max_revisions + 1
@@ -170,7 +187,7 @@ class CrewAISecurityTestPlanningCrewRunner:
         if state.current_plan is None:
             raise RuntimeError("Security test planner did not produce a plan.")
 
-        deterministic_engagement_template = build_engagement_template(target_url, state.current_plan)
+        deterministic_engagement_template = _build_planning_engagement_template(target_url, source, state.current_plan)
         engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
         current_engagement_template = load_engagement_file(report_dir / "engagement_template.yaml")
         memory.record_event(
@@ -261,26 +278,40 @@ class SecurityTestPlanningOrchestrator:
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_security_test_planning_crew_runner(config)
 
-    def run(self, url: str) -> Path:
-        domain_dir = self.output_root / report_dir_name(url)
+    def run(self, url: str | None = None, *, source: str | None = None) -> Path:
+        if not url and not source:
+            raise ValueError("Security planning requires a target URL, a source path, or both.")
+        domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
         discovery_dir = domain_dir / "discovery"
+        source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
         report_dir = domain_dir / "security-test-planning"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
+        target = url or f"source:{source}"
         agent_definitions = security_test_planning_agent_definitions(self.config)
         memory.record_event(
             "orchestrator",
             "start",
             "Starting security test planning crew",
             {
-                "target": url,
+                "target": target,
+                "source": source,
                 "discovery_dir": str(discovery_dir),
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
-        result = self.crew_runner.run(url, discovery_dir, report_dir, memory)
+        if len(inspect.signature(self.crew_runner.run).parameters) <= 4:
+            if source or source_discovery_dir:
+                raise TypeError("Configured security planning runner does not support source-aware planning.")
+            result = self.crew_runner.run(target, discovery_dir, report_dir, memory)
+        else:
+            result = self.crew_runner.run(target, discovery_dir, report_dir, memory, source, source_discovery_dir)
         engagement_path = report_dir / "engagement_template.yaml"
         if not engagement_path.exists():
-            engagement_template = write_engagement_template_mapping(report_dir, build_engagement_template(url, result.plan))
+            engagement_template = write_engagement_template_mapping(
+                report_dir,
+                _build_planning_engagement_template(url or "", source, result.plan),
+            )
             memory.record_event(
                 "orchestrator",
                 "engagement_template_written",
@@ -314,14 +345,85 @@ def load_discovery_context(discovery_dir: Path) -> dict[str, Any]:
     }
 
 
+def load_source_discovery_context(source_discovery_dir: Path) -> dict[str, Any]:
+    if not source_discovery_dir.exists():
+        raise FileNotFoundError(f"Source discovery output not found: {source_discovery_dir}")
+    memory = _read_json(source_discovery_dir / "memory.json", [])
+    source_index = _latest_memory_item(memory, "source_index")
+    return {
+        "report_markdown": _read_text(source_discovery_dir / "report.md"),
+        "memory": memory,
+        "events": _read_json(source_discovery_dir / "events.json", []),
+        "source_index": source_index,
+    }
+
+
+def load_assessment_evidence_bundle(
+    *,
+    live_discovery_dir: Path | None = None,
+    source_discovery_dir: Path | None = None,
+) -> dict[str, Any]:
+    if not live_discovery_dir and not source_discovery_dir:
+        raise FileNotFoundError("No discovery output was provided for security planning.")
+    return {
+        "schema": "mosh.assessment-evidence-bundle.v1",
+        "live_discovery": load_discovery_context(live_discovery_dir) if live_discovery_dir else {},
+        "source_discovery": load_source_discovery_context(source_discovery_dir) if source_discovery_dir else {},
+        "correlation": {},
+        "prior_security_testing_feedback": {},
+        "prior_source_testing_feedback": {},
+    }
+
+
+def _latest_memory_item(memory: Any, kind: str) -> Any:
+    if not isinstance(memory, list):
+        return {}
+    for item in reversed(memory):
+        if isinstance(item, dict) and item.get("kind") == kind:
+            return item.get("content") if isinstance(item.get("content"), dict) else item.get("content")
+    return {}
+
+
+def _build_planning_engagement_template(target_url: str, source: str | None, plan: dict[str, Any]) -> dict[str, Any]:
+    if target_url and not target_url.startswith("source:"):
+        return build_engagement_template(target_url, plan)
+    source_target = source or target_url.removeprefix("source:") or "source"
+    return {
+        "engagement": {
+            "authorization_confirmed": True,
+            "active_testing_allowed": False,
+            "state_changing_tests_allowed": False,
+            "notes": "Source-only planning template. Live execution targets are not configured.",
+        },
+        "targets": {
+            "production": {"source": source_target},
+            "alternative": {"source": None},
+        },
+        "contacts": {"escalation": {"name": None, "email": None, "phone": None}},
+        "limits": {
+            "max_requests_per_test": 0,
+            "max_rate_per_second": 0,
+            "stop_on_sensitive_data": True,
+            "evidence_redaction": True,
+        },
+        "credentials": {"authenticated_user": {"username": None, "password": None, "token": None}},
+        "safe_test_data": {
+            "marker_prefix": "SECTEST-DO-NOT-PROCESS",
+            "email": None,
+            "phone": None,
+            "company": None,
+            "customer_ids": [],
+            "enterprise_account_ids": [],
+            "activation_codes": [],
+            "callback_listener_url": None,
+        },
+    }
+
+
 def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     plan_tool = _build_submit_plan_tool(crewai, state)
-    agents_path, tasks_path = _write_security_planning_subset_configs(
-        state.report_dir,
-        "planner",
-        agent_keys=["planner"],
-        task_keys=["draft_security_test_plan_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningPlannerCrew:
@@ -363,12 +465,8 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
 
 def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     critique_tool = _build_submit_critique_tool(crewai, state)
-    agents_path, tasks_path = _write_security_planning_subset_configs(
-        state.report_dir,
-        "critic",
-        agent_keys=["reviewer"],
-        task_keys=["critique_security_test_plan_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningCriticCrew:
@@ -410,12 +508,8 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
 
 def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     write_tool = _build_write_security_test_plan_tool(crewai, state)
-    agents_path, tasks_path = _write_security_planning_subset_configs(
-        state.report_dir,
-        "reporter",
-        agent_keys=["reporter"],
-        task_keys=["write_security_test_plan_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningReporterCrew:
@@ -462,12 +556,8 @@ def _build_engagement_template_refinement_crew(
     deterministic_template: dict[str, Any],
 ):
     write_tool = _build_write_refined_engagement_template_tool(crewai, state, deterministic_template)
-    agents_path, tasks_path = _write_security_planning_subset_configs(
-        state.report_dir,
-        "engagement_refiner",
-        agent_keys=["engagement_refiner"],
-        task_keys=["refine_engagement_template_task"],
-    )
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
 
     @crewai.CrewBase
     class EngagementTemplateRefinementCrew:
@@ -507,48 +597,6 @@ def _build_engagement_template_refinement_crew(
     return EngagementTemplateRefinementCrew()
 
 
-def _write_security_planning_subset_configs(
-    report_dir: Path,
-    name: str,
-    agent_keys: list[str],
-    task_keys: list[str],
-) -> tuple[str, str]:
-    config_dir = report_dir / ".crew_config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    source_agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml").read_text(
-        encoding="utf-8"
-    )
-    source_tasks = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml").read_text(
-        encoding="utf-8"
-    )
-    agents_path = config_dir / f"{name}_agents.yaml"
-    tasks_path = config_dir / f"{name}_tasks.yaml"
-    agents_path.write_text(_select_yaml_top_level_blocks(source_agents, agent_keys), encoding="utf-8")
-    tasks_path.write_text(_select_yaml_top_level_blocks(source_tasks, task_keys), encoding="utf-8")
-    return str(agents_path.resolve()), str(tasks_path.resolve())
-
-
-def _select_yaml_top_level_blocks(source: str, keys: list[str]) -> str:
-    blocks: dict[str, list[str]] = {}
-    current_key: str | None = None
-    current_block: list[str] = []
-    for line in source.splitlines():
-        if line and not line[0].isspace() and line.rstrip().endswith(":"):
-            if current_key is not None:
-                blocks[current_key] = current_block
-            current_key = line.rstrip()[:-1]
-            current_block = [line]
-        elif current_key is not None:
-            current_block.append(line)
-    if current_key is not None:
-        blocks[current_key] = current_block
-
-    missing = [key for key in keys if key not in blocks]
-    if missing:
-        raise KeyError(f"Missing security planning YAML config block(s): {', '.join(missing)}")
-    return "\n\n".join("\n".join(blocks[key]).rstrip() for key in keys) + "\n"
-
-
 def _build_submit_plan_tool(crewai: Any, state: SecurityTestPlanningState):
     class SubmitPlanInput(crewai.BaseModel):
         plan: dict[str, Any] | str = crewai.Field(
@@ -562,7 +610,7 @@ def _build_submit_plan_tool(crewai: Any, state: SecurityTestPlanningState):
         args_schema: type[crewai.BaseModel] = SubmitPlanInput
 
         def _run(self, plan: Any) -> str:
-            plan_content = _coerce_mapping(plan)
+            plan_content = _normalize_security_test_plan(_coerce_mapping(plan), state.discovery_context)
             state.current_plan = plan_content
             state.memory.add_item(
                 "security_test_plan_draft",
@@ -645,7 +693,10 @@ def _build_write_security_test_plan_tool(crewai: Any, state: SecurityTestPlannin
         args_schema: type[crewai.BaseModel] = WritePlanInput
 
         def _run(self, plan: Any, critic_review: Any = None) -> str:
-            plan_content = _prefer_structured_mapping(_coerce_mapping(plan), state.current_plan)
+            plan_content = _normalize_security_test_plan(
+                _prefer_structured_mapping(_coerce_mapping(plan), state.current_plan),
+                state.discovery_context,
+            )
             review_content = (
                 _prefer_structured_mapping(_coerce_mapping(critic_review), state.current_review)
                 if critic_review is not None
@@ -794,6 +845,63 @@ def _prefer_structured_mapping(candidate: dict[str, Any], fallback: dict[str, An
     if candidate and not _is_content_only_mapping(candidate):
         return candidate
     return fallback or candidate or {}
+
+
+def _normalize_security_test_plan(plan: dict[str, Any], assessment_context: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(plan)
+    default_mode = _default_execution_mode(assessment_context)
+    hypotheses = []
+    for item in _list(normalized.get("test_hypotheses")):
+        if not isinstance(item, dict):
+            continue
+        hypothesis = dict(item)
+        hypothesis.setdefault("execution_mode", default_mode)
+        hypothesis.setdefault("evidence_sources", _default_evidence_sources(assessment_context))
+        hypothesis.setdefault("affected_runtime", [])
+        hypothesis.setdefault("affected_source", _default_affected_source(hypothesis, assessment_context))
+        hypothesis.setdefault("verification_strategy", _default_verification_strategy(hypothesis["execution_mode"]))
+        hypotheses.append(hypothesis)
+    normalized["test_hypotheses"] = hypotheses
+    normalized.setdefault("deferred_test_opportunities", [])
+    return normalized
+
+
+def _default_execution_mode(assessment_context: dict[str, Any]) -> str:
+    has_live = bool(assessment_context.get("live_discovery"))
+    has_source = bool(assessment_context.get("source_discovery"))
+    if has_live and has_source:
+        return "combined"
+    if has_source:
+        return "source"
+    return "live"
+
+
+def _default_evidence_sources(assessment_context: dict[str, Any]) -> list[str]:
+    sources = []
+    if assessment_context.get("live_discovery"):
+        sources.append("live")
+    if assessment_context.get("source_discovery"):
+        sources.append("source")
+    return sources or ["live"]
+
+
+def _default_affected_source(hypothesis: dict[str, Any], assessment_context: dict[str, Any]) -> list[dict[str, Any]]:
+    if hypothesis.get("execution_mode") == "live":
+        return []
+    source = assessment_context.get("source_discovery") if isinstance(assessment_context.get("source_discovery"), dict) else {}
+    source_index = source.get("source_index") if isinstance(source.get("source_index"), dict) else {}
+    evidence_refs = source_index.get("evidence_refs") if isinstance(source_index.get("evidence_refs"), list) else []
+    return [item for item in evidence_refs[:5] if isinstance(item, dict)]
+
+
+def _default_verification_strategy(execution_mode: str) -> str:
+    if execution_mode == "source":
+        return "source-inspection"
+    if execution_mode == "combined":
+        return "source-guided-live-verification"
+    if execution_mode == "deferred":
+        return "blocked-pending-inputs"
+    return "live-verification"
 
 
 def _is_content_only_mapping(value: dict[str, Any]) -> bool:
