@@ -151,6 +151,15 @@ models:
     technology_mapper: openai/gpt-5.2-mini
     reporter: openai/gpt-5.2-mini
 
+  source_discovery:
+    intake: openai/gpt-5.2-mini
+    mapper: openai/gpt-5.2-mini
+    route_resolver: openai/gpt-5.2-mini
+    dependency_config: openai/gpt-5.2-mini
+    component_mapper: openai/gpt-5.2-mini
+    gap_analyst: openai/gpt-5.2-mini
+    reporter: openai/gpt-5.2-mini
+
   security_planning:
     planner: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
@@ -188,8 +197,21 @@ CrewAI agent and task definitions should use CrewAI's built-in YAML configuratio
 - Security testing crew:
   - `src/mosh/crews/security_testing/agents.yaml`
   - `src/mosh/crews/security_testing/tasks.yaml`
+- Source discovery crew:
+  - `src/mosh/crews/source_discovery/agents.yaml`
+  - `src/mosh/crews/source_discovery/tasks.yaml`
 
 Python should bind live tool implementations to the YAML-defined agents, but agent roles, goals, backstories, task descriptions, and expected outputs should live in YAML.
+
+Source discovery must keep deterministic tools as the fact base for model
+assistance. The deterministic source index should identify app boundaries,
+entrypoints, route/API candidates, route scope (`production`, `test`,
+`example`, or `unknown` when needed), simple middleware/auth hints,
+dependencies, configuration files, environment variable references, Docker
+Compose service topology, and mobile app/dependency evidence. Model-assisted
+steps may summarize, resolve ambiguous route mounts, and identify gaps, but
+must preserve deterministic evidence and avoid inventing source files,
+dependencies, routes, or deployment behavior.
 
 Crew-specific Python code should also live with the crew. For example, the
 discovery crew owns its `crew.py`, `agents.py`, `crawler.py`, `tools.py`, and
@@ -223,6 +245,7 @@ Current crew output subdirectories are:
 - `report/<host>/discovery/`
 - `report/<host>/security-test-planning/`
 - `report/<host>/security-testing/`
+- `report/<source>/source-discovery/`
 
 ## Real-Time Visibility
 
@@ -645,8 +668,8 @@ At minimum, tests should cover:
 
 # Roadmap
 
-* Implement security testing for source code, based on a repo URL or a local filesystem path
-* If the user provides the source code repo and a live URL for testing use a combined approach that uses the source code and the live systems to complement each other. This needs to be just more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific)
+* Implement security testing for source code, based on a repo URL or a local filesystem path. See `SOURCE_ASSESSMENT_PLAN.md` for the staged implementation plan.
+* If the user provides the source code repo and a live URL for testing use a combined approach that uses the source code and the live systems to complement each other. This needs to be just more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
 * We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
 * We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies
