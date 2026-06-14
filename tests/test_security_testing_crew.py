@@ -18,6 +18,9 @@ from mosh.crews.security_testing.crew import (
     collect_security_testing_discovery_updates,
     _execution_metadata,
     _fallback_executor_evidence,
+    _build_executor_crew,
+    _build_reporter_crew,
+    _build_reviewer_crew,
     _kickoff_capturing_tool_state,
     _build_run_security_command_tool,
     _run_one_security_test,
@@ -460,6 +463,28 @@ class SecurityTestingCrewTests(unittest.TestCase):
             "Authorization: Bearer [REDACTED]",
         )
 
+    def test_security_testing_sub_crews_use_packaged_yaml_without_report_config_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            state = SecurityTestExecutionState(
+                target_url="https://example.test",
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "API-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "API-001", "title": "Auth", "surface": "api", "priority": "high"},
+                engagement={"credentials": {}},
+                targets={"api": "https://api.example.test/api/private"},
+                executed_report_path=report_dir / "executed_tests" / "API-001.md",
+            )
+            config = AppConfig(openrouter_api_key="test-key")
+
+            for builder in (_build_executor_crew, _build_reviewer_crew, _build_reporter_crew):
+                crew = builder(_FakeRuntimeCrewAI, config, state).crew()
+                self.assertEqual(len(crew.agents), 1)
+                self.assertEqual(len(crew.tasks), 1)
+
+            self.assertFalse((report_dir / ".crew_config").exists())
+
     def test_kickoff_ignores_post_tool_failure_when_evidence_was_captured(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
@@ -760,6 +785,72 @@ class _FakeCrewAI:
     @staticmethod
     def Field(default=None, description: str = ""):
         return default
+
+
+class _FakeRuntimeCrewAI(_FakeCrewAI):
+    class Process:
+        sequential = "sequential"
+
+    class LLM:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class Agent:
+        def __init__(self, config, llm, tools, allow_delegation) -> None:
+            self.config = config
+            self.llm = llm
+            self.tools = tools
+            self.allow_delegation = allow_delegation
+
+    class Task:
+        def __init__(self, config, agent, callback=None) -> None:
+            self.config = config
+            self.agent = agent
+            self.callback = callback
+
+    class Crew:
+        def __init__(self, agents, tasks, process, verbose) -> None:
+            self.agents = agents
+            self.tasks = tasks
+            self.process = process
+            self.verbose = verbose
+
+    @staticmethod
+    def CrewBase(cls):
+        if isinstance(getattr(cls, "agents_config", None), str):
+            cls.agents_config = _FakeRuntimeCrewAI._load_config_blocks(cls.agents_config)
+        if isinstance(getattr(cls, "tasks_config", None), str):
+            cls.tasks_config = _FakeRuntimeCrewAI._load_config_blocks(cls.tasks_config)
+        return cls
+
+    @staticmethod
+    def _load_config_blocks(path: str) -> dict[str, str]:
+        blocks: dict[str, list[str]] = {}
+        current_key: str | None = None
+        current_block: list[str] = []
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if line and not line[0].isspace() and line.rstrip().endswith(":"):
+                if current_key is not None:
+                    blocks[current_key] = current_block
+                current_key = line.rstrip()[:-1]
+                current_block = []
+            elif current_key is not None:
+                current_block.append(line)
+        if current_key is not None:
+            blocks[current_key] = current_block
+        return {key: "\n".join(value) for key, value in blocks.items()}
+
+    @staticmethod
+    def agent(fn):
+        return fn
+
+    @staticmethod
+    def task(fn):
+        return fn
+
+    @staticmethod
+    def crew(fn):
+        return fn
 
 
 class _DiscoveryFeedbackSecurityTestingRunner:

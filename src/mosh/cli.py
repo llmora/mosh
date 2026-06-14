@@ -40,7 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     discover_source_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     plan_parser = subcommands.add_parser("plan-security", help="Create a security test plan from discovery output")
-    plan_parser.add_argument("url", help="Target application URL to plan from")
+    plan_parser.add_argument("url", nargs="?", help="Target application URL to plan from")
+    plan_parser.add_argument("--source", help="Local source tree path to include in planning")
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     test_parser = subcommands.add_parser("test-security", help="Run security testing preflight from a security plan")
@@ -105,7 +106,7 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
         event_sink=_print_event,
     )
     try:
-        report_dir = orchestrator.run(args.url)
+        report_dir = orchestrator.run(args.url, source=args.source)
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1

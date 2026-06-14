@@ -49,15 +49,31 @@ draft_security_test_plan_task:
     - interesting_failure_modes: what deviations would be worth investigating
     - safety_notes: scope and safety constraints
     - stopping_conditions: when the later tester should stop
+    - execution_mode: live, source, combined, or deferred
+    - evidence_sources: list containing live and/or source
+    - affected_runtime: list of runtime endpoint objects, such as method and url, or an empty list
+    - affected_source: list of source evidence objects, such as path, start_line, end_line, symbol, and reason, or an empty list
+    - verification_strategy: live-verification, source-inspection, source-guided-live-verification, or blocked-pending-inputs
     - status: planned
 
     Prefer fewer, higher-value hypotheses over a broad checklist. Use the
-    discovery context to infer what the organisation likely needs to protect,
+    assessment evidence bundle to infer what the organisation likely needs to protect,
     such as customer data, payment or fraud workflows, administrative access,
     account recovery, operational continuity, regulatory exposure, partner
     integrations, brand trust, or sensitive internal tooling. Do not invent facts
     that are not supported by discovery; when the organisational risk is an
     inference, say so in the hypothesis.
+
+    Use execution_mode deliberately:
+    - live when the test can be executed through the live URL only
+    - source when source inspection or source tooling is sufficient and no live target is required
+    - combined when source evidence should guide later live verification
+    - deferred when valuable testing is blocked by missing source, URL, credentials, build instructions, authorization, or tooling
+
+    If source_discovery is present in the assessment evidence bundle, use its
+    source_index, route records, component_map, gap_analysis, and evidence_refs
+    to populate affected_source and evidence_sources. If live_discovery is
+    absent, do not invent runtime reachability; use source or deferred modes.
 
     If discovery identifies adjacent linked applications, external services,
     subdomains, integrations, or other valuable surfaces that should not be part
@@ -107,7 +123,8 @@ critique_security_test_plan_task:
 
     Accept only when the plan is detailed enough for later authorised execution
     crews and every hypothesis includes requirements, tools_expected,
-    organisational_risk, and business_value. Reject if credentials,
+    organisational_risk, business_value, execution_mode, evidence_sources,
+    affected_runtime, affected_source, and verification_strategy. Reject if credentials,
     authorization, test data, safety limits, evidence, expected secure
     behaviour, or business-risk rationale are missing where needed. Reject plans
     that read like a generic security checklist instead of a prioritized plan

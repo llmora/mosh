@@ -117,6 +117,29 @@ class CliTests(unittest.TestCase):
             self.assertIn("Security test plan written to", stdout.getvalue())
             self.assertTrue((report_dir / "security_test_plan.md").exists())
 
+    def test_cli_plan_security_subcommand_accepts_source_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = "/tmp/example-source"
+            output_root = Path(directory) / "report"
+            source_dir = output_root / source_report_dir_name(source) / "source-discovery"
+            source_dir.mkdir(parents=True)
+            (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+            (source_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (source_dir / "events.json").write_text("[]", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with patch(
+                "mosh.crews.security_planning.crew.build_security_test_planning_crew_runner",
+                return_value=FakeSecurityPlanningRunner(),
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["plan-security", "--source", source, "--output-root", str(output_root)])
+
+            report_dir = output_root / source_report_dir_name(source) / "security-test-planning"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security test plan written to", stdout.getvalue())
+            self.assertTrue((report_dir / "security_test_plan.md").exists())
+
     def test_cli_test_security_subcommand_writes_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"

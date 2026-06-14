@@ -333,6 +333,20 @@ The discovery reporter agent owns summarization behavior and the report-writing 
 orchestrator may request reporting, but it must not synthesize the final report by
 calling reporting helpers directly.
 
+## Security Planning
+
+Security planning can consume live discovery, source discovery, or both. For
+source-only planning, `plan-security --source /path/to/repo` reads
+`report/<source>/source-discovery/` and writes
+`report/<source>/security-test-planning/`. For combined planning,
+`plan-security URL --source /path/to/repo` builds an assessment evidence bundle
+with live discovery, source discovery, reserved correlation output, and prior
+testing feedback sections.
+
+Planned hypotheses must include deterministic routing fields:
+`execution_mode`, `evidence_sources`, `affected_runtime`, `affected_source`,
+and `verification_strategy`.
+
 ## Security Testing Crew
 
 The security testing crew executes ready hypotheses from the security test plan.

@@ -180,11 +180,33 @@ Once discovery has produced evidence, ask `mosh` to turn it into testable hypoth
 mosh plan-security https://app.example.com
 ```
 
-This reads from `report/<host>/discovery/` and writes:
+To plan from source discovery only:
+
+```bash
+mosh plan-security --source /path/to/repo
+```
+
+To combine live and source discovery evidence:
+
+```bash
+mosh plan-security https://app.example.com --source /path/to/repo
+```
+
+Live-only planning reads from `report/<host>/discovery/`. Source-aware planning
+also reads from `report/<source>/source-discovery/` and asks the planner to
+route hypotheses with `execution_mode` values of `live`, `source`, `combined`,
+or `deferred`, including affected runtime and source evidence where available.
+Planning writes:
 
 ```text
 report/<host>/security-test-planning/security_test_plan.md
 report/<host>/security-test-planning/engagement_template.yaml
+```
+
+For source-only planning, the output is written under:
+
+```text
+report/<source>/security-test-planning/
 ```
 
 ### 3. Review The Engagement File
