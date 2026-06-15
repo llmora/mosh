@@ -216,13 +216,17 @@ references back to source and live asset IDs. Asset details stay in each
 `asset.json`; the engagement ID is implied by the file path. The linker first
 computes deterministic exact and parameterized path matches, then asks the
 planning-owned `evidence_linker` model for additional candidate links using
-only existing evidence refs. Candidate links are marked separately and are not
-authoritative discovery facts. Like discovery, the command prints an
-orchestrator start event immediately and runs the CrewAI model phase with
-verbose task/agent output. The artifact also records asset IDs skipped because
-they do not yet have usable discovery evidence. This command is temporary;
-engagement-backed planning is expected to call the same linker automatically
-once the planning migration lands.
+only existing evidence refs. The evidence linker can use narrow read-only tools
+to inspect existing refs: `load_evidence_ref`, `source_search`,
+`source_read_slice`, and `live_endpoint_metadata`. These tools are bounded to
+known source refs and already discovered live endpoint refs; they support
+linkage only and do not create new discovery facts. Candidate links are marked
+separately and are not authoritative discovery facts. Like discovery, the
+command prints an orchestrator start event immediately and runs the CrewAI
+model phase with verbose task/agent output. The artifact also records asset IDs
+skipped because they do not yet have usable discovery evidence. This command is
+temporary; engagement-backed planning is expected to call the same linker
+automatically once the planning migration lands.
 
 ### 4. Create A Security Test Plan
 

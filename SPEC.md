@@ -284,13 +284,18 @@ back to asset IDs and their evidence, link every discovered `live_url` and
 links per asset pair, and record skipped asset IDs with missing or unsupported
 discovery evidence. After deterministic linking, it should run a bounded
 model-assisted candidate pass using the planning crew's `evidence_linker`
-model. The model may only relate existing evidence reference IDs; invalid or
-invented refs must be ignored, and candidate links must be marked separately
-from deterministic links. The CLI should emit an immediate orchestrator start
-event for link generation and run the planning-owned evidence linker with
-CrewAI verbose output, matching discovery's user-visible execution style.
-Engagement-backed planning should later call the same linker automatically
-rather than implementing a second correlation path.
+model. The evidence linker may use only narrow read-only linkage tools:
+`load_evidence_ref`, `source_search`, `source_read_slice`, and
+`live_endpoint_metadata`. Source tools must be bounded to an existing
+`source_ref_id`; live metadata checks must be bounded to an already discovered
+`live_ref_id` and may only use HEAD, GET, or OPTIONS. Tool observations are
+linkage support, not new discovery facts. The model may only relate existing
+evidence reference IDs; invalid or invented refs must be ignored, and candidate
+links must be marked separately from deterministic links. The CLI should emit
+an immediate orchestrator start event for link generation and run the
+planning-owned evidence linker with CrewAI verbose output, matching discovery's
+user-visible execution style. Engagement-backed planning should later call the
+same linker automatically rather than implementing a second correlation path.
 
 The planning, testing, and final reporting commands are being migrated to this
 engagement root. During the migration, legacy URL/source compatibility commands

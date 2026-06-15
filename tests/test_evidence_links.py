@@ -242,7 +242,7 @@ class FakeModelAssistedLinker:
     def __init__(self) -> None:
         self.contexts: list[dict[str, object]] = []
 
-    def suggest_links(self, context: dict[str, object]) -> dict[str, object]:
+    def suggest_links(self, context: dict[str, object], tool_context: object | None = None) -> dict[str, object]:
         self.contexts.append(context)
         pair = context["pairs"][0]  # type: ignore[index]
         return {

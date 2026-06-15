@@ -123,10 +123,14 @@ engagement or asset metadata. Stage 1 exposes `mosh link <engagement-id>` as a
 temporary explicit maintenance command so links can be regenerated from
 discovery outputs. The command computes deterministic links first, then uses the
 planning crew's `evidence_linker` model to propose validated candidate links
-from existing evidence refs only. The temporary command should print an
-immediate orchestrator event and use verbose CrewAI output for the model phase,
-matching discovery's visibility. Engagement-backed planning should later invoke
-the same linker automatically.
+from existing evidence refs only. The linker can use read-only linkage tools to
+load existing refs, search and read bounded source slices for existing source
+refs, and fetch safe metadata for already discovered live refs. These tool
+observations support correlation only and should not become a second discovery
+artifact. The temporary command should print an immediate orchestrator event
+and use verbose CrewAI output for the model phase, matching discovery's
+visibility. Engagement-backed planning should later invoke the same linker
+automatically.
 
 ## New Crews
 
@@ -434,8 +438,9 @@ mosh discover eng_a1b2c3d4 --asset asset_repo_1
 11. Done, stage 1: Add source-live evidence linking for combined assessments
    with `mosh link <engagement-id>` writing `report/<engagement-id>/links.json`.
    The command includes deterministic links and planning-model-assisted
-   candidate links. A later increment should run this automatically when both
-   live and source evidence are present, and planning should consume the current
+   candidate links, with bounded read-only linkage tools for inspecting
+   existing refs. A later increment should run this automatically when both live
+   and source evidence are present, and planning should consume the current
    links without requiring a separate user-visible correlation command.
 12. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
