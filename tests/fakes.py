@@ -442,6 +442,58 @@ class FakeSecurityTestingRunner:
             )
 
 
+class FakeSourceSecurityTestingRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, source, source_discovery_dir, report_dir, memory, plan, engagement, preflight, source_ready_pending) -> None:
+        self.calls.append(
+            {
+                "source": source,
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
+                "report_dir": str(report_dir),
+                "source_ready_pending": [item.get("id") for item in source_ready_pending],
+            }
+        )
+        executed_dir = report_dir / "executed_tests"
+        executed_dir.mkdir(parents=True, exist_ok=True)
+        for hypothesis in source_ready_pending:
+            test_id = str(hypothesis.get("id") or "unknown")
+            archived = _archive_latest_report(report_dir, test_id, memory=memory)
+            evidence = {
+                "status": "no-finding",
+                "summary": "Fake source execution completed.",
+                "observations": [{"path": "api/routes/auth.js", "line": 1, "preview": "auth guard"}],
+                "source_evidence": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}],
+                "result": "No source finding in fake runner.",
+            }
+            markdown = render_executed_test_report(
+                target_url=f"source:{source}",
+                hypothesis=hypothesis,
+                targets=preflight.targets,
+                evidence=evidence,
+                review={"accepted": True, "summary": "Accepted."},
+                commands=[],
+            )
+            report_path = executed_dir / f"{test_id}.md"
+            metadata = _execution_metadata(
+                test_id=test_id,
+                plan_revision_id=plan_revision_id(plan),
+                hypothesis_fingerprint=hypothesis_fingerprint(hypothesis),
+                evidence=evidence,
+                review={"accepted": True, "summary": "Accepted."},
+                report_path=str(report_path),
+                archived_previous_reports=archived,
+            )
+            metadata.update({"execution_mode": "source", "evidence_type": "source", "source": str(source)})
+            report_path.write_text(_with_execution_metadata_mapping(markdown, metadata), encoding="utf-8")
+            memory.add_item(
+                "executed_security_test_report",
+                {"test_id": test_id, "path": str(report_path), "execution_mode": "source"},
+                "source_reporter",
+            )
+
+
 class FakeFinalReportingRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []

@@ -104,12 +104,14 @@ class SecurityTestingOrchestrator:
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
         crew_runner: SecurityTestingCrewRunner | None = None,
+        source_crew_runner: Any | None = None,
         planning_crew_runner: Any | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_security_testing_crew_runner(config)
+        self.source_crew_runner = source_crew_runner
         self.planning_crew_runner = planning_crew_runner
 
     def run(
@@ -274,6 +276,13 @@ class SecurityTestingOrchestrator:
             },
         )
         return report_dir
+
+    def _source_runner(self) -> Any:
+        if self.source_crew_runner is None:
+            from mosh.crews.source_security_testing.crew import build_source_security_testing_crew_runner
+
+            self.source_crew_runner = build_source_security_testing_crew_runner(self.config)
+        return self.source_crew_runner
 
 
 def build_security_testing_crew_runner(config: AppConfig) -> SecurityTestingCrewRunner:
