@@ -266,6 +266,22 @@ By default `mosh discover <engagement-id>` runs discovery only for assets that
 do not already have discovery output. `--asset <asset-id>` narrows discovery to
 one or more assets, and `--refresh` forces a rerun for the selected assets.
 
+During the engagement migration, `mosh link <engagement-id>` is a temporary
+explicit command that reads asset discovery outputs and writes source/live
+evidence relationships to:
+
+```text
+report/<engagement-id>/links.json
+```
+
+The linker must not duplicate engagement or asset metadata from the directory
+layout, `engagement.json`, or `asset.json`. It should record typed references
+back to asset IDs and their evidence, link every discovered `live_url` and
+`source_tree` pair, score exact and parameterized route matches, cap excessive
+links per asset pair, and record skipped asset IDs with missing or unsupported
+discovery evidence. Engagement-backed planning should later call the same
+linker automatically rather than implementing a second correlation path.
+
 The planning, testing, and final reporting commands are being migrated to this
 engagement root. During the migration, legacy URL/source compatibility commands
 may still write host/source-rooted planning and testing outputs.
@@ -373,7 +389,9 @@ Combined assessments are progressive enrichment: an assessment can start from a
 live URL, source code, or another asset type, and additional assets can be
 attached later. Source/live linking is an internal, repeatable operation that
 connects evidence when both sides are available; it is not a mandatory
-user-visible `correlate` phase.
+user-visible `correlate` phase. During the current migration, the temporary
+`mosh link <engagement-id>` command exposes that operation explicitly for
+rerunning and inspection.
 
 Planned hypotheses must include deterministic routing fields:
 `execution_mode`, `asset_refs`, `evidence_sources`, `affected_runtime`,
@@ -780,7 +798,7 @@ At minimum, tests should cover:
 # Roadmap
 
 * Implement security testing for source code, based on a repo URL or a local filesystem path. See `SOURCE_ASSESSMENT_PLAN.md` for the staged implementation plan.
-* If the user provides source code and a live URL for testing, use progressive combined assessment: start from whichever evidence source is available, attach the other one later if needed, and let source/live evidence links enrich planning, testing, and reporting. This needs to be more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). Do not make a standalone correlation command the required workflow. See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
+* If the user provides source code and a live URL for testing, use progressive combined assessment: start from whichever evidence source is available, attach the other one later if needed, and let source/live evidence links enrich planning, testing, and reporting. This needs to be more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). Do not make a standalone correlation command the required long-term workflow; the temporary `mosh link` command exists only for the engagement migration. See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
 * We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
 * Implement abiity to use arbitraty openai-like API backends (custom), for companies that do not have openrouter or deepseek access (maybe those using internal AI API endpoints)
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).

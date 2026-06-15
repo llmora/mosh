@@ -21,6 +21,7 @@ from mosh.engagements import (
     load_engagement,
     record_asset_discovery,
 )
+from mosh.evidence_links import build_evidence_links
 from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.security_testing.crew import (
@@ -64,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     discover_source_parser.add_argument("source", help="Local source tree path to discover")
     discover_source_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    link_parser = subcommands.add_parser("link", help="Link live and source discovery evidence for an engagement")
+    link_parser.add_argument("engagement_id", help="Engagement ID")
+    link_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+
     plan_parser = subcommands.add_parser("plan-security", help="Create a security test plan from discovery output")
     plan_parser.add_argument("url", nargs="?", help="Target application URL to plan from")
     plan_parser.add_argument("--source", help="Local source tree path to include in planning")
@@ -91,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_discovery(config, args)
     if args.command == "discover-source":
         return _run_source_discovery(config, args)
+    if args.command == "link":
+        return _run_evidence_linking(args)
     if args.command == "plan-security":
         return _run_security_test_planning(config, args)
     if args.command == "test-security":
@@ -245,6 +252,17 @@ def _run_source_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_evidence_linking(args: argparse.Namespace) -> int:
+    try:
+        result = build_evidence_links(Path(args.output_root), args.engagement_id)
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Evidence links written to {result.links_path}")
+    print(f"Links: {len(result.payload.get('links') or [])}")
+    return 0
+
+
 def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> int:
     orchestrator = SecurityTestPlanningOrchestrator(
         config,
@@ -345,7 +363,7 @@ def _normalize_url_shorthand(argv: list[str] | None) -> list[str]:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         return args
-    commands = {"engagement", "discover", "discover-source", "plan-security", "test-security", "report"}
+    commands = {"engagement", "discover", "discover-source", "link", "plan-security", "test-security", "report"}
     if args[0] in commands or args[0].startswith("-"):
         return args
     return ["discover", *args]
