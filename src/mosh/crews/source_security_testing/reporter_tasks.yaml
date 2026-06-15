@@ -47,7 +47,10 @@ write_source_security_test_report_task:
     local runtime. When workspace files, local processes, or local HTTP
     requests exist, include a clearly labelled dynamic source evidence section
     so readers can audit generated harnesses and local runtime behavior without
-    reading raw metadata.
+    reading raw metadata. If the original hypothesis was disproved, do not
+    render it as Finding Confirmed. Residual hardening gaps belong in
+    residual_findings or in a separate retitled finding object with its own
+    severity; do not inherit the planned priority as finding severity.
 
     You must call write_source_executed_test_report exactly once. The report
     argument must be a structured object with:

@@ -29,6 +29,7 @@ from mosh.crews.security_testing.crew import (
     _extract_artifacts,
     _hypothesis_id,
     _kickoff_capturing_tool_state,
+    _normalize_execution_evidence,
     _redact_text,
     _redact_result,
     _safe_test_id,
@@ -1025,6 +1026,7 @@ def _build_submit_source_evidence_tool(crewai: Any, state: SourceSecurityTestExe
             content.setdefault("local_processes", state.local_processes)
             content.setdefault("local_requests", state.local_requests)
             content.setdefault("source_evidence", _source_evidence_refs(state))
+            content = _normalize_execution_evidence(content)
             state.evidence = content
             _preserve_evidence_artifacts(state, content)
             state.memory.add_item(

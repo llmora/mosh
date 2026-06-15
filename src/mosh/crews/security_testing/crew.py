@@ -630,12 +630,100 @@ def _execution_metadata(
         "test_id": test_id,
         "plan_revision_id": plan_revision_id,
         "hypothesis_fingerprint": hypothesis_fingerprint,
-        "status": _text((report_content or {}).get("status")) or _text(evidence.get("status")) or "inconclusive",
+        "status": _canonical_execution_status(evidence=evidence, report_content=report_content),
         "review_accepted": bool(review.get("accepted")),
         "report_path": report_path,
         "archived_previous_reports": archived_previous_reports or [],
         "executed_at": utc_now(),
     }
+
+
+def _normalize_execution_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(evidence)
+    normalized["status"] = _canonical_execution_status(evidence=normalized)
+    return normalized
+
+
+def _canonical_execution_status(
+    *,
+    evidence: dict[str, Any],
+    report_content: dict[str, Any] | None = None,
+) -> str:
+    requested = _text((report_content or {}).get("status")) or _text(evidence.get("status")) or "inconclusive"
+    normalized = requested.lower().replace("_", "-")
+    if normalized != "finding":
+        return normalized or "inconclusive"
+    finding = (report_content or {}).get("finding")
+    if finding is None:
+        finding = evidence.get("finding")
+    if _has_meaningful_finding(finding):
+        return "finding"
+    if _finding_status_is_contradicted(evidence, report_content):
+        return "no-finding"
+    return "finding"
+
+
+def _has_meaningful_finding(finding: Any) -> bool:
+    if finding in (None, "", [], {}):
+        return False
+    if isinstance(finding, dict):
+        return any(_text(value) for value in finding.values())
+    return bool(_text(finding))
+
+
+def _finding_status_is_contradicted(
+    evidence: dict[str, Any],
+    report_content: dict[str, Any] | None,
+) -> bool:
+    hypothesis_validated = (report_content or {}).get("hypothesis_validated")
+    if hypothesis_validated is None:
+        hypothesis_validated = evidence.get("hypothesis_validated")
+    if isinstance(hypothesis_validated, bool):
+        return not hypothesis_validated
+    if _text(hypothesis_validated).lower() in {"false", "no", "not_validated", "not-validated", "disproved"}:
+        return True
+    if _text((report_content or {}).get("finding_type") or evidence.get("finding_type")).lower() in {
+        "model_mismatch_not_vulnerability",
+        "false_positive",
+        "not_applicable",
+    }:
+        return True
+    text = _status_consistency_text(evidence, report_content)
+    no_issue_patterns = [
+        r"\bno\s+(?:authentication\s+)?bypass(?:es)?\s+(?:was\s+|were\s+)?found\b",
+        r"\bno\s+vulnerabilit(?:y|ies)\s+(?:was\s+|were\s+)?found\b",
+        r"\bno\s+security\s+issue(?:s)?\s+(?:was\s+|were\s+)?found\b",
+        r"\bno\s+remediation\s+required\b",
+        r"\bnot\s+applicable\b",
+        r"\bfalse\s+positive\b",
+        r"\bmodel\s+mismatch\b",
+        r"\bhypothesis\s+(?:model\s+)?(?:is\s+)?(?:inaccurate|invalid|not\s+applicable)\b",
+        r"\bcorrectly\s+(?:applied|protected|enforced)\b",
+        r"\bcontrary\s+to\s+(?:the\s+)?hypothesis\b",
+        r"\bhypothesis\s+(?:core\s+)?claim\b.{0,80}\b(?:wrong|incorrect|false|not\s+validated|disproved)\b",
+        r"\bcore\s+claim\b.{0,80}\b(?:wrong|incorrect|false|not\s+validated|disproved)\b",
+        r"\bclaim\b.{0,80}\b(?:wrong|incorrect|false|not\s+validated|disproved)\b",
+        r"\bauth(?:entication)?\s+(?:is|was)\s+applied\b",
+        r"\bauth(?:entication)?\s+(?:exists|existed)\b",
+        r"\bmiddleware\s+(?:is|was)\s+applied\b",
+        r"\brouter-level\b.{0,80}\b(?:auth|authentication|middleware)\b.{0,80}\bapplied\b",
+        r"\bno\s+remediation\s+(?:is\s+)?required\s+for\s+(?:the\s+)?specific\s+hypothesis\b",
+    ]
+    return any(re.search(pattern, text) for pattern in no_issue_patterns)
+
+
+def _status_consistency_text(evidence: dict[str, Any], report_content: dict[str, Any] | None) -> str:
+    values = [
+        (report_content or {}).get("summary"),
+        (report_content or {}).get("result"),
+        (report_content or {}).get("resolution"),
+        (report_content or {}).get("evidence"),
+        evidence.get("summary"),
+        evidence.get("result"),
+        evidence.get("observations"),
+        evidence.get("resolution"),
+    ]
+    return " ".join(_text(value).lower() for value in values if value not in (None, "", [], {}))
 
 
 def _latest_execution_metadata(report_dir: Path, test_id: str) -> dict[str, Any] | None:
@@ -1200,6 +1288,7 @@ def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecut
         def _run(self, evidence: Any) -> str:
             content = _coerce_mapping(evidence)
             content.setdefault("commands", state.commands)
+            content = _normalize_execution_evidence(content)
             state.evidence = content
             _preserve_evidence_artifacts(state, content)
             state.memory.add_item(
@@ -1591,7 +1680,7 @@ def render_executed_test_report(
     report_content: dict[str, Any] | None = None,
 ) -> str:
     test_id = _hypothesis_id(hypothesis)
-    status = _text((report_content or {}).get("status")) or _text(evidence.get("status")) or "inconclusive"
+    status = _canonical_execution_status(evidence=evidence, report_content=report_content)
     title = _text(hypothesis.get("title")) or "Untitled test"
     summary = _text((report_content or {}).get("summary")) or _text(evidence.get("summary")) or "No summary provided."
     result = _text((report_content or {}).get("result")) or _text(evidence.get("result")) or "No result provided."

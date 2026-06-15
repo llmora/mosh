@@ -28,6 +28,15 @@ review_source_security_test_evidence_task:
     approved local or mapped runtime target. Do not request production URL
     testing for a source hypothesis just to make the result useful; ask for a
     combined follow-up only when runtime behavior is genuinely required.
+    Reject evidence as inconsistent when status is finding but the finding
+    object is missing/empty, or when the summary/result says no vulnerability,
+    no bypass, false positive, not applicable, model mismatch, or no remediation
+    required. Confirming secure behavior or an invalid hypothesis model is a
+    no-finding, not a finding. Also reject evidence when the original
+    hypothesis is disproved but residual hardening gaps are promoted to the
+    original title, status, or planned priority. Planning priority is not
+    finding severity; any residual issue must be submitted as its own retitled
+    finding with severity, impact, recommendation, and evidence.
 
     You must call submit_source_security_test_review exactly once with:
     - accepted: boolean

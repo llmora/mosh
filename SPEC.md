@@ -469,6 +469,11 @@ developers and application owners. This section should explain how to remediate
 an identified issue using concrete configuration, code, header, control, or
 process changes where evidence supports them. If no issue is identified, the
 section should state that no remediation is required for that hypothesis.
+The executor must separate validation of the original hypothesis from adjacent
+or residual findings. Planning priority is not finding severity, and disproving
+the original hypothesis must not be rendered as `Finding Confirmed` unless a
+separate supported finding object is submitted with its own title, severity,
+impact, recommendation, and evidence.
 The Markdown `Status` section should use human-readable labels such as
 `Finding Confirmed`, `No Finding`, `Inconclusive`, `Needs Re-Run`,
 `Not Applicable`, or `Execution Error`; canonical machine status values such as

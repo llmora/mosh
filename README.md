@@ -289,6 +289,10 @@ generated harness/function experiment, a local runtime service/API experiment,
 a dependency or tool scan, or deferred live verification. Executed source
 reports include a dedicated dynamic source evidence section when generated
 harnesses, local processes, or local HTTP requests were used.
+Reports distinguish the original hypothesis result from residual hardening
+gaps; a disproved source hypothesis is not reported as a confirmed finding
+unless a separate supported finding is submitted with its own severity and
+evidence.
 
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
