@@ -9,9 +9,24 @@ suggest_evidence_link_candidates_task:
     plausible candidate links that are useful for planning and are not already
     deterministic.
 
+    Available linkage tools:
+    - load_evidence_ref: inspect full details for an existing source_ref_id or
+      live_ref_id.
+    - source_search: search bounded nonignored text files inside the source
+      asset for an existing source_ref_id.
+    - source_read_slice: read a bounded source file slice for an existing
+      source_ref_id.
+    - live_endpoint_metadata: fetch safe metadata for an already discovered
+      live_ref_id using only HEAD, GET, or OPTIONS.
+    - submit_evidence_link_candidates: submit final candidates exactly once.
+
     Rules:
     - Use only source_ref_id and live_ref_id values that appear in the context.
     - Do not invent routes, URLs, files, assets, hosts, methods, or evidence.
+    - Do not use tools for general discovery. Use them only to clarify whether
+      existing source and live refs likely correspond.
+    - Treat source_search, source_read_slice, and live_endpoint_metadata outputs
+      as linkage support, not as authoritative discovery facts.
     - Prefer no candidate over a weak or generic association.
     - Candidate links are useful when names, route prefixes, features, handlers,
       framework context, or deployment paths strongly suggest a relationship

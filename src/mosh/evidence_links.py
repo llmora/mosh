@@ -29,7 +29,11 @@ MODEL_CANDIDATE_LINK_LIMIT = 100
 class ModelAssistedEvidenceLinker(Protocol):
     model_metadata: dict[str, Any]
 
-    def suggest_links(self, context: dict[str, Any]) -> dict[str, Any]:
+    def suggest_links(
+        self,
+        context: dict[str, Any],
+        tool_context: EvidenceLinkerToolContext | None = None,
+    ) -> dict[str, Any]:
         pass
 
 
@@ -60,6 +64,12 @@ class SourceRoute:
     framework: str | None
     snippet_hash: str | None
     route_resolution_confidence: str | None
+
+
+@dataclass(frozen=True)
+class EvidenceLinkerToolContext:
+    source_refs: dict[str, SourceRoute]
+    live_refs: dict[str, LiveEndpoint]
 
 
 def links_path(output_root: Path, engagement_id: str) -> Path:
@@ -130,7 +140,10 @@ def build_evidence_links(
             link_records,
         )
         if context["pairs"]:
-            submitted = model_assisted_linker.suggest_links(context)
+            submitted = model_assisted_linker.suggest_links(
+                context,
+                EvidenceLinkerToolContext(source_refs=source_refs, live_refs=live_refs),
+            )
             candidate_links = _model_candidate_link_records(
                 submitted,
                 source_refs,
