@@ -109,7 +109,7 @@ Proposed outputs:
 report/<engagement-id>/engagement.json
 report/<engagement-id>/assets/<asset-id>/asset.json
 report/<engagement-id>/assets/<asset-id>/discovery/
-report/<engagement-id>/evidence-links/
+report/<engagement-id>/links.json
 report/<engagement-id>/security-test-planning/
 report/<engagement-id>/security-testing/
 report/<engagement-id>/final-report/
@@ -117,9 +117,12 @@ report/<engagement-id>/final-report/
 
 Each crew keeps its own `events.json`, `memory.json`, and Markdown report under
 the engagement or asset directory it writes to.
-The evidence-links artifact records relationships between live and source
-evidence; it does not replace either discovery artifact and is not a required
-user-visible workflow stage.
+The `links.json` artifact records relationships between live and source
+evidence; it does not replace either discovery artifact and does not duplicate
+engagement or asset metadata. Stage 1 exposes `mosh link <engagement-id>` as a
+temporary explicit maintenance command so links can be regenerated from
+discovery outputs. Engagement-backed planning should later invoke the same
+linker automatically.
 
 ## New Crews
 
@@ -371,6 +374,7 @@ mosh engagement create --title "Example App"
 mosh engagement attach eng_a1b2c3d4 https://app.example.com
 mosh engagement attach eng_a1b2c3d4 /path/to/repo
 mosh discover eng_a1b2c3d4
+mosh link eng_a1b2c3d4
 ```
 
 Then migrate planning, testing, and reporting to the engagement ID:
@@ -381,10 +385,9 @@ mosh test-security eng_a1b2c3d4
 mosh report eng_a1b2c3d4
 ```
 
-Do not add `mosh correlate` as the primary combined workflow. If an explicit
-linking command is later useful for debugging or recomputing relationships, it
-should be named and documented as evidence-link maintenance, not as the required
-spine of a combined assessment.
+Do not add `mosh correlate` as the primary combined workflow. The temporary
+`mosh link` command is evidence-link maintenance for the migration period; it is
+not the long-term spine of a combined assessment.
 
 Repository URL support can later reuse the same source discovery path after a
 materialization step:
@@ -424,10 +427,11 @@ mosh discover eng_a1b2c3d4 --asset asset_repo_1
 10. Migrate security testing to write one engagement-level result set while
     keeping source, live, combined, and future mobile executors as internal
     routing choices.
-11. Add source-live evidence linking for combined assessments. This should run
-   incrementally when both live and source evidence are present, and planning
-   should consume the current links without requiring a separate user-visible
-   correlation command.
+11. Done, stage 1: Add source-live evidence linking for combined assessments
+   with `mosh link <engagement-id>` writing `report/<engagement-id>/links.json`.
+   A later increment should run this automatically when both live and source
+   evidence are present, and planning should consume the current links without
+   requiring a separate user-visible correlation command.
 12. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
 13. Add repository URL materialization after local path source assessment is
