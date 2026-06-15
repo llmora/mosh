@@ -647,7 +647,7 @@ class CliTests(unittest.TestCase):
 class _NoopModelAssistedLinker:
     model_metadata = {"crew": "security_planning", "agent": "evidence_linker", "model": "fake-linker"}
 
-    def suggest_links(self, context: dict[str, object]) -> dict[str, object]:
+    def suggest_links(self, context: dict[str, object], tool_context: object | None = None) -> dict[str, object]:
         return {"links": []}
 
 
