@@ -21,6 +21,7 @@ from mosh.engagements import (
     load_engagement,
     record_asset_discovery,
 )
+from mosh.evidence_links import build_evidence_links
 from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator, run_planning_evidence_linking
 from mosh.crews.security_testing.crew import (
