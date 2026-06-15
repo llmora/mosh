@@ -2,6 +2,8 @@ We are conscious of developing small steps at a time, do not over-engineer.
 
 Implement testing for all functionalities, so we do not regress.
 
+Do not repeat yourself, keep code simple. Also Maintain DRY persisted state. Do not duplicate canonical entity data across JSON artifacts.
+
 We want to maintain a small number of documents, but these need to be kept in sync with changes:
 
 * SPEC.md records the product spec, design and anything necessary to develope the product from scratch. We maintain a roadmap section with future functionalities.

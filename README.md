@@ -193,7 +193,30 @@ web services such as FastAPI, inventories environment variable references and
 Docker Compose service topology, and parses npm, Python, Gradle, CocoaPods, and
 Swift Package dependency manifests.
 
-### 3. Create A Security Test Plan
+### 3. Link Discovery Evidence
+
+During the engagement migration, run the temporary linker after live and source
+assets have discovery output:
+
+```bash
+mosh link eng_a1b2c3d4
+```
+
+The linker writes:
+
+```text
+report/<engagement-id>/links.json
+```
+
+`links.json` records source-route to live-endpoint relationships with typed
+references back to source and live asset IDs. Asset details stay in each
+`asset.json`; the engagement ID is implied by the file path. The linker scores
+exact and parameterized path matches, and records asset IDs skipped because they
+do not yet have usable discovery evidence. This command is temporary;
+engagement-backed planning is expected to call the same linker automatically
+once the planning migration lands.
+
+### 4. Create A Security Test Plan
 
 Engagement-backed planning is the next migration step. The current compatibility
 commands still plan from URL/source discovery roots:
@@ -222,8 +245,8 @@ route hypotheses with `execution_mode` values of `live`, `source`, `combined`,
 or `deferred`, including affected runtime and source evidence where available.
 Combined assessments are progressive: you can start with a live URL or a source
 tree, then attach the other input later by rerunning planning with both
-arguments. `mosh` links source and live evidence internally when both are
-available; there is no separate correlation command in the normal workflow.
+arguments. During the current migration, run `mosh link <engagement-id>` before
+planning when both live and source discovery outputs exist.
 Planning writes:
 
 ```text
@@ -237,7 +260,7 @@ For source-only planning, the output is written under:
 report/<source>/security-test-planning/
 ```
 
-### 4. Review The Engagement File
+### 5. Review The Engagement File
 
 Before running security testing, review and edit:
 
@@ -257,7 +280,7 @@ This file is deliberately small. It is where you confirm:
 
 The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target (useful if you want to run the tests against a pre-prod environment). You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing.
 
-### 5. Run Security Testing
+### 6. Run Security Testing
 
 When the plan and engagement file are ready, run:
 
@@ -342,7 +365,7 @@ This feedback loop applies to live tests, source-routed tests, and source/live
 evidence links, including new routes, API specifications, components, entry
 points, and configuration facts discovered during source security testing.
 
-### 6. Create The Final Report
+### 7. Create The Final Report
 
 When security testing is complete, create the customer-facing engagement report:
 
@@ -383,6 +406,7 @@ mosh engagement create --title "Example App"
 mosh engagement attach eng_a1b2c3d4 https://app.example.com
 mosh engagement attach eng_a1b2c3d4 /path/to/repo
 mosh discover eng_a1b2c3d4
+mosh link eng_a1b2c3d4
 
 # Compatibility commands until engagement-backed planning/testing lands.
 mosh plan-security https://app.example.com
@@ -402,6 +426,7 @@ mosh report https://app.example.com
 After a full run, you have:
 
 - a discovery report describing observed application surface area
+- `links.json` with source/live evidence relationships for combined engagements
 - a security test plan grounded in discovery evidence
 - an editable engagement template for permissions, targets, credentials, limits, and safe test data
 - executed test reports, including resolution

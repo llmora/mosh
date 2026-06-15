@@ -259,6 +259,68 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 1)
             self.assertIn("Discovery is not implemented for source_repo assets yet.", stderr.getvalue())
 
+    def test_cli_link_subcommand_writes_engagement_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            asset_discovery_dir(output_root, engagement.id, live_asset.id).mkdir(parents=True)
+            (asset_discovery_dir(output_root, engagement.id, live_asset.id) / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "crawled_page",
+                            "content": {
+                                "url": "https://app.example.test/api/status",
+                                "status": 200,
+                                "links": [],
+                                "references": [],
+                                "forms": [],
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            asset_discovery_dir(output_root, engagement.id, source_asset.id).mkdir(parents=True)
+            (asset_discovery_dir(output_root, engagement.id, source_asset.id) / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "source_index",
+                            "content": {
+                                "inventory": {
+                                    "routes": [
+                                        {
+                                            "method": "GET",
+                                            "full_route": "/api/status",
+                                            "path": "api/status.py",
+                                            "line": 1,
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["link", engagement.id, "--output-root", str(output_root)])
+
+            links_file = output_root / engagement.id / "links.json"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Evidence links written to", stdout.getvalue())
+            self.assertIn("Links: 1", stdout.getvalue())
+            self.assertTrue(links_file.exists())
+            payload = json.loads(links_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["links"][0]["refs"][0]["path"], "api/status.py")
+
     def test_cli_plan_security_subcommand_writes_security_test_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
