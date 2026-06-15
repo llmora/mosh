@@ -109,6 +109,9 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Security testing preflight written to {report_dir}")
+    skipped_ids = getattr(orchestrator, "_skipped_test_ids", [])
+    if skipped_ids:
+        print(f"Skipped {len(skipped_ids)} already-executed tests: {', '.join(skipped_ids)}")
     summary = _security_testing_blocked_summary(report_dir, engagement_file)
     if summary:
         print(summary)

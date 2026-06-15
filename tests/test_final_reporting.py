@@ -54,11 +54,12 @@ class FakeRuntimeCrewAI(FakeCrewAI):
             self.callback = callback
 
     class Crew:
-        def __init__(self, agents, tasks, process, verbose) -> None:
+        def __init__(self, agents, tasks, process, verbose, event_listeners=None) -> None:
             self.agents = agents
             self.tasks = tasks
             self.process = process
             self.verbose = verbose
+            self.event_listeners = event_listeners
 
         def kickoff(self, inputs):
             for task in self.tasks:

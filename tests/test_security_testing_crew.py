@@ -170,6 +170,67 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(runner.calls, [])
             self.assertIn("# already executed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
 
+    def test_security_testing_skip_emits_event_and_stores_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            domain_dir = output_root / report_dir_name(target_url)
+            planning_dir = domain_dir / "security-test-planning"
+            executed_dir = domain_dir / "security-testing" / "executed_tests"
+            planning_dir.mkdir(parents=True)
+            executed_dir.mkdir(parents=True)
+            (planning_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "security_test_plan_final",
+                            "content": {"structured": _plan()},
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            current_hypothesis = _plan()["test_hypotheses"][0]
+            report_path = executed_dir / "API-001.md"
+            metadata = _execution_metadata(
+                test_id="API-001",
+                plan_revision_id=plan_revision_id(_plan()),
+                hypothesis_fingerprint=hypothesis_fingerprint(current_hypothesis),
+                evidence={"status": "no-finding"},
+                review={"accepted": True},
+                report_path=str(report_path),
+            )
+            report_path.write_text(
+                _with_execution_metadata_mapping("# already executed\n", metadata),
+                encoding="utf-8",
+            )
+            engagement_file = Path(directory) / "engagement.yaml"
+            write_engagement_template(Path(directory), target_url, _plan())
+            engagement_file.write_text(
+                (Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            runner = FakeSecurityTestingRunner()
+
+            orchestrator = SecurityTestingOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=runner,
+            )
+            report_dir = orchestrator.run(target_url, engagement_file=engagement_file)
+
+            self.assertEqual(
+                getattr(orchestrator, "_skipped_test_ids", []),
+                ["API-001"],
+            )
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            skip_events = [
+                e for e in events
+                if e.get("action") == "tests_skipped" and e.get("agent") == "orchestrator"
+            ]
+            self.assertEqual(len(skip_events), 1)
+            self.assertEqual(skip_events[0]["data"]["skipped_ids"], ["API-001"])
+
     def test_execution_metadata_preserves_canonical_status(self) -> None:
         metadata = _execution_metadata(
             test_id="API-002",

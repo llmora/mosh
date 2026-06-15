@@ -9,7 +9,7 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/setup.sh [--skip-docker] [--force-docker] [--help]
 
-Sets up Model-driven Open Security Harness for local use.
+Sets up Model-driven Open Security Harness for local development.
 
 Options:
   --skip-docker   Install Python package only; do not build tool images.
@@ -20,21 +20,10 @@ EOF
 
 for arg in "$@"; do
   case "$arg" in
-    --skip-docker)
-      SKIP_DOCKER=1
-      ;;
-    --force-docker)
-      FORCE_DOCKER=1
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $arg" >&2
-      usage >&2
-      exit 2
-      ;;
+    --skip-docker)   SKIP_DOCKER=1   ;;
+    --force-docker)  FORCE_DOCKER=1  ;;
+    --help|-h)       usage; exit 0   ;;
+    *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
   esac
 done
 
@@ -45,26 +34,10 @@ require_command() {
   fi
 }
 
-require_command python3
+require_command uv
 
-python3 - <<'PY'
-import sys
-
-if sys.version_info < (3, 11):
-    raise SystemExit("Python 3.11 or newer is required.")
-PY
-
-if [ ! -d "$ROOT_DIR/.venv" ]; then
-  echo "Creating .venv"
-  python3 -m venv "$ROOT_DIR/.venv"
-fi
-
-# shellcheck disable=SC1091
-source "$ROOT_DIR/.venv/bin/activate"
-
-echo "Installing Model-driven Open Security Harness in editable mode"
-python -m pip install --upgrade pip
-python -m pip install -e "$ROOT_DIR"
+echo "Installing Python dependencies with uv"
+uv sync
 
 if [ "$SKIP_DOCKER" -eq 1 ]; then
   echo "Skipping Docker image build"
@@ -95,7 +68,7 @@ image_needs_rebuild() {
   local created
   created="$(docker image inspect -f '{{.Created}}' "$image")"
 
-  python3 - "$created" "$@" <<'PY'
+  uv run python - "$created" "$@" <<'PY'
 from __future__ import annotations
 
 import datetime as dt
@@ -115,16 +88,13 @@ for source_path in source_paths:
     if not source_path.exists():
         print(f"{source_path}: missing source path")
         sys.exit(0)
-
     paths = [source_path]
     if source_path.is_dir():
         paths = [pathlib.Path(root) / name for root, _, files in os.walk(source_path) for name in files]
-
     for path in paths:
         if path.stat().st_mtime > created:
             print(f"{path}: newer than image")
             sys.exit(0)
-
 sys.exit(1)
 PY
 }
@@ -153,4 +123,4 @@ build_image_if_needed \
   "mosh-security-tools:latest" \
   "$ROOT_DIR/tools/security/Dockerfile"
 
-echo "Setup complete. Activate the environment with: source .venv/bin/activate"
+echo "Setup complete. Use 'uv run mosh' to run the CLI."
