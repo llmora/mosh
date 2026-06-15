@@ -223,6 +223,25 @@ Security testing writes the output of the hypothesis verification to:
 report/<engagement-id>/security-testing/executed_tests/<hypothesis>.md
 ```
 
+Source-only preflight writes:
+
+```text
+report/<source>/source-security-testing/preflight.md
+report/<source>/source-security-testing/executed_tests/
+report/<source>/source-security-testing/executed_tests/history/
+```
+
+Source-only security testing executes source-routed hypotheses without requiring
+a deployed production URL. The source executor can read bounded source slices,
+search nonignored text files, write generated harnesses or fuzz scripts under
+`/work`, run local commands with explicit environment overrides, start a local
+process in the security tools container, issue localhost HTTP requests to it,
+and stop it after collecting evidence. The repository is mounted read-only at
+`/source` and `/work` is the only writable workspace. This supports static
+inspection, local tests, build or framework introspection, function-level
+experiments, route-table inspection, and local runtime checks while keeping
+external live URL testing separate.
+
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
 - **Executable tests:** hypotheses with the required attached artifacts and engagement inputs available.
