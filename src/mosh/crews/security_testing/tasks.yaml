@@ -40,6 +40,10 @@ execute_security_test_task:
     You must call submit_security_test_evidence exactly once with a structured
     object containing:
     - status: finding, no-finding, inconclusive, or failed
+    - hypothesis_validated: true, false, or partial for the original planned
+      hypothesis, independent of adjacent hardening observations
+    - original_hypothesis_result: short explanation of whether the original
+      hypothesis was confirmed, disproved, or only partially assessed
     - summary: short execution summary
     - observations: evidence from commands and responses
     - discovery_updates: optional list of new discovery facts learned during
@@ -52,9 +56,20 @@ execute_security_test_task:
       matrices, or remediation snippets. Preserve artifacts even if the test
       needs a reviewer-requested re-run, unless the artifact is unsafe or known
       invalid.
+    - residual_findings: separate hardening gaps or adjacent vulnerabilities
+      discovered while testing the hypothesis, each with its own title,
+      severity, evidence, and recommendation. Do not promote residual findings
+      to the original hypothesis status or priority.
+    - finding: object only for a validated vulnerability being reported, with
+      its own title, severity, impact, recommendation, and evidence. Do not
+      reuse the planned priority as finding severity.
     - result: conclusion supported by the evidence
     - safety_notes: safety limits followed and any stop conditions reached
     - follow_up: remaining work, if any
+
+    If the original hypothesis is disproved but residual hardening gaps exist,
+    use status no-finding or inconclusive unless you submit a separately
+    supported finding object with a retitled issue and its own severity.
   expected_output: >
     Confirmation that submit_security_test_evidence was called with structured
     evidence for the current hypothesis.
@@ -102,6 +117,15 @@ review_security_test_evidence_task:
 
     Accept only when the evidence supports the result, the target and endpoints
     are in scope, and the safety notes/stopping conditions were respected.
+    Reject evidence as inconsistent when status is finding but the finding
+    object is missing/empty, or when the summary/result says no vulnerability,
+    no bypass, false positive, not applicable, model mismatch, or no remediation
+    required. Confirming secure behavior is a no-finding, not a finding. Also
+    reject evidence when the original hypothesis is disproved but residual
+    hardening gaps are promoted to the original title, status, or planned
+    priority. Planning priority is not finding severity; any residual issue
+    must be submitted as its own retitled finding with severity, impact,
+    recommendation, and evidence.
     Critique generated artifacts separately from the evidence conclusion: an
     evidence package may need rework while a generated policy, script, endpoint
     list, or remediation snippet is still useful and should be preserved with
@@ -143,7 +167,11 @@ write_executed_security_test_report_task:
     discovery evidence URLs from execution targets. Do not state that production
     remains required for this executed test when a staging/preprod alternative
     was the approved effective target; such production testing belongs only as a
-    separate future-scope note if explicitly useful.
+    separate future-scope note if explicitly useful. If the original hypothesis
+    was disproved, do not render it as Finding Confirmed. Residual hardening
+    gaps belong in residual_findings or in a separate retitled finding object
+    with its own severity; do not inherit the planned priority as finding
+    severity.
 
     You must call write_executed_test_report exactly once. The report argument
     must be a structured object with:

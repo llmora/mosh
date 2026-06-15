@@ -198,6 +198,12 @@ Reports should mirror executed live test reports and include:
 - reviewer acceptance
 - finding status
 - concrete remediation guidance
+
+Source reports should also distinguish the original hypothesis result from
+residual hardening gaps. If source evidence disproves the planned hypothesis,
+the status should be `no-finding` or `inconclusive` unless the executor submits
+a separate retitled finding with its own severity, impact, recommendation, and
+evidence.
 - links to affected files and line ranges
 
 ## Source Index
