@@ -203,6 +203,10 @@ Live-only planning reads from `report/<host>/discovery/`. Source-aware planning
 also reads from `report/<source>/source-discovery/` and asks the planner to
 route hypotheses with `execution_mode` values of `live`, `source`, `combined`,
 or `deferred`, including affected runtime and source evidence where available.
+Combined assessments are progressive: you can start with a live URL or a source
+tree, then attach the other input later by rerunning planning with both
+arguments. `mosh` links source and live evidence internally when both are
+available; there is no separate correlation command in the normal workflow.
 Planning writes:
 
 ```text
@@ -255,6 +259,10 @@ For a combined live and source plan, pass both:
 ```bash
 mosh test-security https://app.example.com --source /path/to/repo
 ```
+
+If a previous live-only or source-only assessment later gains the other input,
+rerun planning and testing with both arguments. Existing evidence is reused,
+new source/live links enrich the plan, and only ready hypotheses should execute.
 
 Security testing writes:
 
@@ -313,9 +321,9 @@ mosh test-security https://app.example.com
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
 
 If executed tests discover new application surface area, `mosh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
-This feedback loop applies to both live tests and source-routed tests, including
-new routes, API specifications, components, entry points, and configuration
-facts discovered during source security testing.
+This feedback loop applies to live tests, source-routed tests, and source/live
+evidence links, including new routes, API specifications, components, entry
+points, and configuration facts discovered during source security testing.
 
 ### 5. Create The Final Report
 
