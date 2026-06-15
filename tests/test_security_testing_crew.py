@@ -46,6 +46,7 @@ from mosh.crews.source_security_testing.crew import (
     _build_source_reporter_crew,
     _build_source_reviewer_crew,
     _build_source_search_tool,
+    _build_submit_source_evidence_tool,
     _build_write_workspace_file_tool,
     _run_bounded_source_search,
 )
@@ -838,6 +839,77 @@ class SecurityTestingCrewTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tool._run("../escape.py", "print('no')\n", "escape attempt")
 
+    def test_source_evidence_submission_normalizes_false_positive_finding_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "AUTH-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "AUTH-001"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "AUTH-001.md",
+            )
+            tool = _build_submit_source_evidence_tool(_FakeCrewAI, state)
+
+            tool._run(
+                {
+                    "status": "finding",
+                    "summary": "Model mismatch: customer auth is not JWT-based as hypothesized.",
+                    "result": "No authentication bypasses found. No remediation required.",
+                    "finding": None,
+                }
+            )
+
+            self.assertEqual(state.evidence["status"], "no-finding")
+            memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "source_security_test_execution_evidence")
+            self.assertEqual(structured["status"], "no-finding")
+
+    def test_source_evidence_submission_normalizes_disproved_hypothesis_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "AUTH-002",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "AUTH-002"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "AUTH-002.md",
+            )
+            tool = _build_submit_source_evidence_tool(_FakeCrewAI, state)
+
+            tool._run(
+                {
+                    "status": "finding",
+                    "hypothesis_validated": False,
+                    "summary": "Authentication is applied to all developer routes, contrary to the hypothesis.",
+                    "result": "The original no-auth hypothesis is disproved. Residual hardening gaps remain.",
+                    "original_hypothesis_result": "All routes are behind router-level auth middleware.",
+                    "residual_findings": [
+                        {"title": "Developer role is coarse", "severity": "medium", "evidence": ["api/private/developer.js:595"]}
+                    ],
+                    "finding": None,
+                }
+            )
+
+            self.assertEqual(state.evidence["status"], "no-finding")
+            memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "source_security_test_execution_evidence")
+            self.assertEqual(structured["status"], "no-finding")
+
     def test_start_source_process_tool_runs_detached_read_only_container(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory) / "source"
@@ -1328,6 +1400,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             .read_text(encoding="utf-8")
             .lower()
         )
+        compact_task_yaml = " ".join(task_yaml.split())
 
         self.assertIn("effective target mappings as canonical", task_yaml)
         self.assertIn("rewrite discovered paths", task_yaml)
@@ -1342,11 +1415,33 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("useful_artifacts", task_yaml)
         self.assertIn("resolution:", task_yaml)
         self.assertIn("developer/app-owner guidance", task_yaml)
+        self.assertIn("hypothesis_validated", task_yaml)
+        self.assertIn("original_hypothesis_result", task_yaml)
+        self.assertIn("residual_findings", task_yaml)
+        self.assertIn("planning priority is not finding severity", compact_task_yaml)
+        self.assertIn("do not reuse the planned priority as finding severity", compact_task_yaml)
         self.assertEqual(
             inspect.getsource(_run_one_security_test).count('"targets": json.dumps(targets, sort_keys=True)'),
             3,
         )
         self.assertIn('"execution_bundle": json.dumps(execution_bundle, sort_keys=True)', inspect.getsource(_run_one_security_test))
+
+    def test_source_security_testing_tasks_separate_original_hypothesis_from_residual_findings(self) -> None:
+        task_yaml = "\n".join(
+            [
+                Path("src/mosh/crews/source_security_testing/executor_tasks.yaml").read_text(encoding="utf-8"),
+                Path("src/mosh/crews/source_security_testing/reviewer_tasks.yaml").read_text(encoding="utf-8"),
+                Path("src/mosh/crews/source_security_testing/reporter_tasks.yaml").read_text(encoding="utf-8"),
+            ]
+        ).lower()
+        compact_task_yaml = " ".join(task_yaml.split())
+
+        self.assertIn("hypothesis_validated", task_yaml)
+        self.assertIn("original_hypothesis_result", task_yaml)
+        self.assertIn("residual_findings", task_yaml)
+        self.assertIn("planning priority is not finding severity", compact_task_yaml)
+        self.assertIn("do not reuse the planned priority as finding severity", compact_task_yaml)
+        self.assertIn("do not render it as finding confirmed", compact_task_yaml)
 
     def test_executed_test_report_includes_effective_targets(self) -> None:
         markdown = render_executed_test_report(
@@ -1372,6 +1467,121 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
         self.assertIn("## Status\n\nFinding Confirmed\n", markdown)
         self.assertNotIn("## Status\n\nfinding\n", markdown)
+
+    def test_executed_test_report_downgrades_contradictory_finding_status(self) -> None:
+        evidence = {
+            "status": "finding",
+            "summary": "Customer auth is session-token based, not JWT as hypothesized.",
+            "result": "No authentication bypasses found via source inspection. No remediation required.",
+            "finding": None,
+        }
+
+        markdown = render_executed_test_report(
+            target_url="source:/tmp/example",
+            hypothesis={"id": "AUTH-001", "title": "JWT middleware bypass", "surface": "authentication", "priority": "critical"},
+            evidence=evidence,
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            report_content={"status": "finding", "finding": None, "result": evidence["result"]},
+        )
+        metadata = _execution_metadata(
+            test_id="AUTH-001",
+            plan_revision_id="plan",
+            hypothesis_fingerprint="fingerprint",
+            evidence=evidence,
+            review={"accepted": True},
+            report_path="executed_tests/AUTH-001.md",
+            report_content={"status": "finding", "finding": None, "result": evidence["result"]},
+        )
+
+        self.assertIn("## Status\n\nNo Finding\n", markdown)
+        self.assertNotIn("## Status\n\nFinding Confirmed\n", markdown)
+        self.assertEqual(metadata["status"], "no-finding")
+
+    def test_executed_test_report_downgrades_disproved_hypothesis_with_residual_risks(self) -> None:
+        evidence = {
+            "status": "finding",
+            "hypothesis_validated": False,
+            "summary": "Router-level JWT authentication is applied to all developer routes, contrary to the hypothesis.",
+            "result": (
+                "The hypothesis claim is wrong: auth exists at the router level. "
+                "Residual hardening gaps remain, including coarse role authorization and no route-specific rate limits."
+            ),
+            "original_hypothesis_result": "All inspected developer routes are behind router-level JWT middleware.",
+            "residual_findings": [
+                {
+                    "title": "Developer routes use coarse role authorization",
+                    "severity": "medium",
+                    "evidence": ["api/private/developer.js:595"],
+                }
+            ],
+            "finding": None,
+        }
+
+        markdown = render_executed_test_report(
+            target_url="source:/tmp/example",
+            hypothesis={
+                "id": "AUTH-002",
+                "title": "Private developer router has no authentication middleware",
+                "surface": "authentication",
+                "priority": "critical",
+            },
+            evidence=evidence,
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            report_content={
+                "status": "finding",
+                "hypothesis_validated": False,
+                "finding": None,
+                "result": evidence["result"],
+            },
+        )
+        metadata = _execution_metadata(
+            test_id="AUTH-002",
+            plan_revision_id="plan",
+            hypothesis_fingerprint="fingerprint",
+            evidence=evidence,
+            review={"accepted": True},
+            report_path="executed_tests/AUTH-002.md",
+            report_content={
+                "status": "finding",
+                "hypothesis_validated": False,
+                "finding": None,
+                "result": evidence["result"],
+            },
+        )
+
+        self.assertIn("## Status\n\nNo Finding\n", markdown)
+        self.assertNotIn("## Status\n\nFinding Confirmed\n", markdown)
+        self.assertEqual(metadata["status"], "no-finding")
+
+    def test_structured_residual_finding_is_not_downgraded_by_disproved_original_hypothesis(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="source:/tmp/example",
+            hypothesis={
+                "id": "AUTH-002",
+                "title": "Private developer router has no authentication middleware",
+                "surface": "authentication",
+                "priority": "critical",
+            },
+            evidence={
+                "status": "finding",
+                "hypothesis_validated": False,
+                "summary": "Authentication exists, contrary to the hypothesis, but a separate authorization issue was confirmed.",
+                "result": "Developer routes use coarse role authorization for privileged actions.",
+                "finding": {
+                    "title": "Developer routes rely on coarse role authorization",
+                    "severity": "medium",
+                    "impact": "A developer-role token can reach unrelated privileged actions.",
+                    "recommendation": "Add action-scoped authorization checks.",
+                    "evidence": ["api/private/developer.js:595"],
+                },
+            },
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+        )
+
+        self.assertIn("## Status\n\nFinding Confirmed\n", markdown)
 
     def test_status_labels_cover_security_testing_states(self) -> None:
         self.assertEqual(_status_label("needs-review"), "Needs Review")

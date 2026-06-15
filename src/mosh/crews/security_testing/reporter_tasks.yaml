@@ -30,7 +30,11 @@ write_executed_security_test_report_task:
     discovery evidence URLs from execution targets. Do not state that production
     remains required for this executed test when a staging/preprod alternative
     was the approved effective target; such production testing belongs only as a
-    separate future-scope note if explicitly useful.
+    separate future-scope note if explicitly useful. If the original hypothesis
+    was disproved, do not render it as Finding Confirmed. Residual hardening
+    gaps belong in residual_findings or in a separate retitled finding object
+    with its own severity; do not inherit the planned priority as finding
+    severity.
 
     You must call write_executed_test_report exactly once. The report argument
     must be a structured object with:
