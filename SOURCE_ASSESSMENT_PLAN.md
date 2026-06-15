@@ -36,18 +36,20 @@ The implementation should proceed in small, testable increments.
 
 ### Live Only
 
-The current workflow remains valid:
+Engagement-backed live discovery:
 
 ```text
-discover URL -> plan-security URL -> test-security URL -> report URL
+engagement create -> engagement attach URL -> discover ENGAGEMENT
+-> plan-security ENGAGEMENT -> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
 ### Source Only
 
-Add a source-only workflow:
+Engagement-backed source discovery:
 
 ```text
-discover-source SOURCE -> plan-security --source SOURCE -> test-security --source SOURCE -> report SOURCE
+engagement create -> engagement attach SOURCE -> discover ENGAGEMENT
+-> plan-security ENGAGEMENT -> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
 `SOURCE` may be a local path at first. Repository URL support can follow once
@@ -63,25 +65,27 @@ in either order.
 Live-first assessment:
 
 ```text
-discover URL -> plan-security URL -> test-security URL -> report URL
-add source -> discover-source SOURCE -> link evidence -> re-plan deltas -> test-security URL --source SOURCE -> report URL --source SOURCE
+engagement create -> engagement attach URL -> discover ENGAGEMENT
+attach SOURCE -> discover ENGAGEMENT -> link evidence -> re-plan deltas
+-> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
 Source-first assessment:
 
 ```text
-discover-source SOURCE -> plan-security --source SOURCE -> test-security --source SOURCE -> report SOURCE
-add live URL -> discover URL -> link evidence -> re-plan deltas -> test-security URL --source SOURCE -> report URL --source SOURCE
+engagement create -> engagement attach SOURCE -> discover ENGAGEMENT
+attach URL -> discover ENGAGEMENT -> link evidence -> re-plan deltas
+-> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
 Both-provided assessment:
 
 ```text
-discover URL and discover-source SOURCE in either order
+engagement create -> attach URL and SOURCE -> discover ENGAGEMENT
 link evidence as soon as both sides have useful facts
-plan-security URL --source SOURCE
-test-security URL --source SOURCE
-report URL --source SOURCE
+plan-security ENGAGEMENT
+test-security ENGAGEMENT
+report ENGAGEMENT
 ```
 
 The combined workflow should be more than two independent scans:
@@ -95,23 +99,24 @@ The combined workflow should be more than two independent scans:
 
 ## Output Layout
 
-Keep the existing host-based layout for URL engagements. For source-only
-engagements, derive a stable source directory name from the repository basename
-or local directory name, with collision-safe normalization.
+Use an engagement-rooted layout. The engagement owns all attached assets and
+assessment outputs, so live URLs, source trees, and future mobile app assets do
+not drift into separate report roots that need manual synchronization.
 
 Proposed outputs:
 
 ```text
-report/<engagement>/discovery/
-report/<engagement>/source-discovery/
-report/<engagement>/evidence-links/
-report/<engagement>/security-test-planning/
-report/<engagement>/security-testing/
-report/<engagement>/source-security-testing/
-report/<engagement>/final-report/
+report/<engagement-id>/engagement.json
+report/<engagement-id>/assets/<asset-id>/asset.json
+report/<engagement-id>/assets/<asset-id>/discovery/
+report/<engagement-id>/evidence-links/
+report/<engagement-id>/security-test-planning/
+report/<engagement-id>/security-testing/
+report/<engagement-id>/final-report/
 ```
 
-Each crew keeps its own `events.json`, `memory.json`, and Markdown report.
+Each crew keeps its own `events.json`, `memory.json`, and Markdown report under
+the engagement or asset directory it writes to.
 The evidence-links artifact records relationships between live and source
 evidence; it does not replace either discovery artifact and is not a required
 user-visible workflow stage.
@@ -359,20 +364,21 @@ The final report should label confidence and evidence type:
 
 ## CLI Direction
 
-Start with explicit commands:
+Current engagement setup and discovery commands:
 
 ```bash
-mosh discover-source /path/to/repo
-mosh plan-security --source /path/to/repo
-mosh test-security --source /path/to/repo
+mosh engagement create --title "Example App"
+mosh engagement attach eng_a1b2c3d4 https://app.example.com
+mosh engagement attach eng_a1b2c3d4 /path/to/repo
+mosh discover eng_a1b2c3d4
 ```
 
-Then add combined variants:
+Then migrate planning, testing, and reporting to the engagement ID:
 
 ```bash
-mosh plan-security https://app.example.com --source /path/to/repo
-mosh test-security https://app.example.com --source /path/to/repo
-mosh report https://app.example.com --source /path/to/repo
+mosh plan-security eng_a1b2c3d4
+mosh test-security eng_a1b2c3d4
+mosh report eng_a1b2c3d4
 ```
 
 Do not add `mosh correlate` as the primary combined workflow. If an explicit
@@ -384,7 +390,8 @@ Repository URL support can later reuse the same source discovery path after a
 materialization step:
 
 ```bash
-mosh discover-source https://github.com/example/app.git
+mosh engagement attach eng_a1b2c3d4 https://github.com/example/app.git
+mosh discover eng_a1b2c3d4 --asset asset_repo_1
 ```
 
 ## Implementation Milestones
@@ -409,13 +416,21 @@ mosh discover-source https://github.com/example/app.git
    and stop, local HTTP requests, reviewer loop, report metadata, and rerun
    decisions. Source-only execution can use local commands and localhost
    runtime checks without requiring an external deployed URL.
-9. Add source-live evidence linking for combined assessments. This should run
+8a. Done: Add engagement manifests, generic asset attachment, asset type
+    inference, and engagement-backed discovery dispatch with `--asset` and
+    `--refresh`.
+9. Migrate planning to consume engagement asset discovery and write one
+   engagement-level security plan.
+10. Migrate security testing to write one engagement-level result set while
+    keeping source, live, combined, and future mobile executors as internal
+    routing choices.
+11. Add source-live evidence linking for combined assessments. This should run
    incrementally when both live and source evidence are present, and planning
    should consume the current links without requiring a separate user-visible
    correlation command.
-10. Extend final reporting bundle and renderer with source evidence, source
+12. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
-11. Add repository URL materialization after local path source assessment is
+13. Add repository URL materialization after local path source assessment is
     stable.
 
 ## Testing Plan
@@ -445,16 +460,18 @@ Integration-style tests with fakes:
 
 ## First Increment
 
-The first useful increment should be intentionally small:
+The first useful increment was intentionally small:
 
 ```text
-mosh discover-source /path/to/repo
+mosh engagement create
+mosh engagement attach ENGAGEMENT /path/to/repo
+mosh discover ENGAGEMENT
 ```
 
 It should:
 
 - validate the path
-- create `report/<source>/source-discovery/`
+- create `report/<engagement-id>/assets/<asset-id>/discovery/`
 - inventory files, languages, manifests, configs, and likely entrypoints
 - persist a compact source index in memory
 - write a source discovery Markdown report
