@@ -50,7 +50,8 @@ execute_security_test_task:
       testing that should be fed back into the discovery report and future
       planning. Use this for newly confirmed entry points, endpoints,
       technologies, versions, service behavior, headers, or other app-surface
-      facts. Each item should include type, detail, confidence, and evidence.
+      facts. Each item should include type, detail, confidence, and evidence;
+      prefer a list of update objects over a grouped dictionary.
     - artifacts: useful generated outputs such as recommended policies,
       proof-of-concept payloads, endpoint inventories, generated scripts, auth
       matrices, or remediation snippets. Preserve artifacts even if the test

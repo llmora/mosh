@@ -75,7 +75,8 @@ execute_source_security_test_task:
     - source_evidence: concrete path, start_line, end_line, snippet_hash, and
       reason entries that support the result
     - discovery_updates: optional source facts learned during testing that
-      should inform later planning
+      should inform later planning. Prefer a list of update objects with type,
+      detail, confidence, and evidence over a grouped dictionary.
     - artifacts: useful outputs such as remediation snippets, generated
       harnesses, fuzz cases, local test commands, proof-of-concept payloads,
       source-to-route mappings, environment-diff summaries, or auth matrices
