@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -153,13 +154,14 @@ class MoshCrewAIEventListener(BaseEventListener):  # type: ignore[misc]
 
         @crewai_event_bus.on(ToolUsageEvent)
         def on_tool_used(source: Any, event: Any) -> None:
+            tool_input = _truncate(str(_safe_attr(event, "tool_args", "")), 300)
             self._record(
                 "crewai",
                 "tool_used",
                 f"Tool used: {_safe_attr(event, 'tool_name', '')}",
                 {
                     "tool_name": _safe_attr(event, "tool_name", ""),
-                    "tool_input": _truncate(str(_safe_attr(event, "tool_args", "")), 300),
+                    "tool_input": _redact_secrets(tool_input),
                 },
             )
 
@@ -265,3 +267,17 @@ def _append_json_list(path: Path, items: list[dict[str, Any]]) -> None:
     existing.extend(items)
     payload = json.dumps(existing, indent=2, sort_keys=True) + "\n"
     path.write_text(payload, encoding="utf-8")
+
+
+_JWT_RE = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+)
+_BEARER_AUTH_RE = re.compile(
+    r"(?i)(Authorization:\s*Bearer\s+)([^\s\"']+)"
+)
+
+
+def _redact_secrets(text: str) -> str:
+    text = _JWT_RE.sub("[REDACTED_JWT]", text)
+    text = _BEARER_AUTH_RE.sub(r"\1[REDACTED]", text)
+    return text
