@@ -7,10 +7,13 @@ name = "mosh"
 version = "0.1.0"
 description = "Model-driven Open Security Harness for agent-coordinated application security discovery and testing."
 requires-python = ">=3.11,<3.14"
-dependencies = ["crewai==1.14.7"]
+dependencies = ["crewai>=1.14.7"]
 
 [project.scripts]
 mosh = "mosh.cli:main"
+
+[dependency-groups]
+dev = ["pydantic>=2.0"]
 
 [dependency-groups]
 dev = ["pydantic>=2.0"]
