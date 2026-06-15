@@ -7,7 +7,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urljoin, urlparse
 
 from mosh.engagements import (
@@ -21,6 +21,16 @@ from mosh.models import utc_now
 
 EVIDENCE_LINKS_SCHEMA = "mosh.evidence-links.v1"
 DEFAULT_MAX_LINKS_PER_ASSET_PAIR = 500
+MODEL_CONTEXT_MAX_ROUTES_PER_PAIR = 120
+MODEL_CONTEXT_MAX_ENDPOINTS_PER_PAIR = 120
+MODEL_CANDIDATE_LINK_LIMIT = 100
+
+
+class ModelAssistedEvidenceLinker(Protocol):
+    model_metadata: dict[str, Any]
+
+    def suggest_links(self, context: dict[str, Any]) -> dict[str, Any]:
+        pass
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,7 @@ def build_evidence_links(
     engagement_id: str,
     *,
     max_links_per_asset_pair: int = DEFAULT_MAX_LINKS_PER_ASSET_PAIR,
+    model_assisted_linker: ModelAssistedEvidenceLinker | None = None,
 ) -> EvidenceLinkResult:
     engagement = load_engagement(output_root, engagement_id)
     live_assets = [asset for asset in engagement.assets if asset.type == "live_url"]
@@ -83,6 +94,7 @@ def build_evidence_links(
             skipped_assets.append({"id": asset.id, "reason": "no source discovery routes"})
 
     pair_summaries: list[dict[str, Any]] = []
+    pair_summary_by_ids: dict[tuple[str, str], dict[str, Any]] = {}
     for live_asset in live_assets:
         live_endpoints = live_by_asset.get(live_asset.id, [])
         for source_asset in source_assets:
@@ -95,16 +107,50 @@ def build_evidence_links(
                 max_links=max_links_per_asset_pair,
             )
             link_records.extend(pair_links)
-            pair_summaries.append(
-                {
-                    "live_asset_id": live_asset.id,
-                    "source_asset_id": source_asset.id,
-                    "live_endpoints": len(live_endpoints),
-                    "source_routes": len(source_routes),
-                    "links": len(pair_links),
-                    "capped": len(pair_links) >= max_links_per_asset_pair,
-                }
+            pair_summary = {
+                "live_asset_id": live_asset.id,
+                "source_asset_id": source_asset.id,
+                "live_endpoints": len(live_endpoints),
+                "source_routes": len(source_routes),
+                "deterministic_links": len(pair_links),
+                "model_candidate_links": 0,
+                "links": len(pair_links),
+                "capped": len(pair_links) >= max_links_per_asset_pair,
+            }
+            pair_summaries.append(pair_summary)
+            pair_summary_by_ids[(live_asset.id, source_asset.id)] = pair_summary
+
+    model_assisted_summary: dict[str, Any] | None = None
+    if model_assisted_linker is not None:
+        context, source_refs, live_refs, deterministic_ref_pairs = _model_link_context(
+            live_assets,
+            source_assets,
+            live_by_asset,
+            source_by_asset,
+            link_records,
+        )
+        if context["pairs"]:
+            submitted = model_assisted_linker.suggest_links(context)
+            candidate_links = _model_candidate_link_records(
+                submitted,
+                source_refs,
+                live_refs,
+                deterministic_ref_pairs,
             )
+            candidate_links = _dedupe_and_sort_links(candidate_links)[:MODEL_CANDIDATE_LINK_LIMIT]
+            link_records.extend(candidate_links)
+            for link in candidate_links:
+                refs = link.get("refs") if isinstance(link.get("refs"), list) else []
+                source_ref = refs[0] if len(refs) > 0 and isinstance(refs[0], dict) else {}
+                live_ref = refs[1] if len(refs) > 1 and isinstance(refs[1], dict) else {}
+                summary = pair_summary_by_ids.get((str(live_ref.get("asset_id")), str(source_ref.get("asset_id"))))
+                if summary is not None:
+                    summary["model_candidate_links"] = int(summary["model_candidate_links"]) + 1
+                    summary["links"] = int(summary["links"]) + 1
+            model_assisted_summary = {
+                **getattr(model_assisted_linker, "model_metadata", {}),
+                "candidate_links": len(candidate_links),
+            }
 
     payload = {
         "schema": EVIDENCE_LINKS_SCHEMA,
@@ -113,6 +159,8 @@ def build_evidence_links(
         "links": _dedupe_and_sort_links(link_records),
         "skipped_assets": skipped_assets,
     }
+    if model_assisted_summary is not None:
+        payload["model_assisted"] = model_assisted_summary
     path = links_path(output_root, engagement.id)
     _write_json(path, payload)
     return EvidenceLinkResult(links_path=path, payload=payload)
@@ -204,7 +252,9 @@ def _link_record(
     )
     return {
         "id": "link_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12],
-        "type": "source_route_to_live_endpoint",
+        "type": "source_route_to_live_endpoint_candidate"
+        if match["basis"] == "model_assisted_candidate"
+        else "source_route_to_live_endpoint",
         "asset_refs": [source_asset.id, live_asset.id],
         "confidence": match["confidence"],
         "score": match["score"],
@@ -212,6 +262,210 @@ def _link_record(
         "reason": match["reason"],
         "refs": [source_ref, live_ref],
     }
+
+
+def _model_link_context(
+    live_assets: list[EngagementAsset],
+    source_assets: list[EngagementAsset],
+    live_by_asset: dict[str, list[LiveEndpoint]],
+    source_by_asset: dict[str, list[SourceRoute]],
+    deterministic_links: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, SourceRoute], dict[str, LiveEndpoint], set[tuple[str, str]]]:
+    source_refs: dict[str, SourceRoute] = {}
+    live_refs: dict[str, LiveEndpoint] = {}
+    deterministic_ref_pairs = _deterministic_ref_pairs(deterministic_links)
+    pairs: list[dict[str, Any]] = []
+    for live_asset in live_assets:
+        live_endpoints = live_by_asset.get(live_asset.id, [])
+        if not live_endpoints:
+            continue
+        for source_asset in source_assets:
+            source_routes = source_by_asset.get(source_asset.id, [])
+            if not source_routes:
+                continue
+            source_items = [_source_context_item(route) for route in source_routes[:MODEL_CONTEXT_MAX_ROUTES_PER_PAIR]]
+            live_items = [_live_context_item(endpoint) for endpoint in live_endpoints[:MODEL_CONTEXT_MAX_ENDPOINTS_PER_PAIR]]
+            source_item_ids = {item["ref_id"] for item in source_items}
+            live_item_ids = {item["ref_id"] for item in live_items}
+            for item, route in zip(source_items, source_routes[:MODEL_CONTEXT_MAX_ROUTES_PER_PAIR]):
+                source_refs[item["ref_id"]] = route
+            for item, endpoint in zip(live_items, live_endpoints[:MODEL_CONTEXT_MAX_ENDPOINTS_PER_PAIR]):
+                live_refs[item["ref_id"]] = endpoint
+            deterministic_items = [
+                {"source_ref_id": source_ref_id, "live_ref_id": live_ref_id}
+                for source_ref_id, live_ref_id in sorted(deterministic_ref_pairs)
+                if source_ref_id in source_item_ids and live_ref_id in live_item_ids
+            ]
+            pairs.append(
+                {
+                    "live_asset_id": live_asset.id,
+                    "source_asset_id": source_asset.id,
+                    "source_routes": source_items,
+                    "live_endpoints": live_items,
+                    "deterministic_links": deterministic_items,
+                    "omitted_source_routes": max(0, len(source_routes) - len(source_items)),
+                    "omitted_live_endpoints": max(0, len(live_endpoints) - len(live_items)),
+                }
+            )
+    return (
+        {"schema": "mosh.evidence-link-candidate-input.v1", "pairs": pairs},
+        source_refs,
+        live_refs,
+        deterministic_ref_pairs,
+    )
+
+
+def _deterministic_ref_pairs(links: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for link in links:
+        if not isinstance(link, dict) or link.get("basis") == "model_assisted_candidate":
+            continue
+        refs = link.get("refs") if isinstance(link.get("refs"), list) else []
+        source_ref = refs[0] if len(refs) > 0 and isinstance(refs[0], dict) else {}
+        live_ref = refs[1] if len(refs) > 1 and isinstance(refs[1], dict) else {}
+        source_ref_id = _source_ref_id_from_ref(source_ref)
+        live_ref_id = _live_ref_id_from_ref(live_ref)
+        if source_ref_id and live_ref_id:
+            pairs.add((source_ref_id, live_ref_id))
+    return pairs
+
+
+def _model_candidate_link_records(
+    submitted: dict[str, Any],
+    source_refs: dict[str, SourceRoute],
+    live_refs: dict[str, LiveEndpoint],
+    deterministic_ref_pairs: set[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    links: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in _list(submitted.get("links")):
+        if not isinstance(item, dict):
+            continue
+        source_ref_id = _text(item.get("source_ref_id"))
+        live_ref_id = _text(item.get("live_ref_id"))
+        if not source_ref_id or not live_ref_id:
+            continue
+        if (source_ref_id, live_ref_id) in deterministic_ref_pairs or (source_ref_id, live_ref_id) in seen:
+            continue
+        source_route = source_refs.get(source_ref_id)
+        live_endpoint = live_refs.get(live_ref_id)
+        if source_route is None or live_endpoint is None:
+            continue
+        seen.add((source_ref_id, live_ref_id))
+        links.append(
+            _link_record(
+                live_endpoint.asset,
+                live_endpoint,
+                source_route.asset,
+                source_route,
+                {
+                    "confidence": _normalize_candidate_confidence(item.get("confidence")),
+                    "score": _candidate_score(item.get("confidence")),
+                    "basis": "model_assisted_candidate",
+                    "reason": _text(item.get("reason"))[:600] or "Model-assisted candidate link.",
+                },
+            )
+        )
+    return links
+
+
+def _source_context_item(route: SourceRoute) -> dict[str, Any]:
+    return {
+        "ref_id": _source_ref_id(route),
+        "asset_id": route.asset.id,
+        "method": route.method,
+        "route": route.route,
+        "path": route.source_path,
+        "line": route.line,
+        "handler": route.handler,
+        "framework": route.framework,
+        "route_resolution_confidence": route.route_resolution_confidence,
+    }
+
+
+def _live_context_item(endpoint: LiveEndpoint) -> dict[str, Any]:
+    return {
+        "ref_id": _live_ref_id(endpoint),
+        "asset_id": endpoint.asset.id,
+        "method": endpoint.method,
+        "url": endpoint.url,
+        "path": endpoint.path,
+        "status": endpoint.status,
+        "source_kind": endpoint.source_kind,
+    }
+
+
+def _source_ref_id(route: SourceRoute) -> str:
+    return "src_" + hashlib.sha256(
+        "|".join(
+            [
+                route.asset.id,
+                route.method,
+                route.route,
+                route.source_path or "",
+                str(route.line or ""),
+                route.handler or "",
+                route.framework or "",
+            ]
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def _live_ref_id(endpoint: LiveEndpoint) -> str:
+    return "live_" + hashlib.sha256(
+        "|".join(
+            [
+                endpoint.asset.id,
+                endpoint.method,
+                endpoint.url,
+                endpoint.path,
+                str(endpoint.status or ""),
+                endpoint.source_kind,
+            ]
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def _source_ref_id_from_ref(value: dict[str, Any]) -> str:
+    route = SourceRoute(
+        asset=EngagementAsset(id=str(value.get("asset_id") or ""), type="source_tree", locator=""),
+        method=str(value.get("method") or ""),
+        route=str(value.get("route") or ""),
+        source_path=value.get("path") if isinstance(value.get("path"), str) else None,
+        line=_int_or_none(value.get("line")),
+        handler=value.get("handler") if isinstance(value.get("handler"), str) else None,
+        framework=value.get("framework") if isinstance(value.get("framework"), str) else None,
+        snippet_hash=value.get("snippet_hash") if isinstance(value.get("snippet_hash"), str) else None,
+        route_resolution_confidence=(
+            value.get("route_resolution_confidence")
+            if isinstance(value.get("route_resolution_confidence"), str)
+            else None
+        ),
+    )
+    return _source_ref_id(route) if route.asset.id else ""
+
+
+def _live_ref_id_from_ref(value: dict[str, Any]) -> str:
+    endpoint = LiveEndpoint(
+        asset=EngagementAsset(id=str(value.get("asset_id") or ""), type="live_url", locator=""),
+        method=str(value.get("method") or ""),
+        url=str(value.get("url") or ""),
+        path=str(value.get("path") or ""),
+        status=_int_or_none(value.get("status")),
+        source_kind=str(value.get("source_kind") or ""),
+    )
+    return _live_ref_id(endpoint) if endpoint.asset.id and endpoint.url else ""
+
+
+def _normalize_candidate_confidence(value: Any) -> str:
+    confidence = _text(value).lower()
+    if confidence in {"low", "medium", "high"}:
+        return confidence
+    return "low"
+
+
+def _candidate_score(value: Any) -> float:
+    return {"high": 0.74, "medium": 0.62, "low": 0.45}[_normalize_candidate_confidence(value)]
 
 
 def _live_endpoints_from_asset(output_root: Path, engagement_id: str, asset: EngagementAsset) -> list[LiveEndpoint]:

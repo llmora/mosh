@@ -310,16 +310,68 @@ class CliTests(unittest.TestCase):
             )
             stdout = io.StringIO()
 
-            with contextlib.redirect_stdout(stdout):
-                exit_code = main(["link", engagement.id, "--output-root", str(output_root)])
+            with patch("mosh.cli.build_model_assisted_linker", return_value=_NoopModelAssistedLinker()):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["link", engagement.id, "--output-root", str(output_root)])
 
             links_file = output_root / engagement.id / "links.json"
             self.assertEqual(exit_code, 0)
+            self.assertIn("orchestrator: Starting evidence linking crew", stdout.getvalue())
             self.assertIn("Evidence links written to", stdout.getvalue())
             self.assertIn("Links: 1", stdout.getvalue())
             self.assertTrue(links_file.exists())
             payload = json.loads(links_file.read_text(encoding="utf-8"))
             self.assertEqual(payload["links"][0]["refs"][0]["path"], "api/status.py")
+
+    def test_cli_link_reports_missing_model_key_for_candidate_linking(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            asset_discovery_dir(output_root, engagement.id, live_asset.id).mkdir(parents=True)
+            (asset_discovery_dir(output_root, engagement.id, live_asset.id) / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "crawled_page",
+                            "content": {
+                                "url": "https://app.example.test/api/status",
+                                "status": 200,
+                                "links": [],
+                                "references": [],
+                                "forms": [],
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            asset_discovery_dir(output_root, engagement.id, source_asset.id).mkdir(parents=True)
+            (asset_discovery_dir(output_root, engagement.id, source_asset.id) / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "source_index",
+                            "content": {"inventory": {"routes": [{"method": "GET", "full_route": "/api/status"}]}},
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with patch.dict(os.environ, {}, clear=True):
+                with contextlib.redirect_stdout(stdout):
+                    with contextlib.redirect_stderr(stderr):
+                        exit_code = main(["link", engagement.id, "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("orchestrator: Starting evidence linking crew", stdout.getvalue())
+            self.assertIn("Missing LLM API key(s): OPENROUTER_API_KEY", stderr.getvalue())
 
     def test_cli_plan_security_subcommand_writes_security_test_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -591,6 +643,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("Final report written to", stdout.getvalue())
             self.assertTrue(report_path.exists())
+
+class _NoopModelAssistedLinker:
+    model_metadata = {"crew": "security_planning", "agent": "evidence_linker", "model": "fake-linker"}
+
+    def suggest_links(self, context: dict[str, object]) -> dict[str, object]:
+        return {"links": []}
 
 
 if __name__ == "__main__":

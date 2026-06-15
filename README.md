@@ -85,6 +85,7 @@ models:
 
   security_planning:
     planner: deepseek/deepseek-v4-flash
+    evidence_linker: deepseek/deepseek-v4-flash
     reviewer: deepseek/deepseek-v4-pro
     reporter: deepseek/deepseek-v4-flash
     engagement_refiner: deepseek/deepseek-v4-flash
@@ -110,6 +111,7 @@ models:
     mapper: openai/gpt-5.2-mini
 
   security_planning:
+    evidence_linker: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
 
   security_testing:
@@ -148,7 +150,8 @@ report/<engagement-id>/assets/<asset-id>/asset.json
 
 `engagement.json` is a small index that stores asset IDs and creation times.
 Each `asset.json` is the source of truth for the asset type, locator, optional
-label, and discovery metadata.
+label, and non-derived asset metadata such as the last discovery timestamp.
+Discovery paths are derived from the engagement and asset IDs.
 
 ### 2. Run Discovery
 
@@ -210,9 +213,14 @@ report/<engagement-id>/links.json
 
 `links.json` records source-route to live-endpoint relationships with typed
 references back to source and live asset IDs. Asset details stay in each
-`asset.json`; the engagement ID is implied by the file path. The linker scores
-exact and parameterized path matches, and records asset IDs skipped because they
-do not yet have usable discovery evidence. This command is temporary;
+`asset.json`; the engagement ID is implied by the file path. The linker first
+computes deterministic exact and parameterized path matches, then asks the
+planning-owned `evidence_linker` model for additional candidate links using
+only existing evidence refs. Candidate links are marked separately and are not
+authoritative discovery facts. Like discovery, the command prints an
+orchestrator start event immediately and runs the CrewAI model phase with
+verbose task/agent output. The artifact also records asset IDs skipped because
+they do not yet have usable discovery evidence. This command is temporary;
 engagement-backed planning is expected to call the same linker automatically
 once the planning migration lands.
 

@@ -81,6 +81,72 @@ class EvidenceLinksTests(unittest.TestCase):
             self.assertEqual(parameterized["refs"][0]["path"], "api/users.py")
             self.assertEqual(parameterized["refs"][1]["path"], "/api/users/123")
 
+    def test_build_evidence_links_adds_validated_model_assisted_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_memory(
+                asset_discovery_dir(output_root, engagement.id, live_asset.id),
+                [
+                    {
+                        "kind": "crawled_page",
+                        "content": {
+                            "url": "https://app.example.test/api/v1/sales/leads",
+                            "status": 200,
+                            "links": [],
+                            "references": [],
+                            "forms": [],
+                        },
+                    }
+                ],
+            )
+            _write_memory(
+                asset_discovery_dir(output_root, engagement.id, source_asset.id),
+                [
+                    {
+                        "kind": "source_index",
+                        "content": {
+                            "inventory": {
+                                "routes": [
+                                    {
+                                        "method": "POST",
+                                        "full_route": "/sales/leads",
+                                        "path": "api/sales.py",
+                                        "line": 20,
+                                        "handler": "create_lead",
+                                        "framework": "python",
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            )
+            fake_linker = FakeModelAssistedLinker()
+
+            result = build_evidence_links(output_root, engagement.id, model_assisted_linker=fake_linker)
+
+            self.assertEqual(len(fake_linker.contexts), 1)
+            context = fake_linker.contexts[0]
+            self.assertEqual(context["schema"], "mosh.evidence-link-candidate-input.v1")
+            self.assertEqual(context["pairs"][0]["deterministic_links"], [])
+            self.assertEqual(len(result.payload["links"]), 1)
+            link = result.payload["links"][0]
+            self.assertEqual(link["type"], "source_route_to_live_endpoint_candidate")
+            self.assertEqual(link["basis"], "model_assisted_candidate")
+            self.assertEqual(link["confidence"], "high")
+            self.assertEqual(link["score"], 0.74)
+            self.assertEqual(link["asset_refs"], [source_asset.id, live_asset.id])
+            self.assertEqual(link["refs"][0]["path"], "api/sales.py")
+            self.assertEqual(link["refs"][1]["path"], "/api/v1/sales/leads")
+            self.assertEqual(result.payload["pairs"][0]["deterministic_links"], 0)
+            self.assertEqual(result.payload["pairs"][0]["model_candidate_links"], 1)
+            self.assertEqual(result.payload["model_assisted"]["model"], "fake-linker")
+
     def test_build_evidence_links_links_every_live_source_pair_and_caps_each_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
@@ -168,6 +234,33 @@ class EvidenceLinksTests(unittest.TestCase):
 def _write_memory(report_dir: Path, items: list[dict[str, object]]) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / "memory.json").write_text(json.dumps(items), encoding="utf-8")
+
+
+class FakeModelAssistedLinker:
+    model_metadata = {"crew": "security_planning", "agent": "evidence_linker", "model": "fake-linker"}
+
+    def __init__(self) -> None:
+        self.contexts: list[dict[str, object]] = []
+
+    def suggest_links(self, context: dict[str, object]) -> dict[str, object]:
+        self.contexts.append(context)
+        pair = context["pairs"][0]  # type: ignore[index]
+        return {
+            "links": [
+                {
+                    "source_ref_id": pair["source_routes"][0]["ref_id"],
+                    "live_ref_id": pair["live_endpoints"][0]["ref_id"],
+                    "confidence": "high",
+                    "reason": "Live deployment appears to add an /api/v1 prefix to the source sales route.",
+                },
+                {
+                    "source_ref_id": "src_invented",
+                    "live_ref_id": pair["live_endpoints"][0]["ref_id"],
+                    "confidence": "high",
+                    "reason": "Invalid source ref must be ignored.",
+                },
+            ]
+        }
 
 
 if __name__ == "__main__":
