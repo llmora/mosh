@@ -18,6 +18,7 @@ from mosh.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.docker_tools import DockerToolResult, DockerToolRunner
 from mosh.engagement import load_engagement_file, resolve_target_mapping
 from mosh.memory import FileMemory
@@ -103,6 +104,21 @@ class SecurityTestingOrchestrator:
         engagement = load_engagement_file(engagement_file)
         result = run_security_testing_preflight(plan, engagement)
         ready_pending = _ready_pending_hypotheses(plan, result, report_dir)
+
+        pending_ids = {_hypothesis_id(h) for h in ready_pending}
+        skipped = [item for item in result.ready if item.get("id") not in pending_ids]
+        self._skipped_test_ids: list[str] = [item["id"] for item in skipped]
+        if skipped:
+            memory.record_event(
+                "orchestrator",
+                "tests_skipped",
+                f"Skipping {len(skipped)} already-executed tests",
+                {
+                    "skipped_ids": [item["id"] for item in skipped],
+                    "skipped_titles": [item.get("title", "") for item in skipped],
+                },
+            )
+
         markdown = render_preflight_report(url, engagement_file, result)
         (report_dir / "preflight.md").write_text(markdown, encoding="utf-8")
         memory.add_item(
@@ -955,6 +971,7 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
                 tasks=[self.execute_security_test_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestExecutorCrew()
@@ -1001,6 +1018,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
                 tasks=[self.review_security_test_evidence_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestReviewerCrew()
@@ -1047,6 +1065,7 @@ def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
                 tasks=[self.write_executed_security_test_report_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestReporterCrew()

@@ -13,6 +13,7 @@ from mosh.crews.discovery.agents import (
     build_discovery_agents,
     discovery_agent_definitions,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.memory import FileMemory
 from mosh.models import Event
 from mosh.models import CrawlResult
@@ -175,6 +176,7 @@ class DiscoveryOrchestrator:
 def _load_crewai():
     try:
         from crewai import Agent, Crew, LLM, Process, Task
+        from crewai.events import BaseEventListener
         from crewai.project import CrewBase, agent, crew, task
         from crewai.tools import BaseTool
         from pydantic import BaseModel, Field
@@ -197,6 +199,7 @@ def _load_crewai():
     crewai.BaseTool = BaseTool
     crewai.BaseModel = BaseModel
     crewai.Field = Field
+    crewai.BaseEventListener = BaseEventListener
     return crewai
 
 
@@ -299,6 +302,7 @@ def _build_yaml_discovery_crew(
                 tasks=self.tasks,
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return DiscoveryCrew()

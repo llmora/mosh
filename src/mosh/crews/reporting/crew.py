@@ -15,6 +15,7 @@ from mosh.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.crews.reporting.reporting import (
     render_final_report,
     validate_final_report_content,
@@ -210,6 +211,7 @@ def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
                 tasks=[self.write_final_report_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return FinalReportWriterCrew()
@@ -256,6 +258,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: FinalReportState
                 tasks=[self.review_final_report_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return FinalReportReviewerCrew()
