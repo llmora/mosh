@@ -23,8 +23,14 @@ The implementation should proceed in small, testable increments.
   from prose.
 - Preserve source evidence as file paths, line ranges, symbols, and snippet
   hashes so reports can link findings to code.
-- Let source and live testing feed new facts back into discovery, correlation,
-  planning, and reporting.
+- Treat combined assessments as progressive evidence enrichment. An assessment
+  can start from either a live URL or source code, and the other evidence source
+  can be attached later without starting a separate workflow.
+- Let source and live testing feed new facts back into discovery, evidence
+  linking, planning, and reporting.
+- Do not make source/live correlation a mandatory batch phase. Evidence linking
+  is an internal, repeatable operation that runs when both sides have useful
+  evidence.
 
 ## Target Workflows
 
@@ -49,12 +55,30 @@ the local path flow is stable.
 
 ### Combined Source And Live
 
-When the user provides both a live URL and source code:
+Combined assessments use progressive enrichment instead of a mandatory
+`discover live -> discover source -> correlate` sequence. The assessment owns
+all evidence gathered for the target, and live URLs or source code can be added
+in either order.
+
+Live-first assessment:
 
 ```text
-discover URL
-discover-source SOURCE
-correlate URL SOURCE
+discover URL -> plan-security URL -> test-security URL -> report URL
+add source -> discover-source SOURCE -> link evidence -> re-plan deltas -> test-security URL --source SOURCE -> report URL --source SOURCE
+```
+
+Source-first assessment:
+
+```text
+discover-source SOURCE -> plan-security --source SOURCE -> test-security --source SOURCE -> report SOURCE
+add live URL -> discover URL -> link evidence -> re-plan deltas -> test-security URL --source SOURCE -> report URL --source SOURCE
+```
+
+Both-provided assessment:
+
+```text
+discover URL and discover-source SOURCE in either order
+link evidence as soon as both sides have useful facts
 plan-security URL --source SOURCE
 test-security URL --source SOURCE
 report URL --source SOURCE
@@ -80,7 +104,7 @@ Proposed outputs:
 ```text
 report/<engagement>/discovery/
 report/<engagement>/source-discovery/
-report/<engagement>/correlation/
+report/<engagement>/evidence-links/
 report/<engagement>/security-test-planning/
 report/<engagement>/security-testing/
 report/<engagement>/source-security-testing/
@@ -88,6 +112,9 @@ report/<engagement>/final-report/
 ```
 
 Each crew keeps its own `events.json`, `memory.json`, and Markdown report.
+The evidence-links artifact records relationships between live and source
+evidence; it does not replace either discovery artifact and is not a required
+user-visible workflow stage.
 
 ## New Crews
 
@@ -142,9 +169,11 @@ Later tools:
 - redacted secret scanner
 - language-specific call graph or framework route extractors
 
-### Source-Live Correlation Crew
+### Source-Live Evidence Linking
 
-Purpose: merge live discovery and source discovery into actionable relationships.
+Purpose: connect live discovery and source discovery into actionable
+relationships without replacing either artifact or requiring a separate batch
+workflow.
 
 Agents:
 
@@ -153,9 +182,9 @@ Agents:
   configuration drift
 - verification planner: proposes which source findings need live proof and which
   live findings need source remediation references
-- correlation reporter: writes a stable correlation report
+- evidence link reporter: writes stable source/live relationship records
 
-Correlation outputs should include:
+Evidence-link outputs should include:
 
 - live endpoint -> source route/controller references
 - source route -> observed or unobserved live endpoint status
@@ -271,11 +300,15 @@ bundle:
 {
   "live_discovery": {},
   "source_discovery": {},
-  "correlation": {},
+  "evidence_links": {},
   "prior_security_testing_feedback": {},
   "prior_source_testing_feedback": {}
 }
 ```
+
+Existing code may temporarily expose this section as `correlation` while the
+implementation migrates, but the architecture should treat it as evidence links,
+not as a required standalone correlation phase.
 
 Security hypotheses should gain deterministic routing fields:
 
@@ -307,10 +340,10 @@ Preflight should route hypotheses by `execution_mode` and explicit blockers.
 
 The combined assessment should support these loops:
 
-- source discovery finds unobserved route -> correlation creates live discovery
-  candidate -> planning may add live verification
-- live testing finds behavior or header issue -> correlation maps to config or
-  source files -> final report includes specific remediation location
+- source discovery finds unobserved route -> evidence linking creates a live
+  discovery candidate -> planning may add live verification
+- live testing finds behavior or header issue -> evidence linking maps to config
+  or source files -> final report includes specific remediation location
 - source testing finds authorization or input validation weakness -> live
   testing attempts bounded verification when authorized
 - source dependency/config evidence enriches final remediation even when runtime
@@ -337,11 +370,15 @@ mosh test-security --source /path/to/repo
 Then add combined variants:
 
 ```bash
-mosh correlate https://app.example.com --source /path/to/repo
 mosh plan-security https://app.example.com --source /path/to/repo
 mosh test-security https://app.example.com --source /path/to/repo
 mosh report https://app.example.com --source /path/to/repo
 ```
+
+Do not add `mosh correlate` as the primary combined workflow. If an explicit
+linking command is later useful for debugging or recomputing relationships, it
+should be named and documented as evidence-link maintenance, not as the required
+spine of a combined assessment.
 
 Repository URL support can later reuse the same source discovery path after a
 materialization step:
@@ -372,7 +409,10 @@ mosh discover-source https://github.com/example/app.git
    and stop, local HTTP requests, reviewer loop, report metadata, and rerun
    decisions. Source-only execution can use local commands and localhost
    runtime checks without requiring an external deployed URL.
-9. Add source-live correlation for combined assessments.
+9. Add source-live evidence linking for combined assessments. This should run
+   incrementally when both live and source evidence are present, and planning
+   should consume the current links without requiring a separate user-visible
+   correlation command.
 10. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
 11. Add repository URL materialization after local path source assessment is
@@ -399,7 +439,7 @@ Integration-style tests with fakes:
 
 - source discovery crew writes memory, events, and report artifacts
 - source-only planning consumes source discovery
-- combined correlation consumes live and source discovery
+- combined evidence linking consumes live and source discovery
 - source testing produces accepted and rejected executed test reports
 - source testing feedback can refresh planning without duplicate loops
 
