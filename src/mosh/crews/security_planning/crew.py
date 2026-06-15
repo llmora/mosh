@@ -872,6 +872,10 @@ def _normalize_security_test_plan(plan: dict[str, Any], assessment_context: dict
             hypothesis["verification_strategy"] = _default_verification_strategy(hypothesis["execution_mode"])
         else:
             hypothesis.setdefault("verification_strategy", _default_verification_strategy(hypothesis["execution_mode"]))
+        hypothesis["source_assessment_type"] = _normalized_source_assessment_type(
+            hypothesis.get("source_assessment_type"),
+            _default_source_assessment_type(hypothesis),
+        )
         hypotheses.append(hypothesis)
     normalized["test_hypotheses"] = hypotheses
     normalized.setdefault("deferred_test_opportunities", [])
@@ -930,6 +934,49 @@ def _default_verification_strategy(execution_mode: str) -> str:
     if execution_mode == "deferred":
         return "blocked-pending-inputs"
     return "live-verification"
+
+
+def _normalized_source_assessment_type(value: Any, default: str) -> str:
+    assessment_type = _text(value).lower()
+    valid = {
+        "static-source-inspection",
+        "generated-harness",
+        "local-runtime-service",
+        "dependency-tool-scan",
+        "deferred-live-verification",
+        "live-verification",
+        "source-guided-live-verification",
+    }
+    return assessment_type if assessment_type in valid else default
+
+
+def _default_source_assessment_type(hypothesis: dict[str, Any]) -> str:
+    mode = _text(hypothesis.get("execution_mode")).lower()
+    if mode == "live":
+        return "live-verification"
+    if mode == "combined":
+        return "source-guided-live-verification"
+    if mode == "deferred":
+        return "deferred-live-verification"
+
+    combined_text = " ".join(
+        _text(value).lower()
+        for value in (
+            hypothesis.get("verification_strategy"),
+            hypothesis.get("hypothesis"),
+            hypothesis.get("tools_expected"),
+            hypothesis.get("test_steps"),
+            hypothesis.get("preconditions"),
+            hypothesis.get("requirements"),
+        )
+    )
+    if any(token in combined_text for token in ("local runtime", "localhost", "start", "service", "http request", "route table")):
+        return "local-runtime-service"
+    if any(token in combined_text for token in ("harness", "fuzz", "function", "env override", "environment override", "script")):
+        return "generated-harness"
+    if any(token in combined_text for token in ("semgrep", "bandit", "pip-audit", "dependency", "lockfile", "scanner", "static tool")):
+        return "dependency-tool-scan"
+    return "static-source-inspection"
 
 
 def _is_content_only_mapping(value: dict[str, Any]) -> bool:

@@ -164,6 +164,7 @@ def _plan() -> dict[str, object]:
                 "affected_runtime": [{"method": "GET", "url": "https://api.example.test/api/private/auth/me"}],
                 "affected_source": [],
                 "verification_strategy": "live-verification",
+                "source_assessment_type": "live-verification",
                 "status": "planned",
             }
         ],
@@ -207,6 +208,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("Execution mode: `live`", markdown)
         self.assertIn("Evidence sources: `live`", markdown)
         self.assertIn("Verification strategy: `live-verification`", markdown)
+        self.assertIn("Source assessment type: `live-verification`", markdown)
         self.assertIn("#### Affected Runtime", markdown)
         self.assertIn("GET https://api.example.test/api/private/auth/me", markdown)
         self.assertIn("## Deferred Test Opportunities", markdown)
@@ -467,8 +469,55 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
         self.assertEqual(hypothesis["execution_mode"], "deferred")
         self.assertEqual(hypothesis["verification_strategy"], "blocked-pending-inputs")
+        self.assertEqual(hypothesis["source_assessment_type"], "deferred-live-verification")
         self.assertEqual(hypothesis["evidence_sources"], ["source"])
         self.assertIn("Provide a live URL", hypothesis["requirements_to_proceed"][0])
+
+    def test_source_plan_normalization_classifies_dynamic_assessment_shapes(self) -> None:
+        plan = {
+            "title": "Source plan",
+            "test_hypotheses": [
+                {
+                    "id": "SRC-STATIC",
+                    "title": "Check route middleware",
+                    "execution_mode": "source",
+                    "test_steps": ["Read route registration and middleware source."],
+                },
+                {
+                    "id": "SRC-HARNESS",
+                    "title": "Exercise parser function",
+                    "execution_mode": "source",
+                    "test_steps": ["Write a harness script under /work and fuzz malformed inputs."],
+                },
+                {
+                    "id": "SRC-RUNTIME",
+                    "title": "Inspect loaded routes",
+                    "execution_mode": "source",
+                    "test_steps": ["Start a local runtime service and request the route table over localhost."],
+                },
+                {
+                    "id": "SRC-DEPS",
+                    "title": "Dependency audit",
+                    "execution_mode": "source",
+                    "tools_expected": ["pip-audit", "dependency lockfile scanner"],
+                },
+            ],
+        }
+        context = {
+            "schema": "mosh.assessment-evidence-bundle.v1",
+            "live_discovery": {},
+            "source_discovery": {"source_index": {"evidence_refs": []}},
+        }
+
+        normalized = _normalize_security_test_plan(plan, context)
+        assessment_types = {
+            item["id"]: item["source_assessment_type"] for item in normalized["test_hypotheses"]
+        }
+
+        self.assertEqual(assessment_types["SRC-STATIC"], "static-source-inspection")
+        self.assertEqual(assessment_types["SRC-HARNESS"], "generated-harness")
+        self.assertEqual(assessment_types["SRC-RUNTIME"], "local-runtime-service")
+        self.assertEqual(assessment_types["SRC-DEPS"], "dependency-tool-scan")
 
     def test_orchestrator_writes_under_security_test_planning_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -670,6 +719,10 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("business risks", agents)
         self.assertIn("organisational_risk", tasks)
         self.assertIn("business_value", tasks)
+        self.assertIn("source_assessment_type", tasks)
+        self.assertIn("generated-harness", tasks)
+        self.assertIn("local-runtime-service", tasks)
+        self.assertIn("dependency-tool-scan", tasks)
         self.assertIn("deferred_test_opportunities", tasks)
         self.assertIn("requirements_to_proceed", tasks)
         self.assertIn("generic security checklist", tasks)

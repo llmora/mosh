@@ -44,7 +44,10 @@ write_source_security_test_report_task:
     Write the report as a source-backed execution result. Distinguish source
     evidence, local runtime evidence, and any future live verification. Do not
     imply that production was tested when the evidence came from source or a
-    local runtime.
+    local runtime. When workspace files, local processes, or local HTTP
+    requests exist, include a clearly labelled dynamic source evidence section
+    so readers can audit generated harnesses and local runtime behavior without
+    reading raw metadata.
 
     You must call write_source_executed_test_report exactly once. The report
     argument must be a structured object with:
