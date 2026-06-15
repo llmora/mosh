@@ -1,0 +1,45 @@
+review_source_security_test_evidence_task:
+  description: >
+    Review the executor evidence for the current source security test.
+
+    Source root:
+    {source}
+
+    Test ID:
+    {test_id}
+
+    Executor/reviewer revision:
+    {revision} of {max_attempts}
+
+    Hypothesis JSON:
+    {hypothesis}
+
+    Evidence JSON:
+    {evidence}
+
+    Effective target mappings JSON:
+    {targets}
+
+    Accept source-only evidence only when the result is supported by concrete
+    source paths, line ranges, snippets or snippet hashes, generated harnesses,
+    local command outputs, local process observations, or local HTTP requests.
+    A source result may identify a code-level issue or no-finding; it must not
+    claim deployed production exploitability unless the evidence used an
+    approved local or mapped runtime target. Do not request production URL
+    testing for a source hypothesis just to make the result useful; ask for a
+    combined follow-up only when runtime behavior is genuinely required.
+
+    You must call submit_source_security_test_review exactly once with:
+    - accepted: boolean
+    - summary: concise review decision
+    - requested_changes: list of specific re-runs, missing source references,
+      or missing local runtime observations if not accepted
+    - safety_concerns: list of source/root/local-runtime safety issues, if any
+    - accepted_artifacts: list of artifact names that are valid/useful enough
+      for the final report
+    - rejected_artifacts: list of artifact names that should not be relied on,
+      with reasons in requested_changes or safety_concerns
+  expected_output: >
+    Confirmation that submit_source_security_test_review was called with a
+    structured review decision.
+  agent: source_reviewer

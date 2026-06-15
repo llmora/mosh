@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.cli import main
-from mosh.engagement import write_engagement_template
+from mosh.engagement import write_engagement_template, write_engagement_template_mapping
 from mosh.scope import report_dir_name, source_report_dir_name
 from tests.fakes import (
     FakeCrewRunner,
@@ -18,8 +18,42 @@ from tests.fakes import (
     FakeSecurityPlanningRunner,
     FakeSecurityTestingRunner,
     FakeSourceDiscoveryRunner,
+    FakeSourceSecurityTestingRunner,
 )
 from tests.fixtures import fixture_server, fixture_source_tree
+
+
+def _source_engagement_template(source: str) -> dict[str, object]:
+    return {
+        "engagement": {
+            "authorization_confirmed": True,
+            "active_testing_allowed": False,
+            "state_changing_tests_allowed": False,
+            "notes": "Source-only preflight.",
+        },
+        "targets": {
+            "production": {"source": source},
+            "alternative": {"source": None},
+        },
+        "contacts": {"escalation": {"name": None, "email": None, "phone": None}},
+        "limits": {
+            "max_requests_per_test": 0,
+            "max_rate_per_second": 0,
+            "stop_on_sensitive_data": True,
+            "evidence_redaction": True,
+        },
+        "credentials": {"authenticated_user": {"username": None, "password": None, "token": None}},
+        "safe_test_data": {
+            "marker_prefix": "SECTEST-DO-NOT-PROCESS",
+            "email": None,
+            "phone": None,
+            "company": None,
+            "customer_ids": [],
+            "enterprise_account_ids": [],
+            "activation_codes": [],
+            "callback_listener_url": None,
+        },
+    }
 
 
 class CliTests(unittest.TestCase):
@@ -296,6 +330,55 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("Security testing preflight written to", stdout.getvalue())
             self.assertTrue((report_dir / "preflight.md").exists())
+
+    def test_cli_test_security_subcommand_accepts_source_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_dir = Path(directory) / "example-source"
+            source_file = source_dir / "api" / "routes" / "auth.js"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text("function guard() { return true; }\n", encoding="utf-8")
+            source = str(source_dir)
+            output_root = Path(directory) / "report"
+            source_root = output_root / source_report_dir_name(source)
+            planning_dir = source_root / "security-test-planning"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Source Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "SRC-001",
+                        "title": "Route guard is enforced in source",
+                        "priority": "high",
+                        "surface": "authentication",
+                        "requirements": ["No credentials required."],
+                        "execution_mode": "source",
+                        "affected_source": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
+            stdout = io.StringIO()
+
+            with patch(
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                return_value=FakeSecurityTestingRunner(),
+            ):
+                with patch(
+                    "mosh.crews.source_security_testing.crew.build_source_security_testing_crew_runner",
+                    return_value=FakeSourceSecurityTestingRunner(),
+                ):
+                    with contextlib.redirect_stdout(stdout):
+                        exit_code = main(["test-security", "--source", source, "--output-root", str(output_root)])
+
+            report_dir = source_root / "source-security-testing"
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security testing preflight written to", stdout.getvalue())
+            self.assertTrue((report_dir / "preflight.md").exists())
+            self.assertTrue((report_dir / "executed_tests" / "SRC-001.md").exists())
 
     def test_cli_report_subcommand_writes_final_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

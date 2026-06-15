@@ -244,6 +244,18 @@ When the plan and engagement file are ready, run:
 mosh test-security https://app.example.com
 ```
 
+For a source-only plan, run:
+
+```bash
+mosh test-security --source /path/to/repo
+```
+
+For a combined live and source plan, pass both:
+
+```bash
+mosh test-security https://app.example.com --source /path/to/repo
+```
+
 Security testing writes:
 
 ```text
@@ -252,9 +264,31 @@ report/<host>/security-testing/executed_tests/
 report/<host>/security-testing/executed_tests/history/
 ```
 
+Source-only preflight writes:
+
+```text
+report/<source>/source-security-testing/preflight.md
+report/<source>/source-security-testing/executed_tests/
+report/<source>/source-security-testing/executed_tests/history/
+```
+
+Source-only security testing executes source-routed hypotheses without requiring
+a deployed production URL. The source executor can read bounded source slices,
+search nonignored text files, write generated harnesses or fuzz scripts under
+`/work`, run local commands with explicit environment overrides, start a local
+process in the security tools container, issue localhost HTTP requests to it,
+and stop it after collecting evidence. The repository is mounted read-only at
+`/source` and `/work` is the only writable workspace. This supports static
+inspection, local tests, build or framework introspection, function-level
+experiments, route-table inspection, and local runtime checks while keeping
+external live URL testing separate.
+
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
-- **Ready tests:** enough authorization, target, credential, and safe test-data information is available, so the test can run.
+- **Ready tests:** live URL tests with enough authorization, target, credential, and safe test-data information available, so the live executor can run them.
+- **Source-routed tests:** source inspection, source tooling, or local-runtime tests. These are sent to the source security executor, not the live URL executor.
+- **Combined tests:** tests that need both source inspection and live verification. They are preserved for coordinated source/live execution.
+- **Deferred tests:** useful tests blocked by missing deployment, runtime, credentials, tooling, scope, or setup.
 - **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
 
 Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with deterministic engagement-file fields to update. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
@@ -385,7 +419,7 @@ Current crews:
 - **Security planning crew:** turns discovery evidence into scoped test hypotheses.
 - **Security testing crew:** checks ready hypotheses using the engagement file and disposable Docker execution.
 
-The discovery image includes Katana, Dirb, Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system Chromium. The security image includes command-line utilities used inside disposable security-testing workspaces.
+The discovery image includes Katana, Dirb, Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system Chromium. The security image includes command-line utilities used inside disposable security-testing workspaces, plus source-assessment helpers such as Semgrep, Bandit, pip-audit, Java/OpenJDK, Maven, Corepack, and common project-inspection utilities.
 
 ## Future Roadmap
 
