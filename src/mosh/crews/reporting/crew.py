@@ -171,8 +171,8 @@ def build_final_report_bundle(target_url: str, domain_dir: Path) -> dict[str, An
 
 def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
     write_tool = _build_write_final_report_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/writer_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/writer_tasks.yaml"))
 
     @crewai.CrewBase
     class FinalReportWriterCrew:
@@ -213,8 +213,8 @@ def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
     review_tool = _build_submit_final_report_review_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/reviewer_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/reviewer_tasks.yaml"))
 
     @crewai.CrewBase
     class FinalReportReviewerCrew:

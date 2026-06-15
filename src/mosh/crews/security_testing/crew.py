@@ -22,7 +22,7 @@ from mosh.docker_tools import DockerToolResult, DockerToolRunner
 from mosh.engagement import load_engagement_file, resolve_target_mapping
 from mosh.memory import FileMemory
 from mosh.models import Event, MemoryItem, utc_now
-from mosh.scope import report_dir_name
+from mosh.scope import report_dir_name, source_report_dir_name
 
 
 EXECUTION_METADATA_START = "<!-- mosh-execution"
@@ -34,6 +34,9 @@ class SecurityTestPreflightResult:
     ready: list[dict[str, Any]]
     blocked: list[dict[str, Any]]
     targets: dict[str, str]
+    source_ready: list[dict[str, Any]] = field(default_factory=list)
+    combined: list[dict[str, Any]] = field(default_factory=list)
+    deferred: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -79,44 +82,62 @@ class SecurityTestingOrchestrator:
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
         crew_runner: SecurityTestingCrewRunner | None = None,
+        source_crew_runner: Any | None = None,
         planning_crew_runner: Any | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_security_testing_crew_runner(config)
+        self.source_crew_runner = source_crew_runner
         self.planning_crew_runner = planning_crew_runner
 
-    def run(self, url: str, engagement_file: Path) -> Path:
-        domain_dir = self.output_root / report_dir_name(url)
-        discovery_dir = domain_dir / "discovery"
+    def run(self, url: str | None = None, engagement_file: Path | None = None, *, source: str | None = None) -> Path:
+        if not url and not source:
+            raise ValueError("Security testing requires a target URL, a source path, or both.")
+        domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
+        discovery_dir = domain_dir / ("discovery" if url else "source-discovery")
+        source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
         planning_dir = domain_dir / "security-test-planning"
-        report_dir = domain_dir / "security-testing"
+        report_dir = domain_dir / ("security-testing" if url else "source-security-testing")
+        engagement_path = engagement_file or planning_dir / "engagement_template.yaml"
+        target = url or f"source:{source}"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         memory.record_event(
             "orchestrator",
             "start",
             "Starting security testing preflight",
-            {"target": url, "engagement_file": str(engagement_file)},
+            {"target": target, "source": source, "engagement_file": str(engagement_path)},
         )
         plan = load_security_test_plan(planning_dir)
-        engagement = load_engagement_file(engagement_file)
-        result = run_security_testing_preflight(plan, engagement)
+        engagement = load_engagement_file(engagement_path)
+        result = run_security_testing_preflight(
+            plan,
+            engagement,
+            live_target_available=bool(url),
+            source_available=bool(source),
+        )
         ready_pending = _ready_pending_hypotheses(plan, result, report_dir)
-        markdown = render_preflight_report(url, engagement_file, result)
+        source_ready_pending = _source_ready_pending_hypotheses(plan, result, report_dir)
+        markdown = render_preflight_report(target, engagement_path, result)
         (report_dir / "preflight.md").write_text(markdown, encoding="utf-8")
         memory.add_item(
             "security_testing_preflight",
             {
                 "ready": result.ready,
                 "blocked": result.blocked,
+                "source_ready": result.source_ready,
+                "combined": result.combined,
+                "deferred": result.deferred,
                 "targets": result.targets,
                 "ready_pending": [_hypothesis_id(item) for item in ready_pending],
+                "source_ready_pending": [_hypothesis_id(item) for item in source_ready_pending],
                 "plan_revision_id": plan_revision_id(plan),
             },
             "security_test_coordinator",
         )
-        if ready_pending:
+        executed_count = 0
+        if ready_pending and url:
             memory.record_event(
                 "orchestrator",
                 "execution_start",
@@ -124,6 +145,7 @@ class SecurityTestingOrchestrator:
                 {"tests": [_hypothesis_id(item) for item in ready_pending]},
             )
             self.crew_runner.run(url, report_dir, memory, plan, engagement, result, ready_pending)
+            executed_count += len(ready_pending)
             feedback_updates = collect_security_testing_discovery_updates(report_dir)
             new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
             if new_feedback_updates:
@@ -146,7 +168,7 @@ class SecurityTestingOrchestrator:
                     output_root=self.output_root,
                     event_sink=self.event_sink,
                     crew_runner=self.planning_crew_runner,
-                ).run(url)
+                ).run(url, source=source)
                 memory.record_event(
                     "orchestrator",
                     "security_planning_refresh_complete",
@@ -167,12 +189,36 @@ class SecurityTestingOrchestrator:
                     "No new security-testing discovery feedback was submitted",
                     {},
                 )
-        else:
+        if source_ready_pending and source:
+            memory.record_event(
+                "orchestrator",
+                "source_execution_start",
+                "Starting source security test execution",
+                {"tests": [_hypothesis_id(item) for item in source_ready_pending]},
+            )
+            self._source_runner().run(
+                source,
+                source_discovery_dir,
+                report_dir,
+                memory,
+                plan,
+                engagement,
+                result,
+                source_ready_pending,
+            )
+            executed_count += len(source_ready_pending)
+        if not ready_pending and not source_ready_pending:
             memory.record_event(
                 "orchestrator",
                 "execution_skipped",
                 "No ready pending security tests to execute",
-                {"ready": len(result.ready), "already_executed": sorted(_current_executed_test_ids(report_dir))},
+                {
+                    "ready": len(result.ready),
+                    "source_ready": len(result.source_ready),
+                    "combined": len(result.combined),
+                    "deferred": len(result.deferred),
+                    "already_executed": sorted(_current_executed_test_ids(report_dir)),
+                },
             )
         memory.record_event(
             "orchestrator",
@@ -181,11 +227,21 @@ class SecurityTestingOrchestrator:
             {
                 "ready": len(result.ready),
                 "blocked": len(result.blocked),
-                "executed": len(ready_pending),
+                "source_ready": len(result.source_ready),
+                "combined": len(result.combined),
+                "deferred": len(result.deferred),
+                "executed": executed_count,
                 "report_dir": str(report_dir),
             },
         )
         return report_dir
+
+    def _source_runner(self) -> Any:
+        if self.source_crew_runner is None:
+            from mosh.crews.source_security_testing.crew import build_source_security_testing_crew_runner
+
+            self.source_crew_runner = build_source_security_testing_crew_runner(self.config)
+        return self.source_crew_runner
 
 
 def build_security_testing_crew_runner(config: AppConfig) -> SecurityTestingCrewRunner:
@@ -916,8 +972,8 @@ def _artifact_decision_names(value: Any) -> set[str]:
 def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     command_tool = _build_run_security_command_tool(crewai, config, state)
     evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/executor_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/executor_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestExecutorCrew:
@@ -958,8 +1014,8 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     review_tool = _build_submit_execution_review_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reviewer_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reviewer_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestReviewerCrew:
@@ -1000,8 +1056,8 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
 
 def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     report_tool = _build_write_executed_test_report_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reporter_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reporter_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestReporterCrew:
@@ -1266,24 +1322,71 @@ def load_security_test_plan(planning_dir: Path) -> dict[str, Any]:
     raise RuntimeError(f"No structured security test plan found in {memory_path}")
 
 
-def run_security_testing_preflight(plan: dict[str, Any], engagement: dict[str, Any]) -> SecurityTestPreflightResult:
+def run_security_testing_preflight(
+    plan: dict[str, Any],
+    engagement: dict[str, Any],
+    *,
+    live_target_available: bool = True,
+    source_available: bool = False,
+) -> SecurityTestPreflightResult:
     targets = resolve_target_mapping(engagement)
     ready: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    source_ready: list[dict[str, Any]] = []
+    combined: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
     for hypothesis in _hypotheses(plan):
-        blockers = _hypothesis_blockers(hypothesis, engagement, targets)
+        mode = _execution_mode(hypothesis)
+        blockers: list[str] = []
         item = {
             "id": _text(hypothesis.get("id")) or "unknown",
             "title": _text(hypothesis.get("title")) or "Untitled test",
             "priority": _text(hypothesis.get("priority")) or "unknown",
             "surface": _text(hypothesis.get("surface")) or "unknown",
+            "execution_mode": mode,
+            "verification_strategy": _text(hypothesis.get("verification_strategy")) or _default_verification_strategy(mode),
+            "evidence_sources": _string_list(hypothesis.get("evidence_sources")),
             "blockers": blockers,
         }
-        if blockers:
-            blocked.append(item)
+        if mode == "live":
+            blockers.extend(_hypothesis_blockers(hypothesis, engagement, targets))
+            if not live_target_available:
+                blockers.append("live target URL is not available for this assessment")
+            if blockers:
+                blocked.append(item)
+            else:
+                ready.append(item)
+        elif mode == "source":
+            if not source_available:
+                blockers.append("source code is not available for source execution")
+            if not _list(hypothesis.get("affected_source")):
+                blockers.append("affected_source is missing for source execution")
+            if blockers:
+                blocked.append(item)
+            else:
+                source_ready.append(item)
+        elif mode == "combined":
+            if live_target_available:
+                blockers.extend(_hypothesis_blockers(hypothesis, engagement, targets))
+            if not source_available:
+                blockers.append("source code is not available for combined execution")
+            if not live_target_available:
+                blockers.append("live target URL is not available for combined execution")
+            combined.append(item)
+        elif mode == "deferred":
+            blockers.extend(_deferred_reasons(hypothesis))
+            deferred.append(item)
         else:
-            ready.append(item)
-    return SecurityTestPreflightResult(ready=ready, blocked=blocked, targets=targets)
+            blockers.append(f"unsupported execution_mode `{mode}`")
+            blocked.append(item)
+    return SecurityTestPreflightResult(
+        ready=ready,
+        blocked=blocked,
+        targets=targets,
+        source_ready=source_ready,
+        combined=combined,
+        deferred=deferred,
+    )
 
 
 def render_preflight_report(target_url: str, engagement_file: Path, result: SecurityTestPreflightResult) -> str:
@@ -1293,6 +1396,9 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
         f"- Target URL: `{target_url}`",
         f"- Engagement file: `{engagement_file}`",
         f"- Ready tests: `{len(result.ready)}`",
+        f"- Source-routed tests: `{len(result.source_ready)}`",
+        f"- Combined tests: `{len(result.combined)}`",
+        f"- Deferred tests: `{len(result.deferred)}`",
         f"- Blocked tests: `{len(result.blocked)}`",
         "",
         "## Effective Targets",
@@ -1309,13 +1415,42 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
             suffix = ""
             if item.get("execution_status"):
                 suffix = f" - `{item['execution_status']}`: {item.get('execution_reason', '')}"
-            lines.append(f"- **{item['id']}**: {item['title']} ({item['priority']}){suffix}")
+            lines.append(_preflight_item_line(item, suffix=suffix))
     else:
-        lines.append("No tests are ready to execute.")
+        lines.append("No live tests are ready to execute.")
+    lines.extend(["", "## Source-Routed Tests", ""])
+    if result.source_ready:
+        for item in result.source_ready:
+            suffix = ""
+            if item.get("execution_status"):
+                suffix = f" - `{item['execution_status']}`: {item.get('execution_reason', '')}"
+            lines.append(_preflight_item_line(item, suffix=suffix))
+        lines.append("")
+        lines.append("These tests are routed to source security testing and are not sent to the live URL executor.")
+    else:
+        lines.append("No tests are routed to source security testing.")
+    lines.extend(["", "## Combined Tests", ""])
+    if result.combined:
+        for item in result.combined:
+            lines.append(_preflight_item_line(item))
+            for blocker in item["blockers"]:
+                lines.append(f"  - {blocker}")
+        lines.append("")
+        lines.append("Combined tests need coordinated source inspection and live verification before execution.")
+    else:
+        lines.append("No tests require combined source and live execution.")
+    lines.extend(["", "## Deferred Tests", ""])
+    if result.deferred:
+        for item in result.deferred:
+            lines.append(_preflight_item_line(item))
+            for blocker in item["blockers"]:
+                lines.append(f"  - {blocker}")
+    else:
+        lines.append("No tests are deferred.")
     lines.extend(["", "## Blocked Tests", ""])
     if result.blocked:
         for item in result.blocked:
-            lines.append(f"- **{item['id']}**: {item['title']} ({item['priority']})")
+            lines.append(_preflight_item_line(item))
             for blocker in item["blockers"]:
                 lines.append(f"  - {blocker}")
     else:
@@ -1323,20 +1458,72 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _execution_mode(hypothesis: dict[str, Any]) -> str:
+    mode = _text(hypothesis.get("execution_mode")).lower()
+    return mode or "live"
+
+
+def _default_verification_strategy(execution_mode: str) -> str:
+    if execution_mode == "source":
+        return "source-inspection"
+    if execution_mode == "combined":
+        return "source-guided-live-verification"
+    if execution_mode == "deferred":
+        return "blocked-pending-inputs"
+    return "live-verification"
+
+
+def _deferred_reasons(hypothesis: dict[str, Any]) -> list[str]:
+    reasons = _string_list(hypothesis.get("defer_reason"))
+    reasons.extend(_string_list(hypothesis.get("requirements_to_proceed")))
+    reasons.extend(_string_list(hypothesis.get("requirements")))
+    return reasons or ["execution_mode is deferred"]
+
+
+def _preflight_item_line(item: dict[str, Any], *, suffix: str = "") -> str:
+    mode = _text(item.get("execution_mode")) or "live"
+    strategy = _text(item.get("verification_strategy"))
+    route = f"mode `{mode}`"
+    if strategy:
+        route = f"{route}, `{strategy}`"
+    return f"- **{item['id']}**: {item['title']} ({item['priority']}; {route}){suffix}"
+
+
 def render_blocked_tests_cli_summary(result: SecurityTestPreflightResult, engagement_file: Path) -> str:
-    if not result.blocked:
+    if not (result.blocked or result.combined or result.deferred):
         return ""
-    lines = [
-        "",
-        "Security testing has blocked tests remaining.",
-        f"Update {engagement_file} and run security testing again:",
-        "",
-    ]
-    for item in result.blocked:
-        lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
-        blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
-        for blocker in blockers:
-            lines.append(f"  - {_unblock_guidance(_text(blocker))}")
+    lines: list[str] = [""]
+    if result.blocked:
+        lines.extend(
+            [
+                "Security testing has blocked tests remaining.",
+                f"Update {engagement_file} and run security testing again:",
+                "",
+            ]
+        )
+        for item in result.blocked:
+            lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
+            blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
+            for blocker in blockers:
+                lines.append(f"  - {_unblock_guidance(_text(blocker))}")
+    if result.combined:
+        if len(lines) > 1:
+            lines.append("")
+        lines.append("Combined tests need source and live coordination before execution:")
+        for item in result.combined:
+            lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
+            blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
+            for blocker in blockers:
+                lines.append(f"  - {_unblock_guidance(_text(blocker))}")
+    if result.deferred:
+        if len(lines) > 1:
+            lines.append("")
+        lines.append("Deferred tests were preserved for later scope or setup:")
+        for item in result.deferred:
+            lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
+            blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
+            for blocker in blockers:
+                lines.append(f"  - {_unblock_guidance(_text(blocker))}")
     return "\n".join(lines).rstrip()
 
 
@@ -1778,7 +1965,23 @@ def _ready_pending_hypotheses(
     preflight: SecurityTestPreflightResult,
     report_dir: Path,
 ) -> list[dict[str, Any]]:
-    ready_items = {_text(item.get("id")): item for item in preflight.ready}
+    return _pending_hypotheses_for_preflight_items(plan, preflight.ready, report_dir)
+
+
+def _source_ready_pending_hypotheses(
+    plan: dict[str, Any],
+    preflight: SecurityTestPreflightResult,
+    report_dir: Path,
+) -> list[dict[str, Any]]:
+    return _pending_hypotheses_for_preflight_items(plan, preflight.source_ready, report_dir)
+
+
+def _pending_hypotheses_for_preflight_items(
+    plan: dict[str, Any],
+    items: list[dict[str, Any]],
+    report_dir: Path,
+) -> list[dict[str, Any]]:
+    ready_items = {_text(item.get("id")): item for item in items}
     pending: list[dict[str, Any]] = []
     for hypothesis in _hypotheses(plan):
         test_id = _hypothesis_id(hypothesis)

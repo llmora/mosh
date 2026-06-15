@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from typing import TypeAlias
 
 
 @dataclass(frozen=True)
@@ -21,14 +22,19 @@ class DockerToolRunner:
         input_text: str | None = None,
         timeout: int = 60,
         tty: bool = False,
-        volumes: list[tuple[str, str]] | None = None,
+        volumes: list["DockerVolume"] | None = None,
         workdir: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> DockerToolResult:
         command = ["docker", "run", "--rm", "-i"]
         if tty:
             command.append("-t")
-        for source, target in volumes or []:
-            command.extend(["-v", f"{source}:{target}"])
+        for volume in volumes or []:
+            source, target, *options = volume
+            mode = f":{options[0]}" if options else ""
+            command.extend(["-v", f"{source}:{target}{mode}"])
+        for key, value in sorted((env or {}).items()):
+            command.extend(["-e", f"{key}={value}"])
         if workdir:
             command.extend(["-w", workdir])
         command.extend([self.image, *args])
@@ -60,3 +66,6 @@ def _decode_timeout_output(output: str | bytes | None) -> str:
     if isinstance(output, bytes):
         return output.decode("utf-8", errors="replace")
     return output
+
+
+DockerVolume: TypeAlias = tuple[str, str] | tuple[str, str, str]

@@ -8,10 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.config import AppConfig
+from mosh.crews.discovery.crew import _load_crewai
 from mosh.docker_tools import DockerToolResult
-from mosh.engagement import write_engagement_template
+from mosh.engagement import write_engagement_template, write_engagement_template_mapping
 from mosh.memory import FileMemory
-from mosh.scope import report_dir_name
+from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
@@ -31,8 +32,24 @@ from mosh.crews.security_testing.crew import (
     _status_label,
     load_security_test_plan,
     render_executed_test_report,
+    run_security_testing_preflight,
 )
-from tests.fakes import FakeSecurityTestingRunner
+from mosh.crews.source_security_testing.crew import (
+    SourceSecurityTestExecutionState,
+    _cleanup_source_processes,
+    _build_read_source_slice_tool,
+    _build_request_local_http_tool,
+    _build_run_source_command_tool,
+    _build_start_source_process_tool,
+    _build_stop_source_process_tool,
+    _build_source_executor_crew,
+    _build_source_reporter_crew,
+    _build_source_reviewer_crew,
+    _build_source_search_tool,
+    _build_write_workspace_file_tool,
+    _run_bounded_source_search,
+)
+from tests.fakes import FakeSecurityTestingRunner, FakeSourceSecurityTestingRunner
 
 
 def _plan() -> dict[str, object]:
@@ -68,6 +85,54 @@ def _plan() -> dict[str, object]:
     }
 
 
+def _engagement_template(target: str) -> dict[str, object]:
+    return {
+        "engagement": {
+            "authorization_confirmed": True,
+            "active_testing_allowed": True,
+            "state_changing_tests_allowed": True,
+            "notes": None,
+        },
+        "targets": {
+            "production": {"api": target},
+            "alternative": {"api": None},
+        },
+        "contacts": {"escalation": {"name": None, "email": None, "phone": None}},
+        "limits": {
+            "max_requests_per_test": 100,
+            "max_rate_per_second": 5,
+            "stop_on_sensitive_data": True,
+            "evidence_redaction": True,
+        },
+        "credentials": {},
+        "safe_test_data": {
+            "marker_prefix": "SECTEST-DO-NOT-PROCESS",
+            "email": None,
+            "phone": None,
+            "company": None,
+            "customer_ids": [],
+            "enterprise_account_ids": [],
+            "activation_codes": [],
+            "callback_listener_url": None,
+        },
+    }
+
+
+def _source_engagement_template(source: str) -> dict[str, object]:
+    template = _engagement_template(source)
+    template["engagement"] = {
+        "authorization_confirmed": True,
+        "active_testing_allowed": False,
+        "state_changing_tests_allowed": False,
+        "notes": "Source-only preflight.",
+    }
+    template["targets"] = {
+        "production": {"source": source},
+        "alternative": {"source": None},
+    }
+    return template
+
+
 class SecurityTestingCrewTests(unittest.TestCase):
     def test_load_security_test_plan_uses_structured_final_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -87,6 +152,113 @@ class SecurityTestingCrewTests(unittest.TestCase):
             plan = load_security_test_plan(planning_dir)
 
             self.assertEqual(plan["test_hypotheses"][0]["id"], "API-001")
+
+    def test_security_testing_preflight_routes_by_execution_mode(self) -> None:
+        plan = {
+            "title": "Mixed plan",
+            "test_hypotheses": [
+                {
+                    "id": "LIVE-001",
+                    "title": "Live header check",
+                    "priority": "medium",
+                    "surface": "headers",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "live",
+                },
+                {
+                    "id": "SRC-001",
+                    "title": "Source authorization guard check",
+                    "priority": "high",
+                    "surface": "authentication",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "source",
+                    "affected_source": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}],
+                },
+                {
+                    "id": "COMBO-001",
+                    "title": "Source-guided live verification",
+                    "priority": "high",
+                    "surface": "api",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "combined",
+                    "affected_source": [{"path": "api/routes/accounts.js", "start_line": 10, "end_line": 30}],
+                    "affected_runtime": [{"method": "GET", "url": "/api/accounts"}],
+                },
+                {
+                    "id": "DEF-001",
+                    "title": "Needs deployed runtime",
+                    "priority": "medium",
+                    "surface": "api",
+                    "execution_mode": "deferred",
+                    "requirements_to_proceed": ["Provide a staging URL."],
+                },
+            ],
+        }
+        engagement = _engagement_template(target="https://example.test")
+
+        result = run_security_testing_preflight(plan, engagement, live_target_available=True, source_available=True)
+
+        self.assertEqual([item["id"] for item in result.ready], ["LIVE-001"])
+        self.assertEqual([item["id"] for item in result.source_ready], ["SRC-001"])
+        self.assertEqual([item["id"] for item in result.combined], ["COMBO-001"])
+        self.assertEqual([item["id"] for item in result.deferred], ["DEF-001"])
+        self.assertEqual(result.blocked, [])
+
+    def test_source_only_security_testing_executes_source_ready_tests_not_live_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_dir = Path(directory) / "example-source"
+            source_file = source_dir / "api" / "routes" / "auth.js"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text("function guard(req, res, next) { return next(); }\n", encoding="utf-8")
+            source = str(source_dir)
+            output_root = Path(directory) / "report"
+            source_root = output_root / source_report_dir_name(source)
+            planning_dir = source_root / "security-test-planning"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Source plan",
+                "test_hypotheses": [
+                    {
+                        "id": "SRC-001",
+                        "title": "Route guard is enforced in source",
+                        "priority": "high",
+                        "surface": "authentication",
+                        "requirements": ["No credentials required."],
+                        "execution_mode": "source",
+                        "affected_source": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
+            live_runner = FakeSecurityTestingRunner()
+            source_runner = FakeSourceSecurityTestingRunner()
+
+            report_dir = SecurityTestingOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=live_runner,
+                source_crew_runner=source_runner,
+            ).run(
+                source=source,
+            )
+
+            self.assertEqual(report_dir, source_root / "source-security-testing")
+            self.assertEqual(live_runner.calls, [])
+            self.assertEqual(source_runner.calls[0]["source_ready_pending"], ["SRC-001"])
+            preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
+            self.assertIn("Source-routed tests: `1`", preflight)
+            self.assertIn("No live tests are ready to execute.", preflight)
+            self.assertIn("These tests are routed to source security testing", preflight)
+            self.assertTrue((report_dir / "executed_tests" / "SRC-001.md").exists())
+            memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+            preflight_memory = next(item["content"] for item in memory if item["kind"] == "security_testing_preflight")
+            self.assertEqual([item["id"] for item in preflight_memory["source_ready"]], ["SRC-001"])
+            self.assertEqual(preflight_memory["ready_pending"], [])
+            self.assertEqual(preflight_memory["source_ready_pending"], ["SRC-001"])
 
     def test_security_testing_preflight_uses_alternative_targets_and_blocks_missing_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -172,6 +344,66 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             self.assertEqual(runner.calls, [])
             self.assertIn("# already executed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
+
+    def test_source_security_testing_skips_matching_accepted_execution_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_dir = Path(directory) / "example-source"
+            source_file = source_dir / "api" / "routes" / "auth.js"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text("function guard() { return true; }\n", encoding="utf-8")
+            source = str(source_dir)
+            output_root = Path(directory) / "report"
+            source_root = output_root / source_report_dir_name(source)
+            planning_dir = source_root / "security-test-planning"
+            executed_dir = source_root / "source-security-testing" / "executed_tests"
+            planning_dir.mkdir(parents=True)
+            executed_dir.mkdir(parents=True)
+            plan = {
+                "title": "Source plan",
+                "test_hypotheses": [
+                    {
+                        "id": "SRC-001",
+                        "title": "Route guard is enforced in source",
+                        "priority": "high",
+                        "surface": "authentication",
+                        "requirements": ["No credentials required."],
+                        "execution_mode": "source",
+                        "affected_source": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            current_hypothesis = plan["test_hypotheses"][0]
+            report_path = executed_dir / "SRC-001.md"
+            metadata = _execution_metadata(
+                test_id="SRC-001",
+                plan_revision_id=plan_revision_id(plan),
+                hypothesis_fingerprint=hypothesis_fingerprint(current_hypothesis),
+                evidence={"status": "no-finding"},
+                review={"accepted": True},
+                report_path=str(report_path),
+            )
+            metadata.update({"execution_mode": "source", "evidence_type": "source", "source": source})
+            report_path.write_text(_with_execution_metadata_mapping("# source already executed\n", metadata), encoding="utf-8")
+            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
+            live_runner = FakeSecurityTestingRunner()
+            source_runner = FakeSourceSecurityTestingRunner()
+
+            report_dir = SecurityTestingOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=live_runner,
+                source_crew_runner=source_runner,
+            ).run(source=source)
+
+            self.assertEqual(live_runner.calls, [])
+            self.assertEqual(source_runner.calls, [])
+            preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
+            self.assertIn("`current`: matching accepted execution already exists", preflight)
+            self.assertIn("# source already executed", (report_dir / "executed_tests" / "SRC-001.md").read_text(encoding="utf-8"))
 
     def test_execution_metadata_preserves_canonical_status(self) -> None:
         metadata = _execution_metadata(
@@ -450,6 +682,319 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("[REDACTED]", result["stdout"])
             self.assertNotIn("tok123", json.dumps(result))
 
+    def test_source_read_slice_tool_is_bounded_to_source_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_file = source_root / "api" / "routes" / "auth.js"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text("function guard() {\n  return true;\n}\n", encoding="utf-8")
+            outside_file = Path(directory) / "outside.js"
+            outside_file.write_text("secret\n", encoding="utf-8")
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            tool = _build_read_source_slice_tool(_FakeCrewAI, state)
+
+            result = json.loads(tool._run("api/routes/auth.js", 1, 2, "guard check"))
+
+            self.assertEqual(result["path"], "api/routes/auth.js")
+            self.assertEqual(result["start_line"], 1)
+            self.assertIn("function guard", result["content"])
+            with self.assertRaises(ValueError):
+                tool._run("../outside.js", 1, 1, "escape check")
+
+    def test_source_search_tool_searches_nonignored_text_and_generated_dirs_are_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            (source_root / "build").mkdir(parents=True)
+            (source_root / "src").mkdir(parents=True)
+            (source_root / "src" / "app.js").write_text("const csrf = true;\n", encoding="utf-8")
+            (source_root / ".env.example").write_text("CSRF_SECRET=example\n", encoding="utf-8")
+            (source_root / "build" / "generated.js").write_text("const csrf = false;\n", encoding="utf-8")
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            tool = _build_source_search_tool(_FakeCrewAI, state)
+
+            result = json.loads(tool._run("csrf", "csrf search", regex=False, limit=10, path_glob=None))
+            env_result = _run_bounded_source_search(source_root, "CSRF_SECRET", limit=10)
+
+            paths = {match["path"] for match in result["matches"]}
+            self.assertIn("src/app.js", paths)
+            self.assertNotIn("build/generated.js", paths)
+            self.assertEqual(env_result["matches"][0]["path"], ".env.example")
+
+    def test_source_command_tool_mounts_source_read_only_and_blocks_external_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {"admin": {"token": "tok123"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
+
+            with patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner):
+                tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
+                blocked = json.loads(tool._run("curl https://example.test/private", "external check"))
+                result = json.loads(tool._run("curl http://127.0.0.1:8000/health", "local runtime check"))
+
+            self.assertTrue(blocked["blocked"])
+            self.assertEqual(blocked["blocked_hosts"], ["example.test"])
+            self.assertEqual(fake_runner.calls[0]["volumes"][0], (str(source_root.resolve()), "/source", "ro"))
+            self.assertEqual(fake_runner.calls[0]["volumes"][1], (str(state.workspace_dir.resolve()), "/work"))
+            self.assertEqual(fake_runner.calls[0]["workdir"], "/work")
+            self.assertIn("[REDACTED]", result["stdout"])
+            self.assertNotIn("tok123", json.dumps(result))
+
+    def test_source_command_tool_accepts_explicit_env_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {"admin": {"token": "secret-env-value"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="mode enabled\n", stderr=""))
+
+            with patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner):
+                tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
+                result = json.loads(
+                    tool._run(
+                        "python3 /work/harness.py",
+                        "env experiment",
+                        env={"FEATURE_FLAG": "enabled", "TOKEN": "secret-env-value"},
+                        timeout=10,
+                    )
+                )
+
+            self.assertEqual(fake_runner.calls[0]["env"], {"FEATURE_FLAG": "enabled", "TOKEN": "secret-env-value"})
+            self.assertEqual(result["env"]["FEATURE_FLAG"], "enabled")
+            self.assertEqual(result["env"]["TOKEN"], "[REDACTED]")
+            self.assertNotIn("secret-env-value", json.dumps(result))
+
+    def test_write_workspace_file_tool_is_bounded_to_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            tool = _build_write_workspace_file_tool(_FakeCrewAI, state)
+
+            result = json.loads(tool._run("harnesses/routes.py", "print('routes')\n", "route introspection", executable=True))
+
+            self.assertEqual(result["path"], "harnesses/routes.py")
+            self.assertTrue((state.workspace_dir / "harnesses" / "routes.py").exists())
+            self.assertTrue(result["executable"])
+            with self.assertRaises(ValueError):
+                tool._run("../escape.py", "print('no')\n", "escape attempt")
+
+    def test_start_source_process_tool_runs_detached_read_only_container(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {"admin": {"token": "tok123"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            docker_calls: list[list[str]] = []
+
+            def fake_docker(command, timeout):
+                docker_calls.append(command)
+                return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
+
+            with patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker):
+                tool = _build_start_source_process_tool(_FakeCrewAI, AppConfig(security_tool_image="image:test"), state)
+                result = json.loads(
+                    tool._run(
+                        "python3 -m http.server 8000",
+                        "stand up fixture API",
+                        container_port=8000,
+                        host_port=18000,
+                        env={"TOKEN": "tok123"},
+                    )
+                )
+
+            self.assertEqual(result["container_id"], "container-123")
+            self.assertEqual(result["local_url"], "http://host.docker.internal:18000")
+            self.assertIn(f"{source_root.resolve()}:/source:ro", docker_calls[0])
+            self.assertIn(f"{state.workspace_dir.resolve()}:/work", docker_calls[0])
+            self.assertIn("TOKEN=tok123", docker_calls[0])
+            self.assertEqual(result["env"]["TOKEN"], "[REDACTED]")
+
+    def test_request_local_http_tool_blocks_external_hosts_and_records_local_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {"admin": {"token": "tok123"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="HTTP/1.1 200 OK\n\nok tok123", stderr=""))
+
+            with patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner):
+                tool = _build_request_local_http_tool(_FakeCrewAI, AppConfig(), state)
+                blocked = json.loads(tool._run("https://example.test/api", "external request"))
+                result = json.loads(
+                    tool._run(
+                        "http://host.docker.internal:18000/api/routes",
+                        "local route request",
+                        headers={"Authorization": "Bearer tok123"},
+                    )
+                )
+
+            self.assertTrue(blocked["blocked"])
+            self.assertEqual(blocked["blocked_hosts"], ["example.test"])
+            self.assertIn("host.docker.internal", fake_runner.calls[0]["args"][-1])
+            self.assertEqual(result["headers"]["Authorization"], "Bearer [REDACTED]")
+            self.assertIn("[REDACTED]", result["stdout"])
+
+    def test_stop_source_process_tool_only_stops_known_containers_and_captures_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {"admin": {"token": "tok123"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+                local_processes=[{"container_id": "container-123", "status": "started"}],
+            )
+            docker_calls: list[list[str]] = []
+
+            def fake_docker(command, timeout):
+                docker_calls.append(command)
+                if command[1] == "logs":
+                    return DockerToolResult(exit_code=0, stdout="booted tok123\n", stderr="")
+                return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
+
+            with patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker):
+                tool = _build_stop_source_process_tool(_FakeCrewAI, state)
+                blocked = json.loads(tool._run("other-container", "scope guard"))
+                result = json.loads(tool._run("container-123", "cleanup"))
+
+            self.assertTrue(blocked["blocked"])
+            self.assertEqual(docker_calls[0][:3], ["docker", "logs", "--tail"])
+            self.assertEqual(docker_calls[1][:3], ["docker", "rm", "-f"])
+            self.assertEqual(result["status"], "stopped")
+            self.assertIn("[REDACTED]", result["logs_stdout"])
+
+    def test_source_process_cleanup_stops_unstopped_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {"admin": {"token": "tok123"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+                local_processes=[
+                    {"container_id": "container-123", "status": "started"},
+                    {"container_id": "container-456", "status": "started"},
+                    {"container_id": "container-456", "status": "stopped"},
+                ],
+            )
+            docker_calls: list[list[str]] = []
+
+            def fake_docker(command, timeout):
+                docker_calls.append(command)
+                if command[1] == "logs":
+                    return DockerToolResult(exit_code=0, stdout="booted tok123\n", stderr="")
+                return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
+
+            with patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker):
+                _cleanup_source_processes(state)
+
+            self.assertEqual(len(docker_calls), 2)
+            self.assertEqual(docker_calls[0][:3], ["docker", "logs", "--tail"])
+            self.assertEqual(docker_calls[1][:3], ["docker", "rm", "-f"])
+            cleanup = state.local_processes[-1]
+            self.assertTrue(cleanup["automatic_cleanup"])
+            self.assertEqual(cleanup["container_id"], "container-123")
+            self.assertEqual(cleanup["status"], "stopped")
+            self.assertIn("[REDACTED]", cleanup["logs_stdout"])
+
     def test_security_command_tool_redacts_jwts_not_listed_in_engagement(self) -> None:
         jwt = (
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -483,6 +1028,86 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 self.assertEqual(len(crew.agents), 1)
                 self.assertEqual(len(crew.tasks), 1)
 
+            self.assertFalse((report_dir / ".crew_config").exists())
+
+    def test_source_security_testing_sub_crews_use_packaged_yaml_without_report_config_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "report"
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001", "title": "Auth", "surface": "api", "priority": "high"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            config = AppConfig(openrouter_api_key="test-key")
+
+            for builder in (_build_source_executor_crew, _build_source_reviewer_crew, _build_source_reporter_crew):
+                crew = builder(_FakeRuntimeCrewAI, config, state).crew()
+                self.assertEqual(len(crew.agents), 1)
+                self.assertEqual(len(crew.tasks), 1)
+
+            self.assertFalse((report_dir / ".crew_config").exists())
+
+    def test_security_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
+        crewai = _load_crewai()
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            state = SecurityTestExecutionState(
+                target_url="https://example.test",
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "API-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "API-001", "title": "Auth", "surface": "api", "priority": "high"},
+                engagement={"credentials": {}},
+                targets={"api": "https://api.example.test/api/private"},
+                executed_report_path=report_dir / "executed_tests" / "API-001.md",
+            )
+            config = AppConfig(openrouter_api_key="test-key")
+
+            crews = [
+                _build_executor_crew(crewai, config, state),
+                _build_reviewer_crew(crewai, config, state),
+                _build_reporter_crew(crewai, config, state),
+            ]
+
+            self.assertEqual(len(crews), 3)
+            self.assertFalse((report_dir / ".crew_config").exists())
+
+    def test_source_security_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
+        crewai = _load_crewai()
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "report"
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001", "title": "Auth", "surface": "api", "priority": "high"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+            config = AppConfig(openrouter_api_key="test-key")
+
+            crews = [
+                _build_source_executor_crew(crewai, config, state),
+                _build_source_reviewer_crew(crewai, config, state),
+                _build_source_reporter_crew(crewai, config, state),
+            ]
+
+            self.assertEqual(len(crews), 3)
             self.assertFalse((report_dir / ".crew_config").exists())
 
     def test_kickoff_ignores_post_tool_failure_when_evidence_was_captured(self) -> None:
@@ -937,6 +1562,7 @@ class _FakeDockerRunner:
         tty=False,
         volumes=None,
         workdir=None,
+        env=None,
     ):
         self.calls.append(
             {
@@ -946,6 +1572,7 @@ class _FakeDockerRunner:
                 "tty": tty,
                 "volumes": volumes,
                 "workdir": workdir,
+                "env": env,
             }
         )
         return self.result

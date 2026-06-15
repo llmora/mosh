@@ -353,6 +353,27 @@ The security testing crew executes ready hypotheses from the security test plan.
 It runs tests sequentially so reviewer feedback for one test can inform a bounded
 rerun before the next test starts.
 
+Security testing preflight routes hypotheses by `execution_mode` before any
+executor runs:
+
+- `live` hypotheses are the only tests sent to the current live URL security
+  executor, and only when live target, authorization, credential, safe data, and
+  engagement requirements are satisfied.
+- `source` hypotheses are sent to the source security testing executor and are
+  not sent to the live URL executor. Source-only execution may use bounded
+  source inspection, source search, local tests, framework/build introspection,
+  generated harnesses, explicit environment overrides, function-level
+  experiments, or local runtime checks without requiring a deployed production
+  URL.
+- `combined` hypotheses are preserved for coordinated source inspection and
+  live verification.
+- `deferred` hypotheses are preserved with their requirements to proceed.
+
+Source-only preflight is invoked with `test-security --source /path/to/repo` and
+writes `report/<source>/source-security-testing/preflight.md` and executed
+source reports under `report/<source>/source-security-testing/executed_tests/`.
+It must not execute live URL tests or require a production deployment.
+
 ## Engagement File
 
 The security planning crew writes `engagement_template.yaml` under
@@ -391,6 +412,22 @@ The security testing crew has these agents:
 - security test executor: runs scoped commands through the security tools Docker container
 - security test reviewer: critiques evidence, safety, target scope, and useful generated artifacts
 - security test reporter: writes the stable Markdown artifact for each executed test
+
+The source security testing crew follows the same executor, reviewer, and
+reporter pattern. Its executor can read bounded source slices, search
+nonignored text files, write generated harnesses or fuzz scripts under `/work`,
+run local commands with explicit environment overrides, start and stop local
+processes, and issue localhost HTTP requests to those processes. The repository
+is mounted read-only at `/source` and `/work` is the only writable workspace.
+Source execution is for source-local evidence, local tests, compilation,
+framework inspection, dependency checks, static source scanners, route-table
+inspection, function-level experiments, and localhost runtime checks; arbitrary
+external URL probing belongs to live or combined execution.
+The generic security tools image should include baseline HTTP utilities,
+source-search utilities, Python/Node tooling, Semgrep, Bandit, pip-audit,
+Java/OpenJDK, Maven, Corepack, and small project-inspection utilities. Large
+platform SDKs such as Android and iOS should be added through specialized
+runner profiles rather than the default image.
 
 The executor may run commands, install packages, compile helper code, and write
 scripts only inside the disposable Docker workspace. The orchestrator must not
@@ -652,7 +689,7 @@ the aggregate crawl state.
 Future versions may add:
 
 - additional crews that run alongside discovery
-- static security tools
+- additional static security tool wrappers and parsers
 - vulnerability testing agents
 - more Docker-backed tools
 
@@ -685,7 +722,10 @@ At minimum, tests should cover:
 * Implement security testing for source code, based on a repo URL or a local filesystem path. See `SOURCE_ASSESSMENT_PLAN.md` for the staged implementation plan.
 * If the user provides the source code repo and a live URL for testing use a combined approach that uses the source code and the live systems to complement each other. This needs to be just more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
 * We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
+* Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
 * We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies
-* Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF.
+* Incorporate a RAG so that executions are remembered and the agents learn from each execution
+* Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required.
 * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
+* We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.

@@ -7,10 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.config import AppConfig
+from mosh.crews.discovery.crew import _load_crewai
 from mosh.crews.reporting.crew import (
     CrewAIFinalReportingCrewRunner,
     FinalReportState,
+    _build_reviewer_crew,
     _build_submit_final_report_review_tool,
+    _build_writer_crew,
     _build_write_final_report_tool,
     build_final_report_bundle,
 )
@@ -119,6 +122,26 @@ class FakeRuntimeCrewAI(FakeCrewAI):
 
 
 class FinalReportingTests(unittest.TestCase):
+    def test_final_reporting_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
+        crewai = _load_crewai()
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "final-report"
+            state = FinalReportState(
+                target_url="https://example.test",
+                report_dir=report_dir,
+                memory=FileMemory(report_dir),
+                bundle={"target_url": "https://example.test", "executed_tests": []},
+            )
+            config = AppConfig(openrouter_api_key="test-key")
+
+            crews = [
+                _build_writer_crew(crewai, config, state),
+                _build_reviewer_crew(crewai, config, state),
+            ]
+
+            self.assertEqual(len(crews), 2)
+            self.assertFalse((report_dir / ".crew_config").exists())
+
     def test_reporting_crew_writes_and_reviews_customer_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")

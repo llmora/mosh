@@ -10,7 +10,7 @@ from mosh.models import Event
 from mosh.crews.discovery.crew import DiscoveryOrchestrator
 from mosh.crews.reporting.crew import FinalReportingOrchestrator
 from mosh.crews.source_discovery.crew import SourceDiscoveryOrchestrator
-from mosh.scope import report_dir_name
+from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.security_testing.crew import (
     SecurityTestPreflightResult,
@@ -45,7 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     test_parser = subcommands.add_parser("test-security", help="Run security testing preflight from a security plan")
-    test_parser.add_argument("url", help="Target application URL to test")
+    test_parser.add_argument("url", nargs="?", help="Target application URL to test")
+    test_parser.add_argument("--source", help="Local source tree path to test or include in routing")
     test_parser.add_argument("--engagement-file", help="Path to the engagement YAML file")
     test_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
@@ -116,10 +117,18 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
 
 def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     output_root = Path(args.output_root)
+    if not args.url and not args.source:
+        print("mosh failed: test-security requires a target URL, --source, or both.", file=sys.stderr)
+        return 1
+    default_engagement_dir = (
+        output_root / report_dir_name(args.url) / "security-test-planning"
+        if args.url
+        else output_root / source_report_dir_name(args.source) / "security-test-planning"
+    )
     engagement_file = (
         Path(args.engagement_file)
         if args.engagement_file
-        else output_root / report_dir_name(args.url) / "security-test-planning" / "engagement_template.yaml"
+        else default_engagement_dir / "engagement_template.yaml"
     )
     orchestrator = SecurityTestingOrchestrator(
         config,
@@ -127,7 +136,7 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
         event_sink=_print_event,
     )
     try:
-        report_dir = orchestrator.run(args.url, engagement_file=engagement_file)
+        report_dir = orchestrator.run(args.url, engagement_file=engagement_file, source=args.source)
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
@@ -161,6 +170,9 @@ def _security_testing_blocked_summary(report_dir: Path, engagement_file: Path) -
             ready=preflight.get("ready") if isinstance(preflight.get("ready"), list) else [],
             blocked=preflight.get("blocked") if isinstance(preflight.get("blocked"), list) else [],
             targets=preflight.get("targets") if isinstance(preflight.get("targets"), dict) else {},
+            source_ready=preflight.get("source_ready") if isinstance(preflight.get("source_ready"), list) else [],
+            combined=preflight.get("combined") if isinstance(preflight.get("combined"), list) else [],
+            deferred=preflight.get("deferred") if isinstance(preflight.get("deferred"), list) else [],
         ),
         engagement_file=engagement_file,
     )

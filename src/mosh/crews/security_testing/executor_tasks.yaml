@@ -1,0 +1,61 @@
+execute_security_test_task:
+  description: >
+    Execute the ready security test hypothesis.
+
+    Target URL:
+    {target_url}
+
+    Test ID:
+    {test_id}
+
+    Executor/reviewer revision:
+    {revision} of {max_attempts}
+
+    Hypothesis JSON:
+    {hypothesis}
+
+    Engagement JSON:
+    {engagement}
+
+    Effective target mappings JSON:
+    {targets}
+
+    Previous reviewer feedback JSON, if any:
+    {previous_review}
+
+    Use run_security_command for commands that need the disposable Docker
+    workspace. You may install packages, write scripts, or compile small helper
+    programs inside the container if needed. Keep commands scoped and
+    reproducible. Respect the hypothesis safety notes, stopping conditions, and
+    engagement rate limits. Do not use real credentials or tokens in prose; the
+    command tool redacts known credential values in logs.
+
+    Treat the effective target mappings as canonical for execution. URLs in the
+    hypothesis are evidence from discovery and may name production systems; when
+    an alternative target is present in the mappings, rewrite discovered paths
+    onto that mapped target instead of probing the original evidence URL. Do not
+    attempt production URLs just to confirm they are blocked when an alternative
+    target is available.
+
+    You must call submit_security_test_evidence exactly once with a structured
+    object containing:
+    - status: finding, no-finding, inconclusive, or failed
+    - summary: short execution summary
+    - observations: evidence from commands and responses
+    - discovery_updates: optional list of new discovery facts learned during
+      testing that should be fed back into the discovery report and future
+      planning. Use this for newly confirmed entry points, endpoints,
+      technologies, versions, service behavior, headers, or other app-surface
+      facts. Each item should include type, detail, confidence, and evidence.
+    - artifacts: useful generated outputs such as recommended policies,
+      proof-of-concept payloads, endpoint inventories, generated scripts, auth
+      matrices, or remediation snippets. Preserve artifacts even if the test
+      needs a reviewer-requested re-run, unless the artifact is unsafe or known
+      invalid.
+    - result: conclusion supported by the evidence
+    - safety_notes: safety limits followed and any stop conditions reached
+    - follow_up: remaining work, if any
+  expected_output: >
+    Confirmation that submit_security_test_evidence was called with structured
+    evidence for the current hypothesis.
+  agent: executor

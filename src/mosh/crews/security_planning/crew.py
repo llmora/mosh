@@ -421,8 +421,8 @@ def _build_planning_engagement_template(target_url: str, source: str | None, pla
 
 def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     plan_tool = _build_submit_plan_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/planner_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/planner_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningPlannerCrew:
@@ -463,8 +463,8 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
 
 def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     critique_tool = _build_submit_critique_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/critic_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/critic_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningCriticCrew:
@@ -505,8 +505,8 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
 
 def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     write_tool = _build_write_security_test_plan_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/reporter_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/reporter_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningReporterCrew:
@@ -552,8 +552,8 @@ def _build_engagement_template_refinement_crew(
     deterministic_template: dict[str, Any],
 ):
     write_tool = _build_write_refined_engagement_template_tool(crewai, state, deterministic_template)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/engagement_refiner_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/engagement_refiner_tasks.yaml"))
 
     @crewai.CrewBase
     class EngagementTemplateRefinementCrew:
@@ -845,16 +845,33 @@ def _prefer_structured_mapping(candidate: dict[str, Any], fallback: dict[str, An
 def _normalize_security_test_plan(plan: dict[str, Any], assessment_context: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(plan)
     default_mode = _default_execution_mode(assessment_context)
+    source_only = _is_source_only_assessment(assessment_context)
     hypotheses = []
     for item in _list(normalized.get("test_hypotheses")):
         if not isinstance(item, dict):
             continue
         hypothesis = dict(item)
-        hypothesis.setdefault("execution_mode", default_mode)
-        hypothesis.setdefault("evidence_sources", _default_evidence_sources(assessment_context))
+        requested_mode = _normalized_execution_mode(hypothesis.get("execution_mode"), default_mode)
+        mode_was_downgraded = False
+        if source_only and requested_mode in {"live", "combined"}:
+            requested_mode = "deferred"
+            mode_was_downgraded = True
+            _append_unique_list_item(
+                hypothesis,
+                "requirements_to_proceed",
+                "Provide a live URL, local runtime target, emulator, simulator, or container target for runtime verification.",
+            )
+        hypothesis["execution_mode"] = requested_mode
+        if source_only:
+            hypothesis["evidence_sources"] = _default_evidence_sources(assessment_context)
+        else:
+            hypothesis.setdefault("evidence_sources", _default_evidence_sources(assessment_context))
         hypothesis.setdefault("affected_runtime", [])
         hypothesis.setdefault("affected_source", _default_affected_source(hypothesis, assessment_context))
-        hypothesis.setdefault("verification_strategy", _default_verification_strategy(hypothesis["execution_mode"]))
+        if mode_was_downgraded:
+            hypothesis["verification_strategy"] = _default_verification_strategy(hypothesis["execution_mode"])
+        else:
+            hypothesis.setdefault("verification_strategy", _default_verification_strategy(hypothesis["execution_mode"]))
         hypotheses.append(hypothesis)
     normalized["test_hypotheses"] = hypotheses
     normalized.setdefault("deferred_test_opportunities", [])
@@ -869,6 +886,22 @@ def _default_execution_mode(assessment_context: dict[str, Any]) -> str:
     if has_source:
         return "source"
     return "live"
+
+
+def _is_source_only_assessment(assessment_context: dict[str, Any]) -> bool:
+    return bool(assessment_context.get("source_discovery")) and not bool(assessment_context.get("live_discovery"))
+
+
+def _normalized_execution_mode(value: Any, default: str) -> str:
+    mode = _text(value).lower()
+    return mode if mode in {"live", "source", "combined", "deferred"} else default
+
+
+def _append_unique_list_item(target: dict[str, Any], key: str, value: str) -> None:
+    items = _string_list(target.get(key))
+    if value not in items:
+        items.append(value)
+    target[key] = items
 
 
 def _default_evidence_sources(assessment_context: dict[str, Any]) -> list[str]:
@@ -909,3 +942,11 @@ def _list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _string_list(value: Any) -> list[str]:
+    return [text for text in (_text(item) for item in _list(value)) if text]
+
+
+def _text(value: Any) -> str:
+    return str(value).strip() if value is not None else ""

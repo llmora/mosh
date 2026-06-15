@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from mosh.config import AppConfig
 from mosh.crews.discovery.crew import CREW_CONFIG_PACKAGE
+from mosh.crews.discovery.crew import _load_crewai
 from mosh.engagement import (
     build_engagement_template,
     load_engagement_file,
@@ -21,8 +22,13 @@ from mosh.crews.security_planning.crew import (
     CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
     SecurityTestPlanningState,
+    _build_engagement_template_refinement_crew,
+    _build_planning_critic_crew,
+    _build_planning_planner_crew,
+    _build_planning_reporter_crew,
     _build_write_refined_engagement_template_tool,
     _build_write_security_test_plan_tool,
+    _normalize_security_test_plan,
     load_assessment_evidence_bundle,
     load_discovery_context,
     load_source_discovery_context,
@@ -432,6 +438,38 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertIn("live_discovery", bundle)
             self.assertEqual(bundle["source_discovery"]["source_index"]["schema"], "mosh.source-index.v1")
 
+    def test_source_only_plan_normalization_defers_runtime_only_hypotheses(self) -> None:
+        plan = {
+            "title": "Source plan",
+            "test_hypotheses": [
+                {
+                    "id": "API-001",
+                    "title": "Exercise private endpoint",
+                    "execution_mode": "live",
+                    "verification_strategy": "live-verification",
+                    "evidence_sources": ["live"],
+                    "requirements": ["No credentials required."],
+                }
+            ],
+        }
+        context = {
+            "schema": "mosh.assessment-evidence-bundle.v1",
+            "live_discovery": {},
+            "source_discovery": {
+                "source_index": {
+                    "evidence_refs": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}]
+                }
+            },
+        }
+
+        normalized = _normalize_security_test_plan(plan, context)
+        hypothesis = normalized["test_hypotheses"][0]
+
+        self.assertEqual(hypothesis["execution_mode"], "deferred")
+        self.assertEqual(hypothesis["verification_strategy"], "blocked-pending-inputs")
+        self.assertEqual(hypothesis["evidence_sources"], ["source"])
+        self.assertIn("Provide a live URL", hypothesis["requirements_to_proceed"][0])
+
     def test_orchestrator_writes_under_security_test_planning_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
@@ -579,6 +617,30 @@ class SecurityTestPlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(FileNotFoundError):
                 load_discovery_context(Path(directory) / "missing")
+
+    def test_security_planning_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
+        crewai = _load_crewai()
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "security-test-planning"
+            state = SecurityTestPlanningState(
+                target_url="source:/tmp/example-source",
+                discovery_dir=Path(directory) / "discovery",
+                report_dir=report_dir,
+                memory=FileMemory(report_dir),
+                discovery_context={"source_discovery": {"source_index": {}}},
+                source="/tmp/example-source",
+            )
+            config = AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
+
+            crews = [
+                _build_planning_planner_crew(crewai, config, state),
+                _build_planning_critic_crew(crewai, config, state),
+                _build_planning_reporter_crew(crewai, config, state),
+                _build_engagement_template_refinement_crew(crewai, config, state, {}),
+            ]
+
+            self.assertEqual(len(crews), 4)
+            self.assertFalse((report_dir / ".crew_config").exists())
 
     def test_security_planning_yaml_keeps_related_agents_and_tasks_together(self) -> None:
         agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml").read_text(

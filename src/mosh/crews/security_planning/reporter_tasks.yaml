@@ -1,0 +1,27 @@
+write_security_test_plan_task:
+  description: >
+    Write the security test plan after the bounded planner/reviewer loop.
+    Preserve the agreed plan and critic review. If the critic did not accept
+    before the revision limit, still write the plan but clearly preserve the
+    unresolved critic findings.
+
+    Target URL:
+    {target_url}
+
+    Accepted:
+    {accepted}
+
+    Iterations:
+    {iterations}
+
+    Security test plan JSON:
+    {security_test_plan}
+
+    Critic review JSON:
+    {critic_review}
+
+    You must call write_security_test_plan exactly once with the final plan and
+    critic_review arguments. Do not write Markdown yourself.
+  expected_output: >
+    Confirmation that write_security_test_plan persisted security_test_plan.md.
+  agent: reporter
