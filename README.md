@@ -313,6 +313,9 @@ mosh test-security https://app.example.com
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
 
 If executed tests discover new application surface area, `mosh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
+This feedback loop applies to both live tests and source-routed tests, including
+new routes, API specifications, components, entry points, and configuration
+facts discovered during source security testing.
 
 ### 5. Create The Final Report
 

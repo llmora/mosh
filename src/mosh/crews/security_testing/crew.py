@@ -147,49 +147,17 @@ class SecurityTestingOrchestrator:
             )
             self.crew_runner.run(url, report_dir, memory, plan, engagement, result, ready_pending)
             executed_count += len(ready_pending)
-            feedback_updates = collect_security_testing_discovery_updates(report_dir)
-            new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
-            if new_feedback_updates:
-                _feed_security_testing_updates_to_discovery(
-                    discovery_dir=discovery_dir,
-                    testing_memory=memory,
-                    updates=new_feedback_updates,
-                    source_report_dir=report_dir,
-                )
-                memory.record_event(
-                    "orchestrator",
-                    "security_planning_refresh_start",
-                    "Starting security test planning refresh from security-testing discovery feedback",
-                    {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
-                )
-                from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
-
-                SecurityTestPlanningOrchestrator(
-                    self.config,
-                    output_root=self.output_root,
-                    event_sink=self.event_sink,
-                    crew_runner=self.planning_crew_runner,
-                ).run(url, source=source)
-                memory.record_event(
-                    "orchestrator",
-                    "security_planning_refresh_complete",
-                    "Security test planning refresh completed from security-testing discovery feedback",
-                    {"updates": len(new_feedback_updates)},
-                )
-            elif feedback_updates:
-                memory.record_event(
-                    "orchestrator",
-                    "discovery_feedback_duplicate_skipped",
-                    "Security-testing discovery feedback was already present; skipped planning refresh",
-                    {"updates": len(feedback_updates)},
-                )
-            else:
-                memory.record_event(
-                    "orchestrator",
-                    "discovery_feedback_skipped",
-                    "No new security-testing discovery feedback was submitted",
-                    {},
-                )
+            _refresh_discovery_from_security_testing_feedback(
+                config=self.config,
+                output_root=self.output_root,
+                event_sink=self.event_sink,
+                planning_crew_runner=self.planning_crew_runner,
+                discovery_dir=discovery_dir,
+                report_dir=report_dir,
+                memory=memory,
+                url=url,
+                source=source,
+            )
         if source_ready_pending and source:
             memory.record_event(
                 "orchestrator",
@@ -208,6 +176,17 @@ class SecurityTestingOrchestrator:
                 source_ready_pending,
             )
             executed_count += len(source_ready_pending)
+            _refresh_discovery_from_security_testing_feedback(
+                config=self.config,
+                output_root=self.output_root,
+                event_sink=self.event_sink,
+                planning_crew_runner=self.planning_crew_runner,
+                discovery_dir=discovery_dir,
+                report_dir=report_dir,
+                memory=memory,
+                url=url,
+                source=source,
+            )
         if not ready_pending and not source_ready_pending:
             memory.record_event(
                 "orchestrator",
@@ -779,8 +758,56 @@ def _explicit_discovery_updates(evidence: dict[str, Any]) -> list[Any]:
         "new_entry_points",
         "new_components",
     ):
-        updates.extend(_list(evidence.get(key)))
+        updates.extend(_discovery_update_candidates(evidence.get(key)))
     return updates
+
+
+def _discovery_update_candidates(value: Any, *, default_type: str = "security-testing-fact") -> list[Any]:
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, list):
+        candidates: list[Any] = []
+        for item in value:
+            candidates.extend(_discovery_update_candidates(item, default_type=default_type))
+        return candidates
+    if isinstance(value, dict):
+        if _has_discovery_update_detail(value):
+            candidate = dict(value)
+            candidate.setdefault("type", default_type)
+            return [candidate]
+        candidates = []
+        for key, nested in value.items():
+            nested_type = _discovery_update_type_from_key(key, default=default_type)
+            nested_candidates = _discovery_update_candidates(nested, default_type=nested_type)
+            if nested_candidates:
+                candidates.extend(nested_candidates)
+            else:
+                detail = _text(nested)
+                if detail:
+                    candidates.append({"type": nested_type, "detail": f"{key}: {detail}"})
+        if candidates:
+            return candidates
+        return [{"type": default_type, "detail": json.dumps(value, sort_keys=True)}]
+    return [{"type": default_type, "detail": _text(value)}]
+
+
+def _has_discovery_update_detail(value: dict[str, Any]) -> bool:
+    return any(_text(value.get(key)) for key in ("detail", "summary", "value", "url", "endpoint"))
+
+
+def _discovery_update_type_from_key(key: Any, *, default: str = "security-testing-fact") -> str:
+    text = _text(key).lower()
+    if any(marker in text for marker in ("endpoint", "route", "path", "url", "api")):
+        return "endpoint"
+    if any(marker in text for marker in ("component", "service", "dependency", "library", "package")):
+        return "component"
+    if any(marker in text for marker in ("entry", "entrypoint", "entry-point")):
+        return "entry-point"
+    if any(marker in text for marker in ("config", "deployment", "environment", "env", "header")):
+        return "configuration"
+    if "file" in text:
+        return "source-file"
+    return default
 
 
 def _normalize_discovery_update(value: Any, test_id: str) -> dict[str, Any] | None:
@@ -820,6 +847,63 @@ def _discovery_update_fingerprint(update: dict[str, Any]) -> str:
         },
         sort_keys=True,
     )
+
+
+def _refresh_discovery_from_security_testing_feedback(
+    *,
+    config: AppConfig,
+    output_root: Path,
+    event_sink: Callable[[Event], None] | None,
+    planning_crew_runner: Any,
+    discovery_dir: Path,
+    report_dir: Path,
+    memory: FileMemory,
+    url: str | None,
+    source: str | None,
+) -> None:
+    feedback_updates = collect_security_testing_discovery_updates(report_dir)
+    new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
+    if new_feedback_updates:
+        _feed_security_testing_updates_to_discovery(
+            discovery_dir=discovery_dir,
+            testing_memory=memory,
+            updates=new_feedback_updates,
+            source_report_dir=report_dir,
+        )
+        memory.record_event(
+            "orchestrator",
+            "security_planning_refresh_start",
+            "Starting security test planning refresh from security-testing discovery feedback",
+            {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
+        )
+        from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+
+        SecurityTestPlanningOrchestrator(
+            config,
+            output_root=output_root,
+            event_sink=event_sink,
+            crew_runner=planning_crew_runner,
+        ).run(url, source=source)
+        memory.record_event(
+            "orchestrator",
+            "security_planning_refresh_complete",
+            "Security test planning refresh completed from security-testing discovery feedback",
+            {"updates": len(new_feedback_updates)},
+        )
+    elif feedback_updates:
+        memory.record_event(
+            "orchestrator",
+            "discovery_feedback_duplicate_skipped",
+            "Security-testing discovery feedback was already present; skipped planning refresh",
+            {"updates": len(feedback_updates)},
+        )
+    else:
+        memory.record_event(
+            "orchestrator",
+            "discovery_feedback_skipped",
+            "No new security-testing discovery feedback was submitted",
+            {},
+        )
 
 
 def _feed_security_testing_updates_to_discovery(
