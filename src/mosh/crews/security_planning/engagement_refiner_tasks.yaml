@@ -1,0 +1,36 @@
+refine_engagement_template_task:
+  description: >
+    Refine the deterministic engagement template for the target.
+
+    Target URL:
+    {target_url}
+
+    Final security test plan JSON:
+    {security_test_plan}
+
+    Current engagement template JSON:
+    {engagement_template}
+
+    You must call write_refined_engagement_template exactly once with a
+    structured object or JSON string.
+
+    Rules:
+    - Do not invent credentials, hosts, tokens, contact details, or safe test data.
+    - Existing engagement_template.yaml values are user-owned configuration. Do
+      not replace a filled value with null, empty strings, empty lists, or generic
+      placeholders.
+    - Authorization is assumed true for owned applications.
+    - Keep production targets as defaults.
+    - Keep alternative targets optional. If an alternative target is absent, testing uses production.
+    - Do not block unauthenticated or passive tests just because credentials would help with comparison.
+    - Keep the file simple and editable by a human. Do not add status,
+      needed_for, required_answers, execution_readiness, long notes, or other
+      explanatory metadata to the engagement template.
+    - Reduce duplicate questions.
+    - Keep all required schema keys:
+      engagement, targets, contacts, limits, credentials, safe_test_data.
+    - Readiness, blockers, missing inputs, and questions belong in
+      security_test_plan.md or preflight.md, not in engagement_template.yaml.
+  expected_output: >
+    Confirmation that write_refined_engagement_template persisted engagement_template.yaml.
+  agent: engagement_refiner

@@ -1,0 +1,52 @@
+write_executed_security_test_report_task:
+  description: >
+    Write the final Markdown artifact for this executed security test.
+
+    Target URL:
+    {target_url}
+
+    Test ID:
+    {test_id}
+
+    Hypothesis JSON:
+    {hypothesis}
+
+    Evidence JSON:
+    {evidence}
+
+    Reviewer JSON:
+    {review}
+
+    Commands JSON:
+    {commands}
+
+    Execution bundle JSON:
+    {execution_bundle}
+
+    Effective target mappings JSON:
+    {targets}
+
+    Write the report against the effective target mappings. Distinguish
+    discovery evidence URLs from execution targets. Do not state that production
+    remains required for this executed test when a staging/preprod alternative
+    was the approved effective target; such production testing belongs only as a
+    separate future-scope note if explicitly useful.
+
+    You must call write_executed_test_report exactly once. The report argument
+    must be a structured object with:
+    - status: finding, no-finding, inconclusive, or failed
+    - summary
+    - result
+    - evidence
+    - resolution: developer/app-owner guidance for resolving any identified
+      issue. Include concrete configuration, code, header, control, or process
+      changes where the evidence supports them. If there is no finding, explain
+      that no remediation is required for this hypothesis.
+    - useful_artifacts: artifacts to include from the execution bundle,
+      including useful artifacts from earlier rejected or partial attempts when
+      they remain valid with caveats
+    - finding: object or null
+    - follow_up
+  expected_output: >
+    Confirmation that write_executed_test_report persisted executed_tests/{test_id}.md.
+  agent: reporter

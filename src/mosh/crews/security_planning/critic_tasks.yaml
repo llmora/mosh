@@ -1,0 +1,45 @@
+critique_security_test_plan_task:
+  description: >
+    Review the current security test plan submitted by the planner in this
+    iteration. Check whether the hypotheses are evidence-backed, actionable,
+    safe, scoped, non-duplicative, clear about requirements and tools, and
+    aligned with the most important organisational risks implied by discovery.
+
+    Target URL:
+    {target_url}
+
+    Planner/reviewer iteration:
+    {iteration} of {max_attempts}
+
+    Structured security test plan JSON submitted by the planner:
+    {security_test_plan}
+
+    Review this JSON plan. Do not review the planner's prose summary or status
+    message if it differs from the structured JSON.
+
+    You must call submit_security_test_plan_critique exactly once. The review
+    argument must be a structured object or JSON string with:
+    - accepted: boolean
+    - summary: string
+    - blocking_findings: list of objects with id, severity, issue, required_change
+    - non_blocking_suggestions: list of objects with id, suggestion
+
+    Accept only when the plan is detailed enough for later authorised execution
+    crews and every hypothesis includes requirements, tools_expected,
+    organisational_risk, business_value, execution_mode, evidence_sources,
+    affected_runtime, affected_source, and verification_strategy. Reject if credentials,
+    authorization, test data, safety limits, evidence, expected secure
+    behaviour, or business-risk rationale are missing where needed. Reject plans
+    that read like a generic security checklist instead of a prioritized plan
+    for this organisation and target. If the discovery context mentions linked
+    applications, external services, subdomains, integrations, or valuable
+    surfaces that are excluded from immediate testing, require them to be
+    preserved in deferred_test_opportunities with a clear defer_reason and
+    requirements_to_proceed. When live_discovery is absent, reject any immediate
+    live or combined hypothesis and any source hypothesis whose steps depend
+    only on curl, browser, or live HTTP probing instead of source inspection or
+    source tooling.
+  expected_output: >
+    Confirmation that submit_security_test_plan_critique was called with a
+    structured critic decision.
+  agent: reviewer

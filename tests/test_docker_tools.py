@@ -86,6 +86,83 @@ class DockerToolRunnerTests(unittest.TestCase):
         )
         self.assertEqual(result.stdout, "ok")
 
+    def test_can_mount_read_only_volume(self) -> None:
+        runner = DockerToolRunner("image:test")
+
+        with patch("mosh.docker_tools.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "ok"
+            run.return_value.stderr = ""
+
+            result = runner.run(
+                ["bash", "-lc", "ls /source"],
+                timeout=30,
+                volumes=[("/host/source", "/source", "ro"), ("/host/workspace", "/work")],
+                workdir="/work",
+            )
+
+        run.assert_called_once_with(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "-v",
+                "/host/source:/source:ro",
+                "-v",
+                "/host/workspace:/work",
+                "-w",
+                "/work",
+                "image:test",
+                "bash",
+                "-lc",
+                "ls /source",
+            ],
+            input=None,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.stdout, "ok")
+
+    def test_can_pass_environment_variables(self) -> None:
+        runner = DockerToolRunner("image:test")
+
+        with patch("mosh.docker_tools.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "ok"
+            run.return_value.stderr = ""
+
+            result = runner.run(
+                ["bash", "-lc", "env"],
+                timeout=30,
+                env={"FEATURE_FLAG": "true", "API_MODE": "test"},
+            )
+
+        run.assert_called_once_with(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "-e",
+                "API_MODE=test",
+                "-e",
+                "FEATURE_FLAG=true",
+                "image:test",
+                "bash",
+                "-lc",
+                "env",
+            ],
+            input=None,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.stdout, "ok")
+
     def test_returns_timeout_result_instead_of_raising(self) -> None:
         runner = DockerToolRunner("image:test")
 

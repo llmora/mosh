@@ -1,0 +1,70 @@
+execute_source_security_test_task:
+  description: >
+    Execute the source-routed security test hypothesis.
+
+    Source root:
+    {source}
+
+    Test ID:
+    {test_id}
+
+    Executor/reviewer revision:
+    {revision} of {max_attempts}
+
+    Hypothesis JSON:
+    {hypothesis}
+
+    Engagement JSON:
+    {engagement}
+
+    Effective target mappings JSON:
+    {targets}
+
+    Source discovery context JSON:
+    {source_context}
+
+    Previous reviewer feedback JSON, if any:
+    {previous_review}
+
+    Use read_source_slice for bounded file evidence and source_search for
+    bounded cross-file discovery. Use write_workspace_file to create focused
+    harnesses, tests, fuzz scripts, or framework-introspection scripts under
+    /work. Use run_source_command to execute one-shot harnesses, dependency
+    checks, tests, or fuzzing with explicit env overrides when needed.
+
+    When runtime behavior would materially improve evidence, use
+    start_source_process to run a local service or framework context, then
+    request_local_http to inspect the local API behavior, route table,
+    environment-dependent output, or security response. Always call
+    stop_source_process for any process you started before submitting final
+    evidence.
+
+    Source-only does not mean static-only. It means no external live deployment
+    is required. The command tool mounts the repository read-only at /source
+    and provides /work as the writable directory. Commands may use localhost,
+    127.0.0.1, or host.docker.internal for local runtime checks and explicit
+    engagement targets only. Do not probe production or arbitrary external URLs
+    from a source-only hypothesis.
+
+    You must call submit_source_security_test_evidence exactly once with a
+    structured object containing:
+    - status: finding, no-finding, inconclusive, or failed
+    - summary: short execution summary
+    - observations: evidence from source reads, source searches, generated
+      workspace harnesses, local commands, local processes, and local HTTP
+      requests
+    - source_evidence: concrete path, start_line, end_line, snippet_hash, and
+      reason entries that support the result
+    - discovery_updates: optional source facts learned during testing that
+      should inform later planning
+    - artifacts: useful outputs such as remediation snippets, generated
+      harnesses, fuzz cases, local test commands, proof-of-concept payloads,
+      source-to-route mappings, environment-diff summaries, or auth matrices
+    - result: conclusion supported by the evidence
+    - safety_notes: source/root/local-runtime limits followed
+    - follow_up: remaining work, including any live deployment verification that
+      is useful but not required to support the source result
+  expected_output: >
+    Confirmation that submit_source_security_test_evidence was called with
+    structured evidence for the current hypothesis.
+  agent: source_executor

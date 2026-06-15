@@ -41,7 +41,7 @@ discover URL -> plan-security URL -> test-security URL -> report URL
 Add a source-only workflow:
 
 ```text
-discover-source SOURCE -> plan-security SOURCE -> test-source-security SOURCE -> report SOURCE
+discover-source SOURCE -> plan-security --source SOURCE -> test-security --source SOURCE -> report SOURCE
 ```
 
 `SOURCE` may be a local path at first. Repository URL support can follow once
@@ -56,8 +56,7 @@ discover URL
 discover-source SOURCE
 correlate URL SOURCE
 plan-security URL --source SOURCE
-test-security URL
-test-source-security SOURCE
+test-security URL --source SOURCE
 report URL --source SOURCE
 ```
 
@@ -132,11 +131,14 @@ Initial tools:
 - `get_source_discovery_context`
 - `submit_source_component_map`
 - `submit_source_gap_analysis`
+- security tools image with Semgrep, Bandit, pip-audit, Java/OpenJDK, Maven,
+  Corepack, and common project-inspection utilities for source execution
 
 Later tools:
 
 - `repo_materializer`
-- `semgrep_baseline`
+- `semgrep_baseline` as a structured wrapper around the installed Semgrep
+  binary
 - redacted secret scanner
 - language-specific call graph or framework route extractors
 
@@ -163,8 +165,8 @@ Correlation outputs should include:
 
 ### Source Security Testing Crew
 
-Purpose: execute source-backed security hypotheses using controlled tooling and
-bounded source reads.
+Purpose: execute source-backed security hypotheses using controlled tooling,
+bounded source reads, generated harnesses, and local runtime experiments.
 
 Agents should mirror the current security testing pattern:
 
@@ -173,7 +175,12 @@ Agents should mirror the current security testing pattern:
 - source security reporter
 
 The executor should run commands in a disposable Docker workspace with the
-source tree mounted read-only and a separate writable `/work` directory.
+source tree mounted read-only and a separate writable `/work` directory. It can
+write bounded harnesses or fuzz scripts under `/work`, set explicit environment
+overrides, start and stop local processes, and issue local HTTP requests for
+route-table inspection or runtime behavior checks. These primitives are generic;
+framework-specific behavior should be encoded by generated harnesses rather
+than hard-coded into the orchestrator.
 
 Reports should mirror executed live test reports and include:
 
@@ -305,7 +312,7 @@ Start with explicit commands:
 ```bash
 mosh discover-source /path/to/repo
 mosh plan-security --source /path/to/repo
-mosh test-source-security /path/to/repo
+mosh test-security --source /path/to/repo
 ```
 
 Then add combined variants:
@@ -313,6 +320,7 @@ Then add combined variants:
 ```bash
 mosh correlate https://app.example.com --source /path/to/repo
 mosh plan-security https://app.example.com --source /path/to/repo
+mosh test-security https://app.example.com --source /path/to/repo
 mosh report https://app.example.com --source /path/to/repo
 ```
 
@@ -333,9 +341,15 @@ mosh discover-source https://github.com/example/app.git
 6. Done: Extend planner/reviewer prompt contracts with `execution_mode`,
    `evidence_sources`, `affected_runtime`, `affected_source`, and
    `verification_strategy`.
-7. Extend preflight to route source, live, combined, and deferred hypotheses.
-8. Implement source security testing with read-only source mount, command
-   records, reviewer loop, report metadata, and rerun decisions.
+7. Done: Extend preflight to route source, live, combined, and deferred
+   hypotheses. Source-only `test-security --source` writes a source preflight
+   and does not send source-routed hypotheses to the live URL executor.
+8. Done: Implement source security testing with bounded source reads, bounded
+   source search, read-only source mount, generated workspace harnesses,
+   explicit environment overrides, local command records, local process start
+   and stop, local HTTP requests, reviewer loop, report metadata, and rerun
+   decisions. Source-only execution can use local commands and localhost
+   runtime checks without requiring an external deployed URL.
 9. Add source-live correlation for combined assessments.
 10. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
