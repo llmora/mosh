@@ -604,6 +604,61 @@ class SecurityTestingCrewTests(unittest.TestCase):
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "discovery_feedback_duplicate_skipped" for event in testing_events))
 
+    def test_source_security_testing_feeds_discovery_updates_and_refreshes_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_dir = Path(directory) / "example-source"
+            source_dir.mkdir()
+            source = str(source_dir)
+            output_root = Path(directory) / "report"
+            source_root = output_root / source_report_dir_name(source)
+            source_discovery_dir = source_root / "source-discovery"
+            planning_dir = source_root / "security-test-planning"
+            source_discovery_dir.mkdir(parents=True)
+            planning_dir.mkdir(parents=True)
+            (source_discovery_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+            (source_discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (source_discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            plan = {
+                "title": "Source plan",
+                "test_hypotheses": [
+                    {
+                        "id": "SRC-API-001",
+                        "title": "Frontend API inventory",
+                        "priority": "medium",
+                        "surface": "spa",
+                        "execution_mode": "source",
+                        "affected_source": [{"path": "website/app.js", "start_line": 1, "end_line": 20}],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
+            planning_runner = _CountingPlanningRunner()
+
+            report_dir = SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"),
+                output_root=output_root,
+                crew_runner=FakeSecurityTestingRunner(),
+                source_crew_runner=_DiscoveryFeedbackSourceSecurityTestingRunner(),
+                planning_crew_runner=planning_runner,
+            ).run(source=source)
+
+            discovery_memory = json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
+            feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
+            self.assertEqual(len(feedback_items), 1)
+            self.assertIn("GET ${API_BASE}/team", json.dumps(feedback_items))
+            discovery_report = (source_discovery_dir / "report.md").read_text(encoding="utf-8")
+            self.assertIn("## Security Testing Feedback", discovery_report)
+            self.assertIn("GET ${API_BASE}/team", discovery_report)
+            self.assertIn("Cloudflare Pages", discovery_report)
+            self.assertEqual(len(planning_runner.calls), 1)
+            self.assertEqual(planning_runner.calls[0]["source"], source)
+            testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+
     def test_collect_security_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
@@ -637,6 +692,43 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(len(updates), 1)
             self.assertEqual(updates[0]["test_id"], "API-001")
             self.assertEqual(updates[0]["type"], "endpoint")
+
+    def test_collect_security_testing_discovery_updates_accepts_grouped_dict_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir)
+            memory.add_item(
+                "security_test_execution_bundle",
+                {
+                    "test_id": "SPA-001",
+                    "final_evidence": {
+                        "discovery_updates": {
+                            "frontend_api_endpoints_inventoried": [
+                                "GET ${API_BASE}/team",
+                                "POST ${API_BASE}/team/invite",
+                            ],
+                            "deployment_config": {
+                                "platform": "Cloudflare Pages",
+                                "production_api_base": "https://api.example.test/api/v1/enterprise/portal",
+                            },
+                        }
+                    },
+                },
+                "source_security_test_coordinator",
+            )
+
+            updates = collect_security_testing_discovery_updates(report_dir)
+
+            self.assertEqual(
+                {(update["type"], update["detail"]) for update in updates},
+                {
+                    ("endpoint", "GET ${API_BASE}/team"),
+                    ("endpoint", "POST ${API_BASE}/team/invite"),
+                    ("configuration", "Cloudflare Pages"),
+                    ("endpoint", "https://api.example.test/api/v1/enterprise/portal"),
+                },
+            )
+            self.assertTrue(all(update["test_id"] == "SPA-001" for update in updates))
 
     def test_security_command_tool_blocks_out_of_scope_hosts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1847,16 +1939,46 @@ class _DiscoveryFeedbackSecurityTestingRunner:
         )
 
 
+class _DiscoveryFeedbackSourceSecurityTestingRunner:
+    def run(self, source, source_discovery_dir, report_dir, memory, plan, engagement, preflight, source_ready_pending) -> None:
+        memory.add_item(
+            "security_test_execution_bundle",
+            {
+                "test_id": "SRC-API-001",
+                "final_evidence": {
+                    "status": "finding",
+                    "summary": "Source execution discovered frontend API endpoints.",
+                    "discovery_updates": {
+                        "frontend_api_endpoints_inventoried": [
+                            "GET ${API_BASE}/team",
+                            "POST ${API_BASE}/team/invite",
+                        ],
+                        "deployment_config": {
+                            "platform": "Cloudflare Pages",
+                        },
+                    },
+                },
+                "final_review": {"accepted": True},
+                "attempts": [],
+                "artifacts": [],
+                "commands": [],
+            },
+            "source_security_test_coordinator",
+        )
+
+
 class _CountingPlanningRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def run(self, target_url, discovery_dir, report_dir, memory):
+    def run(self, target_url, discovery_dir, report_dir, memory, source=None, source_discovery_dir=None):
         self.calls.append(
             {
                 "target_url": target_url,
                 "discovery_dir": str(discovery_dir),
                 "report_dir": str(report_dir),
+                "source": source,
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
             }
         )
         memory.add_item(

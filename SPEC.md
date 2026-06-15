@@ -479,9 +479,11 @@ The Markdown `Status` section should use human-readable labels such as
 `Not Applicable`, or `Execution Error`; canonical machine status values such as
 `finding` should remain in embedded execution metadata.
 
-Security testing can discover additional facts that belong back in discovery:
-new entry points, endpoints, technologies, versions, service behavior, headers,
-or other app-surface information. The executor should submit these as
+Security testing can discover additional facts that belong back in discovery,
+whether the evidence came from live execution or source-routed testing: new
+entry points, endpoints, technologies, versions, service behavior, headers,
+generated API specifications, or other app-surface information. The executor
+should submit these as
 structured `discovery_updates` in its evidence. After ready tests finish, the
 security-testing orchestrator feeds those updates into the discovery crew's
 file-backed memory, updates the discovery report with a deterministic `Security
@@ -735,6 +737,7 @@ At minimum, tests should cover:
 * Implement security testing for source code, based on a repo URL or a local filesystem path. See `SOURCE_ASSESSMENT_PLAN.md` for the staged implementation plan.
 * If the user provides the source code repo and a live URL for testing use a combined approach that uses the source code and the live systems to complement each other. This needs to be just more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
 * We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
+* Implement abiity to use arbitraty openai-like API backends (custom), for companies that do not have openrouter or deepseek access (maybe those using internal AI API endpoints)
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
 * We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies

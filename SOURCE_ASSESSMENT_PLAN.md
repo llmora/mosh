@@ -204,6 +204,11 @@ residual hardening gaps. If source evidence disproves the planned hypothesis,
 the status should be `no-finding` or `inconclusive` unless the executor submits
 a separate retitled finding with its own severity, impact, recommendation, and
 evidence.
+Source security testing can also discover new source facts such as route
+inventories, generated API specifications, entry points, components, or
+environment-dependent behavior. These `discovery_updates` feed back into source
+discovery and trigger a planning refresh in the same way live security-testing
+feedback does.
 - links to affected files and line ranges
 
 ## Source Index
