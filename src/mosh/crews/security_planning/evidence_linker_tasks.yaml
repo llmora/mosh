@@ -1,0 +1,34 @@
+suggest_evidence_link_candidates_task:
+  description: >
+    Review the supplied source/live link context:
+
+    {link_context}
+
+    The context contains existing source route refs and live endpoint refs. Some
+    deterministic links may already be present. Identify only additional
+    plausible candidate links that are useful for planning and are not already
+    deterministic.
+
+    Rules:
+    - Use only source_ref_id and live_ref_id values that appear in the context.
+    - Do not invent routes, URLs, files, assets, hosts, methods, or evidence.
+    - Prefer no candidate over a weak or generic association.
+    - Candidate links are useful when names, route prefixes, features, handlers,
+      framework context, or deployment paths strongly suggest a relationship
+      even though exact deterministic path matching did not link them.
+    - Keep reasons short and evidence-based.
+
+    You must call submit_evidence_link_candidates exactly once with:
+
+    {
+      "links": [
+        {
+          "source_ref_id": "source ref id from context",
+          "live_ref_id": "live ref id from context",
+          "confidence": "low|medium|high",
+          "reason": "short evidence-backed explanation"
+        }
+      ]
+    }
+  expected_output: Confirmation that candidate evidence links were submitted.
+  agent: evidence_linker

@@ -121,8 +121,12 @@ The `links.json` artifact records relationships between live and source
 evidence; it does not replace either discovery artifact and does not duplicate
 engagement or asset metadata. Stage 1 exposes `mosh link <engagement-id>` as a
 temporary explicit maintenance command so links can be regenerated from
-discovery outputs. Engagement-backed planning should later invoke the same
-linker automatically.
+discovery outputs. The command computes deterministic links first, then uses the
+planning crew's `evidence_linker` model to propose validated candidate links
+from existing evidence refs only. The temporary command should print an
+immediate orchestrator event and use verbose CrewAI output for the model phase,
+matching discovery's visibility. Engagement-backed planning should later invoke
+the same linker automatically.
 
 ## New Crews
 
@@ -429,9 +433,10 @@ mosh discover eng_a1b2c3d4 --asset asset_repo_1
     routing choices.
 11. Done, stage 1: Add source-live evidence linking for combined assessments
    with `mosh link <engagement-id>` writing `report/<engagement-id>/links.json`.
-   A later increment should run this automatically when both live and source
-   evidence are present, and planning should consume the current links without
-   requiring a separate user-visible correlation command.
+   The command includes deterministic links and planning-model-assisted
+   candidate links. A later increment should run this automatically when both
+   live and source evidence are present, and planning should consume the current
+   links without requiring a separate user-visible correlation command.
 12. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
 13. Add repository URL materialization after local path source assessment is

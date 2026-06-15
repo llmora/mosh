@@ -13,6 +13,7 @@ from mosh.engagements import (
     infer_asset_type,
     load_asset,
     load_engagement,
+    record_asset_discovery,
     save_engagement,
 )
 
@@ -103,6 +104,45 @@ class EngagementTests(unittest.TestCase):
             self.assertEqual(rewritten["assets"], [{"id": asset.id, "created_at": asset.created_at}])
             self.assertNotIn("type", rewritten["assets"][0])
             self.assertNotIn("locator", rewritten["assets"][0])
+
+    def test_record_asset_discovery_keeps_only_non_derived_discovery_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            asset = attach_asset(output_root, engagement.id, "https://example.test").asset
+            report_dir = output_root / engagement.id / "assets" / asset.id / "discovery"
+
+            updated = record_asset_discovery(output_root, engagement.id, asset.id, report_dir)
+
+            discovery = updated.metadata["discovery"]
+            self.assertIn("last_discovered_at", discovery)
+            self.assertNotIn("report_dir", discovery)
+            self.assertNotIn("report_path", discovery)
+            payload = json.loads((asset_dir(output_root, engagement.id, asset.id) / "asset.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(payload["metadata"]["discovery"]), {"last_discovered_at"})
+
+    def test_legacy_asset_discovery_paths_are_removed_when_asset_is_rewritten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            asset = attach_asset(output_root, engagement.id, "https://example.test").asset
+            asset_path = asset_dir(output_root, engagement.id, asset.id) / "asset.json"
+            payload = json.loads(asset_path.read_text(encoding="utf-8"))
+            payload["metadata"] = {
+                "discovery": {
+                    "last_discovered_at": "2026-01-01T00:00:00+00:00",
+                    "report_dir": "report/old/discovery",
+                    "report_path": "report/old/discovery/report.md",
+                }
+            }
+            asset_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            loaded = load_asset(output_root, engagement.id, asset.id)
+            save_engagement(output_root, load_engagement(output_root, engagement.id))
+
+            self.assertEqual(set(loaded.metadata["discovery"]), {"last_discovered_at"})
+            rewritten = json.loads(asset_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(rewritten["metadata"]["discovery"]), {"last_discovered_at"})
 
     def test_infer_asset_type_recognizes_repositories_and_mobile_app_urls(self) -> None:
         self.assertEqual(infer_asset_type("https://github.com/example/app"), "source_repo")

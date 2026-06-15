@@ -62,6 +62,7 @@ class AppConfigTests(unittest.TestCase):
                         "    component_mapper: openai/gpt-5.2",
                         "    gap_analyst: openai/gpt-5.2-mini",
                         "  security_planning:",
+                        "    evidence_linker: openai/gpt-5.2-mini",
                         "    reviewer: openai/gpt-5.2",
                         "  security_testing:",
                         "    reviewer: 'anthropic/claude-sonnet-4.5'",
@@ -80,6 +81,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.models.source_discovery.route_resolver, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.source_discovery.component_mapper, "openai/gpt-5.2")
         self.assertEqual(config.models.source_discovery.gap_analyst, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.security_planning.evidence_linker, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.security_planning.reviewer, "openai/gpt-5.2")
         self.assertEqual(config.models.security_testing.reviewer, "anthropic/claude-sonnet-4.5")
         self.assertEqual(config.models.reporting.writer, "openai/gpt-5.2-mini")
