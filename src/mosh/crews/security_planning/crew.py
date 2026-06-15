@@ -17,6 +17,7 @@ from mosh.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
 from mosh.engagements import (
     Engagement,
@@ -1144,6 +1145,7 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
                 tasks=[self.draft_security_test_plan_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestPlanningPlannerCrew()
@@ -1186,6 +1188,7 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
                 tasks=[self.critique_security_test_plan_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestPlanningCriticCrew()
@@ -1228,6 +1231,7 @@ def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: Securit
                 tasks=[self.write_security_test_plan_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestPlanningReporterCrew()
@@ -1275,6 +1279,7 @@ def _build_engagement_template_refinement_crew(
                 tasks=[self.refine_engagement_template_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return EngagementTemplateRefinementCrew()

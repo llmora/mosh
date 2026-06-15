@@ -23,7 +23,8 @@ When more advanced LLM models are released, you do not need to modify the harnes
 
 0. Install these prerequisites first:
 
-- Python 3.11 or newer
+- Python 3.11 -- 3.13
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
 - Docker
 
 1. Clone the repository:
@@ -39,9 +40,15 @@ cd mosh
 ./scripts/setup.sh
 ```
 
-The setup script creates `.venv`, installs Model-driven Open Security Harness in editable mode, and builds the Docker tool images.
+The setup script runs `uv sync` to install dependencies in a `.venv` virtual environment, then builds the Docker tool images.
 
-3. Activate the environment:
+3. Use `uv run` to execute the CLI without activating the environment:
+
+```bash
+uv run mosh discover https://app.example.com
+```
+
+You can also activate the environment manually:
 
 ```bash
 source .venv/bin/activate
@@ -371,7 +378,7 @@ Please follow these guidelines:
 Before opening a pull request create tests that validate your change and ensure all tests pass:
 
 ```bash
-python -m unittest discover -v
+uv run python -m unittest discover -v
 ```
 
 Also run the relevant CLI flow against an application you are authorized to test when your change affects runtime behavior.

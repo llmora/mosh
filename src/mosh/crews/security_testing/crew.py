@@ -18,6 +18,7 @@ from mosh.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.docker_tools import DockerToolResult, DockerToolRunner
 from mosh.engagement import load_engagement_file, resolve_target_mapping
 from mosh.engagements import (
@@ -1393,6 +1394,7 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
                 tasks=[self.execute_security_test_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestExecutorCrew()
@@ -1444,6 +1446,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
                 tasks=[self.review_security_test_evidence_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestReviewerCrew()
@@ -1486,6 +1489,7 @@ def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
                 tasks=[self.write_executed_security_test_report_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SecurityTestReporterCrew()
