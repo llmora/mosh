@@ -345,7 +345,11 @@ testing feedback sections.
 
 Planned hypotheses must include deterministic routing fields:
 `execution_mode`, `evidence_sources`, `affected_runtime`, `affected_source`,
-and `verification_strategy`.
+`verification_strategy`, and `source_assessment_type`. For source-routed tests,
+`source_assessment_type` classifies the expected execution shape as
+`static-source-inspection`, `generated-harness`, `local-runtime-service`,
+`dependency-tool-scan`, or `deferred-live-verification`; live and combined tests
+use `live-verification` or `source-guided-live-verification`.
 
 ## Security Testing Crew
 
@@ -422,7 +426,11 @@ is mounted read-only at `/source` and `/work` is the only writable workspace.
 Source execution is for source-local evidence, local tests, compilation,
 framework inspection, dependency checks, static source scanners, route-table
 inspection, function-level experiments, and localhost runtime checks; arbitrary
-external URL probing belongs to live or combined execution.
+external URL probing belongs to live or combined execution. The executor must
+record a dynamic tool decision for every source hypothesis, explaining which
+dynamic source-only tools were used or why static evidence was sufficient.
+Executed reports include a dedicated dynamic source evidence section whenever
+generated workspace files, local processes, or local HTTP requests were used.
 The generic security tools image should include baseline HTTP utilities,
 source-search utilities, Python/Node tooling, Semgrep, Bandit, pip-audit,
 Java/OpenJDK, Maven, Corepack, and small project-inspection utilities. Large

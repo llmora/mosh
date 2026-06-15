@@ -26,6 +26,20 @@ execute_source_security_test_task:
     Previous reviewer feedback JSON, if any:
     {previous_review}
 
+    First inspect the hypothesis source_assessment_type, tools_expected,
+    preconditions, and test_steps. For every source hypothesis, explicitly
+    decide whether dynamic source-only evidence is useful:
+    - static-source-inspection: use source reads/searches and explain why
+      harness/runtime execution is unnecessary
+    - generated-harness: create a focused /work harness, function experiment,
+      fuzz script, or env-variant script before concluding
+    - local-runtime-service: start a local source-derived process, make local
+      HTTP requests, and stop the process before concluding
+    - dependency-tool-scan: run the relevant source scanner or dependency tool
+      and tie output back to manifests or lockfiles
+    - deferred-live-verification: collect source evidence and state exactly
+      what live/local runtime input is missing
+
     Use read_source_slice for bounded file evidence and source_search for
     bounded cross-file discovery. Use write_workspace_file to create focused
     harnesses, tests, fuzz scripts, or framework-introspection scripts under
@@ -52,7 +66,8 @@ execute_source_security_test_task:
     - summary: short execution summary
     - observations: evidence from source reads, source searches, generated
       workspace harnesses, local commands, local processes, and local HTTP
-      requests
+      requests. Include a dynamic_tool_decision explaining which dynamic
+      source-only tools were used or why they were not needed.
     - source_evidence: concrete path, start_line, end_line, snippet_hash, and
       reason entries that support the result
     - discovery_updates: optional source facts learned during testing that

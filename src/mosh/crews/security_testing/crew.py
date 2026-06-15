@@ -1628,6 +1628,7 @@ def render_executed_test_report(
             lines.append("")
     else:
         lines.extend(["No commands were recorded.", ""])
+    _add_dynamic_source_sections(lines, execution_bundle)
     lines.extend(
         [
             "## Evidence",
@@ -1679,6 +1680,49 @@ def render_executed_test_report(
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _add_dynamic_source_sections(lines: list[str], execution_bundle: dict[str, Any] | None) -> None:
+    if not execution_bundle:
+        return
+    workspace_files = [item for item in _list(execution_bundle.get("workspace_files")) if isinstance(item, dict)]
+    local_processes = [item for item in _list(execution_bundle.get("local_processes")) if isinstance(item, dict)]
+    local_requests = [item for item in _list(execution_bundle.get("local_requests")) if isinstance(item, dict)]
+    if not workspace_files and not local_processes and not local_requests:
+        return
+    lines.extend(["## Dynamic Source Evidence", ""])
+    if workspace_files:
+        lines.extend(["### Generated Workspace Files", ""])
+        for item in workspace_files:
+            lines.append(
+                "- "
+                f"`{_text(item.get('path')) or 'unknown'}`"
+                f" ({_text(item.get('purpose')) or 'no purpose recorded'}, "
+                f"{_text(item.get('bytes')) or '0'} bytes)"
+            )
+        lines.append("")
+    if local_processes:
+        lines.extend(["### Local Processes", ""])
+        for item in local_processes:
+            detail = _text(item.get("local_url") or item.get("host_url") or item.get("container_id"))
+            lines.append(
+                "- "
+                f"`{_text(item.get('status')) or 'unknown'}`"
+                f" {detail}"
+                f" ({_text(item.get('purpose')) or 'no purpose recorded'})"
+            )
+        lines.append("")
+    if local_requests:
+        lines.extend(["### Local HTTP Requests", ""])
+        for item in local_requests:
+            lines.append(
+                "- "
+                f"`{_text(item.get('method')) or 'GET'}` "
+                f"`{_text(item.get('url')) or 'unknown'}` "
+                f"exit `{_text(item.get('exit_code')) or 'unknown'}`"
+                f" ({_text(item.get('purpose')) or 'no purpose recorded'})"
+            )
+        lines.append("")
 
 
 def _report_artifacts(

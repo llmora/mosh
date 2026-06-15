@@ -54,6 +54,7 @@ draft_security_test_plan_task:
     - affected_runtime: list of runtime endpoint objects, such as method and url, or an empty list
     - affected_source: list of source evidence objects, such as path, start_line, end_line, symbol, and reason, or an empty list
     - verification_strategy: live-verification, source-inspection, source-guided-live-verification, or blocked-pending-inputs
+    - source_assessment_type: static-source-inspection, generated-harness, local-runtime-service, dependency-tool-scan, deferred-live-verification, live-verification, or source-guided-live-verification
     - status: planned
 
     Prefer fewer, higher-value hypotheses over a broad checklist. Use the
@@ -70,6 +71,17 @@ draft_security_test_plan_task:
     - combined when source evidence should guide later live verification
     - deferred when valuable testing is blocked by missing source, URL, credentials, build instructions, authorization, or tooling
 
+    Use source_assessment_type deliberately:
+    - static-source-inspection when bounded source reads/searches are enough
+    - generated-harness when the executor should write a focused /work harness,
+      function experiment, fuzz script, or env-variant script
+    - local-runtime-service when the executor should start source-derived code or
+      a local service and inspect its local HTTP behavior
+    - dependency-tool-scan when package manifests, lockfiles, Semgrep, Bandit,
+      pip-audit, or similar source tools are central to the test
+    - deferred-live-verification when a source clue is useful but the test needs
+      a deployment, emulator, simulator, credentials, or external service
+
     If source_discovery is present in the assessment evidence bundle, use its
     source_index, route records, component_map, gap_analysis, and evidence_refs
     to populate affected_source and evidence_sources. If live_discovery is
@@ -80,7 +92,9 @@ draft_security_test_plan_task:
     the discovery evidence includes an explicit local/runtime target. Instead,
     source-mode tests should inspect route registration, middleware,
     authorization guards, validation, configuration, dependencies, and existing
-    tests. Put live probing into deferred_test_opportunities or a deferred
+    tests. When a generated harness or local runtime would materially improve
+    the source-only result, make that explicit in source_assessment_type,
+    tools_expected, preconditions, and test_steps. Put live probing into deferred_test_opportunities or a deferred
     hypothesis with requirements_to_proceed when it requires deployment,
     credentials, a local run command, emulator, simulator, or container target.
 
@@ -133,7 +147,8 @@ critique_security_test_plan_task:
     Accept only when the plan is detailed enough for later authorised execution
     crews and every hypothesis includes requirements, tools_expected,
     organisational_risk, business_value, execution_mode, evidence_sources,
-    affected_runtime, affected_source, and verification_strategy. Reject if credentials,
+    affected_runtime, affected_source, verification_strategy, and
+    source_assessment_type. Reject if credentials,
     authorization, test data, safety limits, evidence, expected secure
     behaviour, or business-risk rationale are missing where needed. Reject plans
     that read like a generic security checklist instead of a prioritized plan
@@ -144,7 +159,8 @@ critique_security_test_plan_task:
     requirements_to_proceed. When live_discovery is absent, reject any immediate
     live or combined hypothesis and any source hypothesis whose steps depend
     only on curl, browser, or live HTTP probing instead of source inspection or
-    source tooling.
+    source tooling. Reject source hypotheses when source_assessment_type is
+    missing, generic, or inconsistent with the test_steps and tools_expected.
   expected_output: >
     Confirmation that submit_security_test_plan_critique was called with a
     structured critic decision.
