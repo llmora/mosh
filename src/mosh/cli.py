@@ -22,6 +22,7 @@ from mosh.engagements import (
     record_asset_discovery,
 )
 from mosh.evidence_links import build_evidence_links
+from mosh.crews.security_planning.evidence_linker import build_model_assisted_linker
 from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.security_testing.crew import (
@@ -97,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "discover-source":
         return _run_source_discovery(config, args)
     if args.command == "link":
-        return _run_evidence_linking(args)
+        return _run_evidence_linking(config, args)
     if args.command == "plan-security":
         return _run_security_test_planning(config, args)
     if args.command == "test-security":
@@ -252,9 +253,21 @@ def _run_source_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_evidence_linking(args: argparse.Namespace) -> int:
+def _run_evidence_linking(config: AppConfig, args: argparse.Namespace) -> int:
+    _print_event(
+        Event(
+            "orchestrator",
+            "start",
+            "Starting evidence linking crew",
+            {"engagement": args.engagement_id},
+        )
+    )
     try:
-        result = build_evidence_links(Path(args.output_root), args.engagement_id)
+        result = build_evidence_links(
+            Path(args.output_root),
+            args.engagement_id,
+            model_assisted_linker=build_model_assisted_linker(config),
+        )
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1

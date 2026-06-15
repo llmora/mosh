@@ -33,6 +33,7 @@ class EngagementAsset:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["metadata"] = _clean_asset_metadata(data.get("metadata"))
         return {"schema": ASSET_SCHEMA, **data}
 
     def to_ref_dict(self) -> dict[str, Any]:
@@ -49,7 +50,7 @@ class EngagementAsset:
             locator=str(value.get("locator") or ""),
             label=value.get("label") if value.get("label") is None else str(value.get("label")),
             created_at=str(value.get("created_at") or utc_now()),
-            metadata=value.get("metadata") if isinstance(value.get("metadata"), dict) else {},
+            metadata=_clean_asset_metadata(value.get("metadata")),
         )
 
 
@@ -189,12 +190,10 @@ def record_asset_discovery(
         if asset.id != asset_id:
             updated_assets.append(asset)
             continue
-        metadata = dict(asset.metadata)
-        metadata["discovery"] = {
-            "report_dir": str(report_dir),
-            "report_path": str(report_dir / "report.md"),
-            "last_discovered_at": utc_now(),
-        }
+        metadata = _clean_asset_metadata(asset.metadata)
+        discovery = dict(metadata.get("discovery")) if isinstance(metadata.get("discovery"), dict) else {}
+        discovery["last_discovered_at"] = utc_now()
+        metadata["discovery"] = discovery
         discovered = EngagementAsset(
             id=asset.id,
             type=asset.type,
@@ -337,6 +336,17 @@ def _asset_from_manifest_entry(output_root: Path, engagement_id: str, item: dict
     if asset_path.exists():
         return load_asset(output_root, engagement_id, asset_id)
     return EngagementAsset.from_dict(item)
+
+
+def _clean_asset_metadata(value: Any) -> dict[str, Any]:
+    metadata = dict(value) if isinstance(value, dict) else {}
+    discovery = metadata.get("discovery")
+    if isinstance(discovery, dict):
+        cleaned_discovery = dict(discovery)
+        cleaned_discovery.pop("report_dir", None)
+        cleaned_discovery.pop("report_path", None)
+        metadata["discovery"] = cleaned_discovery
+    return metadata
 
 
 def validate_engagement_id(value: str) -> str:

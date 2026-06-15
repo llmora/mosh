@@ -162,6 +162,7 @@ models:
 
   security_planning:
     planner: openai/gpt-5.2-mini
+    evidence_linker: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
     reporter: openai/gpt-5.2-mini
     engagement_refiner: openai/gpt-5.2-mini
@@ -253,8 +254,10 @@ report/<engagement-id>/assets/<asset-id>/asset.json
 ```
 
 `engagement.json` stores only asset references: `id` and `created_at`. Asset
-type, locator, label, and metadata are stored only in the asset's `asset.json`
-to avoid duplicated state.
+type, locator, label, and non-derived metadata are stored only in the asset's
+`asset.json` to avoid duplicated state. Asset discovery paths must not be
+stored in `asset.json`; they are derived from
+`report/<engagement-id>/assets/<asset-id>/discovery/`.
 
 Engagement discovery dispatches by asset type and writes:
 
@@ -279,12 +282,23 @@ layout, `engagement.json`, or `asset.json`. It should record typed references
 back to asset IDs and their evidence, link every discovered `live_url` and
 `source_tree` pair, score exact and parameterized route matches, cap excessive
 links per asset pair, and record skipped asset IDs with missing or unsupported
-discovery evidence. Engagement-backed planning should later call the same
-linker automatically rather than implementing a second correlation path.
+discovery evidence. After deterministic linking, it should run a bounded
+model-assisted candidate pass using the planning crew's `evidence_linker`
+model. The model may only relate existing evidence reference IDs; invalid or
+invented refs must be ignored, and candidate links must be marked separately
+from deterministic links. The CLI should emit an immediate orchestrator start
+event for link generation and run the planning-owned evidence linker with
+CrewAI verbose output, matching discovery's user-visible execution style.
+Engagement-backed planning should later call the same linker automatically
+rather than implementing a second correlation path.
 
 The planning, testing, and final reporting commands are being migrated to this
 engagement root. During the migration, legacy URL/source compatibility commands
 may still write host/source-rooted planning and testing outputs.
+
+The model-assisted evidence linker is configured under the planning crew model
+group as `models.security_planning.evidence_linker`, because its candidate
+links are planning input rather than discovery facts.
 
 ## Real-Time Visibility
 
