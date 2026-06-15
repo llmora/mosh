@@ -226,26 +226,49 @@ Shared memory must be file-backed.
 
 Agents can read from and add to shared memory. Memory writes must be recorded as observable events.
 
-The current discovery crew output directory format is:
+## Engagements And Assets
+
+An engagement is the durable top-level assessment container. It is created with
+a random path-safe ID and persisted under:
 
 ```text
-report/<host>/discovery/
+report/<engagement-id>/engagement.json
 ```
 
-Use the host only for the report directory name. For example:
+Assets are the attached things under assessment. Current asset types are:
 
-- `https://www.test.com/path` -> `report/www.test.com/discovery/`
-- `http://127.0.0.1:8080/` -> `report/127.0.0.1_8080/discovery/`
+- `live_url`
+- `source_tree`
+- `source_repo`
+- `mobile_app`
 
-The host directory is reserved for multiple crew outputs. Future crews should
-write to their own subdirectories under `report/<host>/`.
+Asset attachment is registration only. It must not automatically run discovery
+or testing. Asset type is inferred from the locator when possible, and callers
+may pass an explicit type for ambiguous URLs.
 
-Current crew output subdirectories are:
+Each asset is persisted under:
 
-- `report/<host>/discovery/`
-- `report/<host>/security-test-planning/`
-- `report/<host>/security-testing/`
-- `report/<source>/source-discovery/`
+```text
+report/<engagement-id>/assets/<asset-id>/asset.json
+```
+
+`engagement.json` stores only asset references: `id` and `created_at`. Asset
+type, locator, label, and metadata are stored only in the asset's `asset.json`
+to avoid duplicated state.
+
+Engagement discovery dispatches by asset type and writes:
+
+```text
+report/<engagement-id>/assets/<asset-id>/discovery/
+```
+
+By default `mosh discover <engagement-id>` runs discovery only for assets that
+do not already have discovery output. `--asset <asset-id>` narrows discovery to
+one or more assets, and `--refresh` forces a rerun for the selected assets.
+
+The planning, testing, and final reporting commands are being migrated to this
+engagement root. During the migration, legacy URL/source compatibility commands
+may still write host/source-rooted planning and testing outputs.
 
 ## Real-Time Visibility
 
@@ -268,10 +291,10 @@ All observable activity must also be stored in JSON format as part of the output
 
 ## Output
 
-The first prototype should write discovery output under:
+Discovery output should be written under the asset selected for discovery:
 
 ```text
-report/<host>/discovery/
+report/<engagement-id>/assets/<asset-id>/discovery/
 ```
 
 Required outputs:
@@ -335,22 +358,27 @@ calling reporting helpers directly.
 
 ## Security Planning
 
-Security planning can consume live discovery, source discovery, or both. For
-source-only planning, `plan-security --source /path/to/repo` reads
-`report/<source>/source-discovery/` and writes
-`report/<source>/security-test-planning/`. For combined planning,
-`plan-security URL --source /path/to/repo` builds an assessment evidence bundle
-with live discovery, source discovery, source/live evidence links, and prior
-testing feedback sections. Combined assessments are progressive enrichment:
-an assessment can start from either a live URL or source code, and the other
-evidence source can be attached later. Source/live linking is an internal,
-repeatable operation that connects evidence when both sides are available; it is
-not a mandatory user-visible `correlate` phase.
+Security planning is engagement-wide. It consumes discovery from all relevant
+engagement assets, optional evidence links, and prior testing feedback, then
+writes one plan under:
+
+```text
+report/<engagement-id>/security-test-planning/
+```
+
+During the engagement migration, the compatibility commands can still plan from
+legacy URL/source discovery roots. The target architecture is one plan per
+engagement, even when specialist crews have discovered different asset types.
+Combined assessments are progressive enrichment: an assessment can start from a
+live URL, source code, or another asset type, and additional assets can be
+attached later. Source/live linking is an internal, repeatable operation that
+connects evidence when both sides are available; it is not a mandatory
+user-visible `correlate` phase.
 
 Planned hypotheses must include deterministic routing fields:
-`execution_mode`, `evidence_sources`, `affected_runtime`, `affected_source`,
-`verification_strategy`, and `source_assessment_type`. For source-routed tests,
-`source_assessment_type` classifies the expected execution shape as
+`execution_mode`, `asset_refs`, `evidence_sources`, `affected_runtime`,
+`affected_source`, `verification_strategy`, and `source_assessment_type`. For
+source-routed tests, `source_assessment_type` classifies the expected execution shape as
 `static-source-inspection`, `generated-harness`, `local-runtime-service`,
 `dependency-tool-scan`, or `deferred-live-verification`; live and combined tests
 use `live-verification` or `source-guided-live-verification`.
@@ -377,16 +405,29 @@ executor runs:
   live verification.
 - `deferred` hypotheses are preserved with their requirements to proceed.
 
-Source-only preflight is invoked with `test-security --source /path/to/repo` and
-writes `report/<source>/source-security-testing/preflight.md` and executed
-source reports under `report/<source>/source-security-testing/executed_tests/`.
-It must not execute live URL tests or require a production deployment.
+Security testing is engagement-wide and writes one result set under:
+
+```text
+report/<engagement-id>/security-testing/
+```
+
+Source, live, combined, and future mobile-specialist executors are internal
+routing choices. They must not create separate top-level testing result sets
+that need manual synchronization. During the migration, source-only compatibility
+preflight may still write `report/<source>/source-security-testing/`.
 
 ## Engagement File
 
-The security planning crew writes `engagement_template.yaml` under
-`report/<host>/security-test-planning/`. This file is user-owned execution
-configuration for the security testing crew.
+The engagement template is user-owned execution configuration for the whole
+engagement. The target location is:
+
+```text
+report/<engagement-id>/engagement_template.yaml
+```
+
+During the migration, compatibility planning commands may still write
+`engagement_template.yaml` under `report/<host>/security-test-planning/` or
+`report/<source>/security-test-planning/`.
 
 The engagement file should stay small and directly editable. It should include:
 

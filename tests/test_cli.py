@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest.mock import patch
 
 from mosh.cli import main
 from mosh.engagement import write_engagement_template, write_engagement_template_mapping
+from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_engagement
 from mosh.scope import report_dir_name, source_report_dir_name
 from tests.fakes import (
     FakeCrewRunner,
@@ -127,6 +129,135 @@ class CliTests(unittest.TestCase):
                 self.assertTrue((report_dir / "memory.json").exists())
                 memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
                 self.assertTrue(any(item["kind"] == "source_index" for item in memory))
+
+    def test_cli_engagement_create_and_attach_commands_write_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["engagement", "create", "--title", "Example App", "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 0)
+            match = re.search(r"Engagement created: (eng_[a-z0-9]{8})", stdout.getvalue())
+            self.assertIsNotNone(match)
+            engagement_id = match.group(1)
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "engagement",
+                        "attach",
+                        engagement_id,
+                        "https://app.example.test",
+                        "--output-root",
+                        str(output_root),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Attached: asset_live_1 (live_url)", stdout.getvalue())
+            engagement = load_engagement(output_root, engagement_id)
+            self.assertEqual(engagement.title, "Example App")
+            self.assertEqual([(asset.id, asset.type) for asset in engagement.assets], [("asset_live_1", "live_url")])
+            manifest = json.loads((output_root / engagement_id / "engagement.json").read_text(encoding="utf-8"))
+            self.assertEqual(list(manifest["assets"][0]), ["created_at", "id"])
+
+    def test_cli_discover_engagement_dispatches_missing_assets_and_skips_current_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            with fixture_server() as url:
+                with fixture_source_tree() as source:
+                    engagement = create_engagement(output_root)
+                    live_asset = attach_asset(output_root, engagement.id, url).asset
+                    source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+                    live_runner = FakeCrewRunner()
+                    source_runner = FakeSourceDiscoveryRunner()
+                    stdout = io.StringIO()
+
+                    with patch("mosh.crews.discovery.crew.build_discovery_crew_runner", return_value=live_runner):
+                        with patch(
+                            "mosh.crews.source_discovery.crew.build_source_discovery_crew_runner",
+                            return_value=source_runner,
+                        ):
+                            with contextlib.redirect_stdout(stdout):
+                                exit_code = main(["discover", engagement.id, "--output-root", str(output_root)])
+                            with contextlib.redirect_stdout(io.StringIO()) as second_stdout:
+                                second_exit_code = main(["discover", engagement.id, "--output-root", str(output_root)])
+                            with contextlib.redirect_stdout(io.StringIO()):
+                                refresh_exit_code = main(
+                                    [
+                                        "discover",
+                                        engagement.id,
+                                        "--asset",
+                                        live_asset.id,
+                                        "--refresh",
+                                        "--output-root",
+                                        str(output_root),
+                                    ]
+                                )
+
+                    self.assertEqual(exit_code, 0)
+                    self.assertEqual(second_exit_code, 0)
+                    self.assertEqual(refresh_exit_code, 0)
+                    self.assertEqual(len(live_runner.calls), 2)
+                    self.assertEqual(len(source_runner.calls), 1)
+                    self.assertTrue((asset_discovery_dir(output_root, engagement.id, live_asset.id) / "report.md").exists())
+                    self.assertTrue((asset_discovery_dir(output_root, engagement.id, source_asset.id) / "report.md").exists())
+                    self.assertIn("Discovery report for asset_live_1 written to", stdout.getvalue())
+                    self.assertIn("Discovery report for asset_source_1 written to", stdout.getvalue())
+                    self.assertIn("No assets need discovery", second_stdout.getvalue())
+                    reloaded = load_engagement(output_root, engagement.id)
+                    discovered_assets = {asset.id: asset.metadata.get("discovery") for asset in reloaded.assets}
+                    self.assertIn("last_discovered_at", discovered_assets[live_asset.id])
+                    self.assertIn("last_discovered_at", discovered_assets[source_asset.id])
+
+    def test_cli_discover_engagement_asset_flag_selects_one_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            with fixture_server() as url:
+                with fixture_source_tree() as source:
+                    engagement = create_engagement(output_root)
+                    live_asset = attach_asset(output_root, engagement.id, url).asset
+                    source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+                    live_runner = FakeCrewRunner()
+                    source_runner = FakeSourceDiscoveryRunner()
+
+                    with patch("mosh.crews.discovery.crew.build_discovery_crew_runner", return_value=live_runner):
+                        with patch(
+                            "mosh.crews.source_discovery.crew.build_source_discovery_crew_runner",
+                            return_value=source_runner,
+                        ):
+                            exit_code = main(
+                                [
+                                    "discover",
+                                    engagement.id,
+                                    "--asset",
+                                    source_asset.id,
+                                    "--output-root",
+                                    str(output_root),
+                                ]
+                            )
+
+                    self.assertEqual(exit_code, 0)
+                    self.assertEqual(live_runner.calls, [])
+                    self.assertEqual(len(source_runner.calls), 1)
+                    self.assertFalse((asset_discovery_dir(output_root, engagement.id, live_asset.id) / "report.md").exists())
+                    self.assertTrue((asset_discovery_dir(output_root, engagement.id, source_asset.id) / "report.md").exists())
+
+    def test_cli_discover_engagement_reports_unsupported_asset_type(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            asset = attach_asset(output_root, engagement.id, "https://github.com/example/app").asset
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["discover", engagement.id, "--asset", asset.id, "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Discovery is not implemented for source_repo assets yet.", stderr.getvalue())
 
     def test_cli_plan_security_subcommand_writes_security_test_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -130,38 +130,59 @@ Use OpenRouter model IDs such as `openai/gpt-5.2` or `anthropic/claude-sonnet-4.
 
 ## Running A Security Scan
 
-### 1. Run Discovery
+### 1. Create An Engagement And Attach Assets
 
-Start by mapping the application:
+An engagement is the top-level assessment container. Assets are the things under
+assessment, such as live URLs, source trees, repository URLs, and future mobile
+application references.
 
 ```bash
-mosh discover https://app.example.com
+mosh engagement create --title "Example App"
+mosh engagement attach eng_a1b2c3d4 https://app.example.com
+mosh engagement attach eng_a1b2c3d4 /path/to/repo
 ```
 
-Discovery writes:
+`mosh` infers the asset type from the locator. Use `--type` when a URL is
+ambiguous, for example when a GitHub URL should be treated as a live web target
+instead of a source repository.
+
+Engagement setup writes:
 
 ```text
-report/<host>/discovery/report.md
+report/<engagement-id>/engagement.json
+report/<engagement-id>/assets/<asset-id>/asset.json
 ```
 
-Optional tuning flags:
+`engagement.json` is a small index that stores asset IDs and creation times.
+Each `asset.json` is the source of truth for the asset type, locator, optional
+label, and discovery metadata.
+
+### 2. Run Discovery
+
+Run discovery for every attached asset that does not already have discovery
+output:
 
 ```bash
-mosh discover https://app.example.com --max-pages 100 --max-depth 4 --output-root report
+mosh discover eng_a1b2c3d4
 ```
 
-### Source Discovery
-
-You can also map a local source tree:
+Discover one asset:
 
 ```bash
-mosh discover-source /path/to/repo
+mosh discover eng_a1b2c3d4 --asset asset_live_1
 ```
 
-Source discovery writes:
+Force a rerun for the selected assets:
+
+```bash
+mosh discover eng_a1b2c3d4 --refresh
+```
+
+Discovery dispatches by asset type. A `live_url` asset uses live application
+discovery. A `source_tree` asset uses source discovery. Discovery writes:
 
 ```text
-report/<source>/source-discovery/report.md
+report/<engagement-id>/assets/<asset-id>/discovery/report.md
 ```
 
 This first source increment builds a compact source index, including files,
@@ -179,7 +200,10 @@ web services such as FastAPI, inventories environment variable references and
 Docker Compose service topology, and parses npm, Python, Gradle, CocoaPods, and
 Swift Package dependency manifests.
 
-### 2. Create A Security Test Plan
+### 3. Create A Security Test Plan
+
+Engagement-backed planning is the next migration step. The current compatibility
+commands still plan from URL/source discovery roots:
 
 Once discovery has produced evidence, ask `mosh` to turn it into testable hypotheses:
 
@@ -220,7 +244,7 @@ For source-only planning, the output is written under:
 report/<source>/security-test-planning/
 ```
 
-### 3. Review The Engagement File
+### 4. Review The Engagement File
 
 Before running security testing, review and edit:
 
@@ -240,7 +264,7 @@ This file is deliberately small. It is where you confirm:
 
 The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target (useful if you want to run the tests against a pre-prod environment). You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing.
 
-### 4. Run Security Testing
+### 5. Run Security Testing
 
 When the plan and engagement file are ready, run:
 
@@ -325,7 +349,7 @@ This feedback loop applies to live tests, source-routed tests, and source/live
 evidence links, including new routes, API specifications, components, entry
 points, and configuration facts discovered during source security testing.
 
-### 5. Create The Final Report
+### 6. Create The Final Report
 
 When security testing is complete, create the customer-facing engagement report:
 
@@ -362,7 +386,12 @@ The Markdown report is intended to be readable as-is. Source evidence and remedi
 ## End-To-End Example
 
 ```bash
-mosh discover https://app.example.com
+mosh engagement create --title "Example App"
+mosh engagement attach eng_a1b2c3d4 https://app.example.com
+mosh engagement attach eng_a1b2c3d4 /path/to/repo
+mosh discover eng_a1b2c3d4
+
+# Compatibility commands until engagement-backed planning/testing lands.
 mosh plan-security https://app.example.com
 
 # Review and edit report/app.example.com/security-test-planning/engagement_template.yaml.
@@ -418,7 +447,9 @@ mosh test-security https://app.example.com
 If a fix changes the application surface, run discovery and planning again before retesting:
 
 ```bash
-mosh discover https://app.example.com
+mosh discover eng_a1b2c3d4 --refresh
+
+# Compatibility commands until engagement-backed planning/testing lands.
 mosh plan-security https://app.example.com
 mosh test-security https://app.example.com
 ```
