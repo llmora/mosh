@@ -27,7 +27,8 @@ critique_security_test_plan_task:
     Accept only when the plan is detailed enough for later authorised execution
     crews and every hypothesis includes requirements, tools_expected,
     organisational_risk, business_value, execution_mode, evidence_sources,
-    affected_runtime, affected_source, and verification_strategy. Reject if credentials,
+    affected_runtime, affected_source, verification_strategy, and
+    source_assessment_type. Reject if credentials,
     authorization, test data, safety limits, evidence, expected secure
     behaviour, or business-risk rationale are missing where needed. Reject plans
     that read like a generic security checklist instead of a prioritized plan
@@ -38,7 +39,8 @@ critique_security_test_plan_task:
     requirements_to_proceed. When live_discovery is absent, reject any immediate
     live or combined hypothesis and any source hypothesis whose steps depend
     only on curl, browser, or live HTTP probing instead of source inspection or
-    source tooling.
+    source tooling. Reject source hypotheses when source_assessment_type is
+    missing, generic, or inconsistent with the test_steps and tools_expected.
   expected_output: >
     Confirmation that submit_security_test_plan_critique was called with a
     structured critic decision.

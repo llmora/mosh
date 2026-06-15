@@ -182,11 +182,19 @@ route-table inspection or runtime behavior checks. These primitives are generic;
 framework-specific behavior should be encoded by generated harnesses rather
 than hard-coded into the orchestrator.
 
+Planning should classify each source-routed hypothesis with
+`source_assessment_type`: `static-source-inspection`, `generated-harness`,
+`local-runtime-service`, `dependency-tool-scan`, or
+`deferred-live-verification`. The executor should use that classification to
+make an explicit dynamic-tool decision before submitting evidence.
+
 Reports should mirror executed live test reports and include:
 
 - embedded execution metadata
 - command records
 - source evidence references
+- dynamic source evidence sections for generated harnesses, local processes,
+  and local HTTP requests when present
 - reviewer acceptance
 - finding status
 - concrete remediation guidance
@@ -341,6 +349,9 @@ mosh discover-source https://github.com/example/app.git
 6. Done: Extend planner/reviewer prompt contracts with `execution_mode`,
    `evidence_sources`, `affected_runtime`, `affected_source`, and
    `verification_strategy`.
+6a. Done: Add `source_assessment_type` to classify source hypotheses as static
+    source inspection, generated harness/function experiment, local runtime
+    service/API experiment, dependency/tool scan, or deferred live verification.
 7. Done: Extend preflight to route source, live, combined, and deferred
    hypotheses. Source-only `test-security --source` writes a source preflight
    and does not send source-routed hypotheses to the live URL executor.

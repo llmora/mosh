@@ -953,6 +953,101 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(result["status"], "stopped")
             self.assertIn("[REDACTED]", result["logs_stdout"])
 
+    def test_dynamic_source_fixture_can_use_harness_env_process_and_local_http(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            (source_root / "app.py").write_text(
+                "import os\n\n"
+                "def routes():\n"
+                "    prefix = os.environ.get('API_PREFIX', '/api')\n"
+                "    return [prefix + '/health']\n",
+                encoding="utf-8",
+            )
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-DYN",
+                memory=FileMemory(report_dir),
+                hypothesis={
+                    "id": "SRC-DYN",
+                    "title": "Runtime route table honors API_PREFIX",
+                    "execution_mode": "source",
+                    "source_assessment_type": "local-runtime-service",
+                },
+                engagement={"credentials": {"admin": {"token": "tok123"}}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-DYN.md",
+            )
+            fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="HTTP/1.1 200 OK\n\n/api/health tok123", stderr=""))
+            docker_calls: list[list[str]] = []
+
+            def fake_docker(command, timeout):
+                docker_calls.append(command)
+                if command[1] == "logs":
+                    return DockerToolResult(exit_code=0, stdout="started tok123\n", stderr="")
+                if command[1] == "rm":
+                    return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
+                return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
+
+            with (
+                patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner),
+                patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker),
+            ):
+                write_tool = _build_write_workspace_file_tool(_FakeCrewAI, state)
+                command_tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
+                start_tool = _build_start_source_process_tool(_FakeCrewAI, AppConfig(security_tool_image="image:test"), state)
+                request_tool = _build_request_local_http_tool(_FakeCrewAI, AppConfig(), state)
+                stop_tool = _build_stop_source_process_tool(_FakeCrewAI, state)
+
+                harness = json.loads(
+                    write_tool._run(
+                        "harnesses/inspect_routes.py",
+                        "import os, sys\nsys.path.insert(0, '/source')\nimport app\nprint(app.routes())\n",
+                        "Inspect route table under controlled env",
+                    )
+                )
+                command = json.loads(
+                    command_tool._run(
+                        "python3 /work/harnesses/inspect_routes.py",
+                        "Run route harness with API_PREFIX override",
+                        env={"API_PREFIX": "/api", "TOKEN": "tok123"},
+                    )
+                )
+                process = json.loads(
+                    start_tool._run(
+                        "python3 -m http.server 8000",
+                        "Expose local fixture service",
+                        container_port=8000,
+                        host_port=18000,
+                        env={"TOKEN": "tok123"},
+                    )
+                )
+                request = json.loads(
+                    request_tool._run(
+                        "http://host.docker.internal:18000/routes",
+                        "Request local route table",
+                        headers={"Authorization": "Bearer tok123"},
+                    )
+                )
+                stopped = json.loads(stop_tool._run("container-123", "Stop local fixture service"))
+
+            self.assertEqual(harness["path"], "harnesses/inspect_routes.py")
+            self.assertEqual(command["env"]["API_PREFIX"], "/api")
+            self.assertEqual(command["env"]["TOKEN"], "[REDACTED]")
+            self.assertEqual(process["container_id"], "container-123")
+            self.assertEqual(request["headers"]["Authorization"], "Bearer [REDACTED]")
+            self.assertEqual(stopped["status"], "stopped")
+            self.assertEqual(len(state.workspace_files), 1)
+            self.assertEqual(len(state.commands), 1)
+            self.assertEqual(len(state.local_requests), 1)
+            self.assertEqual(len([item for item in state.local_processes if item["status"] == "started"]), 1)
+            self.assertIn(f"{source_root.resolve()}:/source:ro", docker_calls[0])
+            self.assertNotIn("tok123", json.dumps([command, request, stopped]))
+
     def test_source_process_cleanup_stops_unstopped_processes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory) / "source"
@@ -994,6 +1089,43 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(cleanup["container_id"], "container-123")
             self.assertEqual(cleanup["status"], "stopped")
             self.assertIn("[REDACTED]", cleanup["logs_stdout"])
+
+    def test_executed_source_report_has_dynamic_evidence_sections(self) -> None:
+        markdown = render_executed_test_report(
+            target_url="source:/tmp/example",
+            hypothesis={"id": "SRC-DYN", "title": "Runtime route table", "surface": "api", "priority": "high"},
+            targets={},
+            evidence={"status": "no-finding", "summary": "Local runtime behaved as expected.", "observations": []},
+            review={"accepted": True, "summary": "Accepted."},
+            commands=[],
+            execution_bundle={
+                "workspace_files": [{"path": "harnesses/routes.py", "purpose": "Inspect routes", "bytes": 42}],
+                "local_processes": [
+                    {
+                        "status": "started",
+                        "local_url": "http://host.docker.internal:18000",
+                        "purpose": "Local fixture service",
+                    }
+                ],
+                "local_requests": [
+                    {
+                        "method": "GET",
+                        "url": "http://host.docker.internal:18000/routes",
+                        "exit_code": 0,
+                        "purpose": "Inspect route table",
+                    }
+                ],
+            },
+            report_content=None,
+        )
+
+        self.assertIn("## Dynamic Source Evidence", markdown)
+        self.assertIn("### Generated Workspace Files", markdown)
+        self.assertIn("`harnesses/routes.py`", markdown)
+        self.assertIn("### Local Processes", markdown)
+        self.assertIn("http://host.docker.internal:18000", markdown)
+        self.assertIn("### Local HTTP Requests", markdown)
+        self.assertIn("`GET` `http://host.docker.internal:18000/routes`", markdown)
 
     def test_security_command_tool_redacts_jwts_not_listed_in_engagement(self) -> None:
         jwt = (

@@ -113,6 +113,7 @@ def _add_hypotheses(lines: list[str], value: Any) -> None:
                 f"- Execution mode: `{_text(hypothesis.get('execution_mode')) or 'live'}`",
                 f"- Evidence sources: `{', '.join(_string_list(hypothesis.get('evidence_sources'))) or 'live'}`",
                 f"- Verification strategy: `{_text(hypothesis.get('verification_strategy')) or 'live-verification'}`",
+                f"- Source assessment type: `{_text(hypothesis.get('source_assessment_type')) or 'live-verification'}`",
                 "",
             ]
         )

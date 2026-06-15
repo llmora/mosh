@@ -283,6 +283,13 @@ inspection, local tests, build or framework introspection, function-level
 experiments, route-table inspection, and local runtime checks while keeping
 external live URL testing separate.
 
+Source plans include a `source_assessment_type` for each hypothesis so the
+executor knows whether the test is expected to be static source inspection, a
+generated harness/function experiment, a local runtime service/API experiment,
+a dependency or tool scan, or deferred live verification. Executed source
+reports include a dedicated dynamic source evidence section when generated
+harnesses, local processes, or local HTTP requests were used.
+
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
 - **Ready tests:** live URL tests with enough authorization, target, credential, and safe test-data information available, so the live executor can run them.
