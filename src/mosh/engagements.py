@@ -229,6 +229,10 @@ def engagement_dir(output_root: Path, engagement_id: str) -> Path:
     return output_root / validate_engagement_id(engagement_id)
 
 
+def engagement_plan_dir(output_root: Path, engagement_id: str) -> Path:
+    return engagement_dir(output_root, engagement_id) / "plan"
+
+
 def engagement_manifest_path(output_root: Path, engagement_id: str) -> Path:
     return engagement_dir(output_root, engagement_id) / "engagement.json"
 

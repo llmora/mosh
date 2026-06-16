@@ -18,7 +18,13 @@ def write_security_test_plan(
     iterations: int,
 ) -> str:
     markdown = render_security_test_plan(target_url, plan, critic_review, accepted=accepted, iterations=iterations)
-    (report_dir / "security_test_plan.md").write_text(markdown, encoding="utf-8")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / ("plan.md" if report_dir.name == "plan" else "security_test_plan.md")
+    report_path.write_text(markdown, encoding="utf-8")
+    if report_dir.name == "plan":
+        stale_markdown_report = report_dir / "security_test_plan.md"
+        if stale_markdown_report.exists():
+            stale_markdown_report.unlink()
     stale_json_report = report_dir / "security_test_plan.json"
     if stale_json_report.exists():
         stale_json_report.unlink()

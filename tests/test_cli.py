@@ -310,11 +310,11 @@ class CliTests(unittest.TestCase):
             )
             stdout = io.StringIO()
 
-            with patch("mosh.cli.build_model_assisted_linker", return_value=_NoopModelAssistedLinker()):
+            with patch("mosh.crews.security_planning.crew.build_model_assisted_linker", return_value=_NoopModelAssistedLinker()):
                 with contextlib.redirect_stdout(stdout):
                     exit_code = main(["link", engagement.id, "--output-root", str(output_root)])
 
-            links_file = output_root / engagement.id / "links.json"
+            links_file = output_root / engagement.id / "plan" / "links.json"
             self.assertEqual(exit_code, 0)
             self.assertIn("orchestrator: Starting evidence linking crew", stdout.getvalue())
             self.assertIn("Evidence links written to", stdout.getvalue())
@@ -373,7 +373,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("orchestrator: Starting evidence linking crew", stdout.getvalue())
             self.assertIn("Missing LLM API key(s): OPENROUTER_API_KEY", stderr.getvalue())
 
-    def test_cli_plan_security_subcommand_writes_security_test_plan(self) -> None:
+    def test_cli_plan_subcommand_writes_security_test_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -389,14 +389,14 @@ class CliTests(unittest.TestCase):
                 return_value=FakeSecurityPlanningRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
-                    exit_code = main(["plan-security", target_url, "--output-root", str(output_root)])
+                    exit_code = main(["plan", target_url, "--output-root", str(output_root)])
 
             report_dir = output_root / report_dir_name(target_url) / "security-test-planning"
             self.assertEqual(exit_code, 0)
             self.assertIn("Security test plan written to", stdout.getvalue())
             self.assertTrue((report_dir / "security_test_plan.md").exists())
 
-    def test_cli_plan_security_subcommand_accepts_source_only(self) -> None:
+    def test_cli_plan_subcommand_accepts_source_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = "/tmp/example-source"
             output_root = Path(directory) / "report"
@@ -412,12 +412,100 @@ class CliTests(unittest.TestCase):
                 return_value=FakeSecurityPlanningRunner(),
             ):
                 with contextlib.redirect_stdout(stdout):
-                    exit_code = main(["plan-security", "--source", source, "--output-root", str(output_root)])
+                    exit_code = main(["plan", "--source", source, "--output-root", str(output_root)])
 
             report_dir = output_root / source_report_dir_name(source) / "security-test-planning"
             self.assertEqual(exit_code, 0)
             self.assertIn("Security test plan written to", stdout.getvalue())
             self.assertTrue((report_dir / "security_test_plan.md").exists())
+
+    def test_cli_plan_engagement_runs_linking_and_writes_engagement_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            live_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            source_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
+            live_dir.mkdir(parents=True)
+            source_dir.mkdir(parents=True)
+            (live_dir / "report.md").write_text("# Live Discovery\n", encoding="utf-8")
+            (live_dir / "events.json").write_text("[]", encoding="utf-8")
+            (live_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "crawled_page",
+                            "content": {
+                                "url": "https://app.example.test/api/status",
+                                "status": 200,
+                                "links": [],
+                                "references": [],
+                                "forms": [],
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+            (source_dir / "events.json").write_text("[]", encoding="utf-8")
+            (source_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "source_index",
+                            "content": {
+                                "inventory": {
+                                    "routes": [
+                                        {
+                                            "method": "GET",
+                                            "full_route": "/api/status",
+                                            "path": "api/status.py",
+                                            "line": 1,
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            second_stdout = io.StringIO()
+            runner = FakeSecurityPlanningRunner()
+
+            with patch(
+                "mosh.crews.security_planning.crew.build_security_test_planning_crew_runner",
+                return_value=runner,
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["plan", engagement.id, "--output-root", str(output_root)])
+                first_plan_content = (output_root / engagement.id / "plan" / "plan.md").read_text(encoding="utf-8")
+                first_links_content = (output_root / engagement.id / "plan" / "links.json").read_text(encoding="utf-8")
+                with contextlib.redirect_stdout(second_stdout):
+                    second_exit_code = main(["plan", engagement.id, "--output-root", str(output_root)])
+
+            report_dir = output_root / engagement.id / "plan"
+            links_file = report_dir / "links.json"
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(second_exit_code, 0)
+            self.assertEqual(len(runner.calls), 1)
+            self.assertIn("Security test plan written to", stdout.getvalue())
+            self.assertIn("Security test plan is current", second_stdout.getvalue())
+            self.assertTrue((report_dir / "plan.md").exists())
+            self.assertFalse((report_dir / "security_test_plan.md").exists())
+            self.assertTrue((output_root / engagement.id / "engagement_template.yaml").exists())
+            self.assertFalse((report_dir / "engagement_template.yaml").exists())
+            self.assertTrue(links_file.exists())
+            self.assertFalse((output_root / engagement.id / "links.json").exists())
+            self.assertEqual((report_dir / "plan.md").read_text(encoding="utf-8"), first_plan_content)
+            self.assertEqual(links_file.read_text(encoding="utf-8"), first_links_content)
+            payload = json.loads(links_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["links"][0]["basis"], "exact_path")
 
     def test_cli_test_security_subcommand_writes_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -575,6 +663,52 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("Security testing preflight written to", stdout.getvalue())
             self.assertTrue((report_dir / "preflight.md").exists())
+
+    def test_cli_test_security_engagement_uses_root_template_and_plan_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://app.example.test"
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, target_url)
+            planning_dir = output_root / engagement.id / "plan"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Engagement Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "HDR-001",
+                        "title": "Security headers are present",
+                        "priority": "medium",
+                        "surface": "headers",
+                        "requirements": ["No credentials required."],
+                        "tools_expected": ["HTTP client"],
+                        "execution_mode": "live",
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template(output_root / engagement.id, target_url, plan)
+            runner = FakeSecurityTestingRunner()
+            stdout = io.StringIO()
+
+            with patch(
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                return_value=runner,
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["test-security", engagement.id, "--output-root", str(output_root)])
+
+            report_dir = output_root / engagement.id / "security-testing"
+            preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Security testing preflight written to", stdout.getvalue())
+            self.assertEqual(runner.calls[0]["target_url"], target_url)
+            self.assertTrue((report_dir / "executed_tests" / "HDR-001.md").exists())
+            self.assertIn(f"Engagement file: `{output_root / engagement.id / 'engagement_template.yaml'}`", preflight)
+            self.assertFalse((planning_dir / "engagement_template.yaml").exists())
 
     def test_cli_test_security_subcommand_accepts_source_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -9,8 +9,10 @@ from unittest.mock import patch
 
 from mosh.config import AppConfig
 from mosh.crews.discovery.crew import _load_crewai
+from mosh.crews.security_planning.reporting import write_security_test_plan
 from mosh.docker_tools import DockerToolResult
 from mosh.engagement import write_engagement_template, write_engagement_template_mapping
+from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_asset
 from mosh.memory import FileMemory
 from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_testing.crew import (
@@ -656,6 +658,44 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("Cloudflare Pages", discovery_report)
             self.assertEqual(len(planning_runner.calls), 1)
             self.assertEqual(planning_runner.calls[0]["source"], source)
+            testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+
+    def test_engagement_security_testing_feedback_refreshes_engagement_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, target_url).asset
+            discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            planning_dir = output_root / engagement.id / "plan"
+            discovery_dir.mkdir(parents=True)
+            planning_dir.mkdir(parents=True)
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template(output_root / engagement.id, target_url, _plan())
+            planning_runner = _CountingPlanningRunner()
+
+            report_dir = SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"),
+                output_root=output_root,
+                crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
+                planning_crew_runner=planning_runner,
+            ).run(engagement.id)
+
+            discovery_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
+            feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
+            updated_asset = load_asset(output_root, engagement.id, live_asset.id)
+            self.assertEqual(len(feedback_items), 1)
+            self.assertEqual(planning_runner.calls[0]["target_url"], f"engagement:{engagement.id}")
+            self.assertEqual(planning_runner.calls[0]["report_dir"], str(planning_dir))
+            self.assertFalse((output_root / report_dir_name(target_url) / "security-test-planning").exists())
+            self.assertIn("last_discovered_at", updated_asset.metadata["discovery"])
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
 
@@ -1487,11 +1527,10 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 )
 
     def test_security_testing_tasks_treat_effective_targets_as_canonical(self) -> None:
-        task_yaml = (
-            Path("src/mosh/crews/security_testing/tasks.yaml")
-            .read_text(encoding="utf-8")
-            .lower()
-        )
+        task_yaml = "\n".join(
+            Path(f"src/mosh/crews/security_testing/{file}").read_text(encoding="utf-8")
+            for file in ["executor_tasks.yaml", "reviewer_tasks.yaml", "reporter_tasks.yaml"]
+        ).lower()
         compact_task_yaml = " ".join(task_yaml.split())
 
         self.assertIn("effective target mappings as canonical", task_yaml)
@@ -1990,6 +2029,28 @@ class _CountingPlanningRunner:
             "reporter",
         )
         return _PlanningResult(_refreshed_plan(), {"accepted": True}, accepted=True, iterations=1)
+
+    def run_engagement(self, output_root, engagement_id, report_dir, memory):
+        self.calls.append(
+            {
+                "target_url": f"engagement:{engagement_id}",
+                "output_root": str(output_root),
+                "report_dir": str(report_dir),
+                "engagement_id": engagement_id,
+            }
+        )
+        plan = _refreshed_plan()
+        review = {"accepted": True}
+        memory.add_item(
+            "security_test_plan_final",
+            {
+                "structured": plan,
+                "critic_review": review,
+            },
+            "reporter",
+        )
+        write_security_test_plan(report_dir, f"engagement:{engagement_id}", plan, review, accepted=True, iterations=1)
+        return _PlanningResult(plan, review, accepted=True, iterations=1)
 
 
 def _refreshed_plan() -> dict[str, object]:

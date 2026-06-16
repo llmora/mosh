@@ -23,5 +23,5 @@ write_security_test_plan_task:
     You must call write_security_test_plan exactly once with the final plan and
     critic_review arguments. Do not write Markdown yourself.
   expected_output: >
-    Confirmation that write_security_test_plan persisted security_test_plan.md.
+    Confirmation that write_security_test_plan persisted the Markdown plan.
   agent: reporter
