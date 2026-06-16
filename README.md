@@ -214,6 +214,15 @@ When the plan and engagement file are ready, run:
 mosh test-security eng_a1b2c3d4
 ```
 
+Temporary targeted execution for testing the tester is available with a
+hypothesis ID from `plan/plan.md`:
+
+```bash
+mosh test-security eng_a1b2c3d4 --hypothesis AUTH-001
+```
+
+Repeat `--hypothesis` or pass comma-separated IDs to run a small subset.
+
 For legacy URL planning, run:
 
 ```bash
@@ -237,16 +246,15 @@ report/<source>/source-security-testing/executed_tests/
 report/<source>/source-security-testing/executed_tests/history/
 ```
 
-Source-only security testing executes source-routed hypotheses without requiring
-a deployed production URL. The source executor can read bounded source slices,
-search nonignored text files, write generated harnesses or fuzz scripts under
-`/work`, run local commands with explicit environment overrides, start a local
-process in the security tools container, issue localhost HTTP requests to it,
-and stop it after collecting evidence. The repository is mounted read-only at
-`/source` and `/work` is the only writable workspace. This supports static
-inspection, local tests, build or framework introspection, function-level
-experiments, route-table inspection, and local runtime checks while keeping
-external live URL testing separate.
+Security testing uses one executor per hypothesis. The executor can use live
+target tools, source inspection tools, source-local harnesses, or both, depending
+on the planned test steps and attached artifacts. For source-backed tests, it can
+read bounded source slices, search nonignored text files, write generated
+harnesses or fuzz scripts under `/work`, run local commands with explicit
+environment overrides, start a local process in the security tools container,
+issue localhost HTTP requests to it, and stop it after collecting evidence. The
+repository is mounted read-only at `/source` and `/work` is the only writable
+workspace.
 
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
