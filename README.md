@@ -198,7 +198,8 @@ Swift Package dependency manifests.
 
 ### 3. Link Discovery Evidence
 
-During the engagement migration, run the temporary linker after live and source
+Engagement-backed planning runs evidence linking automatically as its first
+stage. You can also run the temporary diagnostic linker after live and source
 assets have discovery output:
 
 ```bash
@@ -208,7 +209,7 @@ mosh link eng_a1b2c3d4
 The linker writes:
 
 ```text
-report/<engagement-id>/links.json
+report/<engagement-id>/plan/links.json
 ```
 
 `links.json` records source-route to live-endpoint relationships with typed
@@ -225,30 +226,52 @@ separately and are not authoritative discovery facts. Like discovery, the
 command prints an orchestrator start event immediately and runs the CrewAI
 model phase with verbose task/agent output. The artifact also records asset IDs
 skipped because they do not yet have usable discovery evidence. This command is
-temporary; engagement-backed planning is expected to call the same linker
-automatically once the planning migration lands.
+temporary; `mosh plan <engagement-id>` calls the same linker automatically.
 
 ### 4. Create A Security Test Plan
 
-Engagement-backed planning is the next migration step. The current compatibility
-commands still plan from URL/source discovery roots:
+Once discovery has produced evidence, ask `mosh` to turn it into testable
+hypotheses:
 
-Once discovery has produced evidence, ask `mosh` to turn it into testable hypotheses:
+For engagement-backed planning:
 
 ```bash
-mosh plan-security https://app.example.com
+mosh plan eng_a1b2c3d4
+```
+
+This writes the engagement security plan under:
+
+```text
+report/<engagement-id>/plan/plan.md
+report/<engagement-id>/engagement_template.yaml
+```
+
+It also refreshes:
+
+```text
+report/<engagement-id>/plan/links.json
+```
+
+If no attached asset has new discovery output since the previous engagement
+plan run, `mosh plan <engagement-id>` exits without regenerating either
+`plan/links.json` or `plan/plan.md`.
+
+For legacy URL planning:
+
+```bash
+mosh plan https://app.example.com
 ```
 
 To plan from source discovery only:
 
 ```bash
-mosh plan-security --source /path/to/repo
+mosh plan --source /path/to/repo
 ```
 
 To combine live and source discovery evidence:
 
 ```bash
-mosh plan-security https://app.example.com --source /path/to/repo
+mosh plan https://app.example.com --source /path/to/repo
 ```
 
 Live-only planning reads from `report/<host>/discovery/`. Source-aware planning
@@ -257,8 +280,8 @@ route hypotheses with `execution_mode` values of `live`, `source`, `combined`,
 or `deferred`, including affected runtime and source evidence where available.
 Combined assessments are progressive: you can start with a live URL or a source
 tree, then attach the other input later by rerunning planning with both
-arguments. During the current migration, run `mosh link <engagement-id>` before
-planning when both live and source discovery outputs exist.
+arguments or, preferably, by attaching both assets to an engagement and running
+`mosh plan <engagement-id>`.
 Planning writes:
 
 ```text
@@ -277,7 +300,7 @@ report/<source>/security-test-planning/
 Before running security testing, review and edit:
 
 ```text
-report/<host>/security-test-planning/engagement_template.yaml
+report/<engagement-id>/engagement_template.yaml
 ```
 
 This file is deliberately small. It is where you confirm:
@@ -297,26 +320,42 @@ The security testing crew treats this file as execution configuration. If you ma
 When the plan and engagement file are ready, run:
 
 ```bash
+mosh test-security eng_a1b2c3d4
+```
+
+For legacy URL planning, run:
+
+```bash
 mosh test-security https://app.example.com
 ```
 
-For a source-only plan, run:
+For a legacy source-only plan, run:
 
 ```bash
 mosh test-security --source /path/to/repo
 ```
 
-For a combined live and source plan, pass both:
+For a legacy combined live and source plan, pass both:
 
 ```bash
 mosh test-security https://app.example.com --source /path/to/repo
 ```
 
-If a previous live-only or source-only assessment later gains the other input,
-rerun planning and testing with both arguments. Existing evidence is reused,
-new source/live links enrich the plan, and only ready hypotheses should execute.
+If an engagement later gains another input, attach the new asset, rerun
+discovery, planning, and testing with the engagement ID. Existing evidence is
+reused, new source/live links enrich the plan, and only ready hypotheses should
+execute. The legacy compatibility path can still combine URL and source inputs
+with both arguments.
 
 Security testing writes:
+
+```text
+report/<engagement-id>/security-testing/preflight.md
+report/<engagement-id>/security-testing/executed_tests/
+report/<engagement-id>/security-testing/executed_tests/history/
+```
+
+Legacy URL security testing writes:
 
 ```text
 report/<host>/security-testing/preflight.md
@@ -367,7 +406,7 @@ Open `preflight.md` after the first run. It tells you which tests were ready, wh
 You can run security testing repeatedly to incrementally complete the test:
 
 ```bash
-mosh test-security https://app.example.com
+mosh test-security eng_a1b2c3d4
 ```
 
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
@@ -418,17 +457,14 @@ mosh engagement create --title "Example App"
 mosh engagement attach eng_a1b2c3d4 https://app.example.com
 mosh engagement attach eng_a1b2c3d4 /path/to/repo
 mosh discover eng_a1b2c3d4
-mosh link eng_a1b2c3d4
+mosh plan eng_a1b2c3d4
 
-# Compatibility commands until engagement-backed planning/testing lands.
-mosh plan-security https://app.example.com
+# Review and edit report/eng_a1b2c3d4/engagement_template.yaml.
 
-# Review and edit report/app.example.com/security-test-planning/engagement_template.yaml.
-
-mosh test-security https://app.example.com
+mosh test-security eng_a1b2c3d4
 
 # If the CLI reports blocked tests, add the missing engagement details and run it again.
-mosh test-security https://app.example.com
+mosh test-security eng_a1b2c3d4
 
 mosh report https://app.example.com
 ```
@@ -438,7 +474,7 @@ mosh report https://app.example.com
 After a full run, you have:
 
 - a discovery report describing observed application surface area
-- `links.json` with source/live evidence relationships for combined engagements
+- `plan/links.json` with source/live evidence relationships for combined engagements
 - a security test plan grounded in discovery evidence
 - an editable engagement template for permissions, targets, credentials, limits, and safe test data
 - executed test reports, including resolution
@@ -449,7 +485,7 @@ After a full run, you have:
 Security testing reports are written to:
 
 ```text
-report/<host>/security-testing/executed_tests/
+report/<engagement-id>/security-testing/executed_tests/
 ```
 
 Each executed test report is designed to support remediation, not just detection. Use it to understand:
@@ -469,7 +505,7 @@ A practical remediation loop looks like this:
 4. Run security testing again:
 
 ```bash
-mosh test-security https://app.example.com
+mosh test-security eng_a1b2c3d4
 ```
 
 `mosh` compares the current plan and execution metadata with previous reports. Tests that are already current and accepted are skipped, while tests that need fresh evidence can run again. This makes repeat testing useful after a fix: you keep the historical reports, but the current run shows whether the issue still reproduces.
@@ -478,10 +514,8 @@ If a fix changes the application surface, run discovery and planning again befor
 
 ```bash
 mosh discover eng_a1b2c3d4 --refresh
-
-# Compatibility commands until engagement-backed planning/testing lands.
-mosh plan-security https://app.example.com
-mosh test-security https://app.example.com
+mosh plan eng_a1b2c3d4
+mosh test-security eng_a1b2c3d4
 ```
 
 Keep the engagement file up to date as the application changes. New roles, test accounts, safe test data, or staging mappings can unblock additional tests and give `mosh` enough context to validate more of the application.

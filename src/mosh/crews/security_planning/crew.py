@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import inspect
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -17,9 +18,20 @@ from mosh.crews.discovery.crew import (
     _load_crewai,
 )
 from mosh.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
+from mosh.engagements import (
+    Engagement,
+    EngagementAsset,
+    asset_discovery_dir,
+    engagement_dir,
+    engagement_exists,
+    engagement_plan_dir,
+    load_engagement,
+)
+from mosh.evidence_links import EvidenceLinkResult, build_evidence_links
 from mosh.memory import FileMemory
-from mosh.models import Event
+from mosh.models import Event, utc_now
 from mosh.scope import report_dir_name, source_report_dir_name
+from mosh.crews.security_planning.evidence_linker import build_model_assisted_linker
 from mosh.crews.security_planning.reporting import write_security_test_plan
 
 
@@ -32,6 +44,7 @@ class SecurityTestPlanningState:
     discovery_context: dict[str, Any]
     source: str | None = None
     source_discovery_dir: Path | None = None
+    engagement_template_dir: Path | None = None
     current_plan: dict[str, Any] | None = None
     current_review: dict[str, Any] | None = None
     accepted: bool = False
@@ -66,6 +79,12 @@ def security_test_planning_agent_definitions(config: AppConfig) -> list[AgentDef
             role="Security test planning coordinator",
             goal="Coordinate security test planning work and persist planner/reviewer/reporter outputs.",
             model=config.models.security_planning.reporter,
+        ),
+        AgentDefinition(
+            name="evidence_linker",
+            role="Source and live evidence link candidate analyst",
+            goal="Link source and live discovery evidence before planning hypotheses.",
+            model=config.models.security_planning.evidence_linker,
         ),
         AgentDefinition(
             name="planner",
@@ -145,6 +164,68 @@ class CrewAISecurityTestPlanningCrewRunner:
             },
         )
 
+        return self._run_with_state(crewai, state)
+
+    def run_engagement(
+        self,
+        output_root: Path,
+        engagement_id: str,
+        report_dir: Path,
+        memory: FileMemory,
+    ) -> SecurityTestPlanningResult:
+        missing_keys = self.config.missing_llm_api_keys_for_models(
+            [
+                self.config.models.security_planning.planner,
+                self.config.models.security_planning.reviewer,
+                self.config.models.security_planning.reporter,
+                self.config.models.security_planning.engagement_refiner,
+            ]
+        )
+        if missing_keys:
+            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+
+        engagement = load_engagement(output_root, engagement_id)
+        target_url, source = _engagement_primary_targets(engagement)
+        source_discovery_dir = _first_asset_discovery_dir(output_root, engagement, "source_tree")
+        memory.record_event(
+            "orchestrator",
+            "crew_start",
+            "Starting CrewAI security test planning crew",
+            {
+                "target": f"engagement:{engagement.id}",
+                "engagement": engagement.id,
+                "target_url": target_url,
+                "source": source,
+                "discovery_dir": str(engagement_dir(output_root, engagement.id)),
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
+            },
+        )
+        evidence_links = run_planning_evidence_linking(self.config, output_root, engagement.id, memory=memory)
+        discovery_context = load_engagement_assessment_evidence_bundle(
+            output_root,
+            engagement.id,
+            evidence_links=evidence_links.payload,
+        )
+        crewai = _load_crewai()
+        state = SecurityTestPlanningState(
+            target_url=target_url,
+            discovery_dir=engagement_dir(output_root, engagement.id),
+            report_dir=report_dir,
+            memory=memory,
+            discovery_context=discovery_context,
+            source=source,
+            source_discovery_dir=source_discovery_dir,
+            engagement_template_dir=engagement_dir(output_root, engagement.id),
+        )
+
+        return self._run_with_state(crewai, state)
+
+    def _run_with_state(self, crewai: Any, state: SecurityTestPlanningState) -> SecurityTestPlanningResult:
+        target_url = state.target_url
+        source = state.source
+        report_dir = state.report_dir
+        memory = state.memory
+        discovery_context = state.discovery_context
         max_attempts = self.config.planning_max_revisions + 1
         previous_plan: dict[str, Any] | None = None
         previous_review: dict[str, Any] | None = None
@@ -186,14 +267,15 @@ class CrewAISecurityTestPlanningCrewRunner:
         if state.current_plan is None:
             raise RuntimeError("Security test planner did not produce a plan.")
 
+        engagement_template_dir = _engagement_template_dir(state)
         deterministic_engagement_template = _build_planning_engagement_template(target_url, source, state.current_plan)
-        engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
-        current_engagement_template = load_engagement_file(report_dir / "engagement_template.yaml")
+        engagement_template = write_engagement_template_mapping(engagement_template_dir, deterministic_engagement_template)
+        current_engagement_template = load_engagement_file(engagement_template_dir / "engagement_template.yaml")
         memory.record_event(
             "orchestrator",
             "engagement_template_written",
             "Wrote deterministic engagement template before finalization",
-            {"bytes": len(engagement_template.encode("utf-8"))},
+            {"path": str(engagement_template_dir / "engagement_template.yaml"), "bytes": len(engagement_template.encode("utf-8"))},
         )
 
         reporter_crew = _build_planning_reporter_crew(crewai, self.config, state)
@@ -222,21 +304,25 @@ class CrewAISecurityTestPlanningCrewRunner:
                         "engagement_template": json.dumps(current_engagement_template, sort_keys=True),
                     }
                 )
-                if not (report_dir / "engagement_template.yaml").exists():
-                    engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
+                if not (engagement_template_dir / "engagement_template.yaml").exists():
+                    engagement_template = write_engagement_template_mapping(engagement_template_dir, deterministic_engagement_template)
                     memory.record_event(
                         "engagement_refiner",
                         "refinement_missing",
                         "Engagement template refiner did not write a template; wrote deterministic fallback",
-                        {"bytes": len(engagement_template.encode("utf-8"))},
+                        {"path": str(engagement_template_dir / "engagement_template.yaml"), "bytes": len(engagement_template.encode("utf-8"))},
                     )
             except Exception as exc:
-                engagement_template = write_engagement_template_mapping(report_dir, deterministic_engagement_template)
+                engagement_template = write_engagement_template_mapping(engagement_template_dir, deterministic_engagement_template)
                 memory.record_event(
                     "engagement_refiner",
                     "refinement_failed",
                     "Engagement template refinement failed; wrote deterministic fallback",
-                    {"error": str(exc), "bytes": len(engagement_template.encode("utf-8"))},
+                    {
+                        "error": str(exc),
+                        "path": str(engagement_template_dir / "engagement_template.yaml"),
+                        "bytes": len(engagement_template.encode("utf-8")),
+                    },
                 )
         else:
             memory.record_event(
@@ -276,10 +362,16 @@ class SecurityTestPlanningOrchestrator:
         self.output_root = output_root
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_security_test_planning_crew_runner(config)
+        self.last_run_skipped = False
 
     def run(self, url: str | None = None, *, source: str | None = None) -> Path:
+        self.last_run_skipped = False
         if not url and not source:
             raise ValueError("Security planning requires a target URL, a source path, or both.")
+        if url and engagement_exists(self.output_root, url):
+            if source:
+                raise ValueError("Engagement planning uses attached assets; attach the source asset instead of passing --source.")
+            return self._run_engagement(url)
         domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
         discovery_dir = domain_dir / "discovery"
         source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
@@ -333,6 +425,72 @@ class SecurityTestPlanningOrchestrator:
         )
         return report_dir
 
+    def _run_engagement(self, engagement_id: str) -> Path:
+        engagement = load_engagement(self.output_root, engagement_id)
+        report_dir = engagement_plan_dir(self.output_root, engagement.id)
+        engagement_root = engagement_dir(self.output_root, engagement.id)
+        _migrate_engagement_template_to_root(report_dir, engagement_root)
+        self.last_run_skipped = False
+        if _engagement_plan_is_current(self.output_root, engagement, report_dir):
+            self.last_run_skipped = True
+            return report_dir
+        memory = FileMemory(report_dir, event_sink=self.event_sink)
+        agent_definitions = security_test_planning_agent_definitions(self.config)
+        latest_discovered_at = _latest_engagement_discovery_timestamp(self.output_root, engagement)
+        memory.record_event(
+            "orchestrator",
+            "start",
+            "Starting security test planning crew",
+            {
+                "target": f"engagement:{engagement.id}",
+                "engagement": engagement.id,
+                "latest_discovered_at": latest_discovered_at,
+                "agents": [agent.to_dict() for agent in agent_definitions],
+            },
+        )
+        run_engagement = getattr(self.crew_runner, "run_engagement", None)
+        if not callable(run_engagement):
+            raise TypeError("Configured security planning runner does not support engagement-aware planning.")
+        result = run_engagement(self.output_root, engagement.id, report_dir, memory)
+        engagement_path = engagement_root / "engagement_template.yaml"
+        if not engagement_path.exists():
+            target_url, source = _engagement_primary_targets(engagement)
+            engagement_template = write_engagement_template_mapping(
+                engagement_root,
+                _build_planning_engagement_template(target_url, source, result.plan),
+            )
+            memory.record_event(
+                "orchestrator",
+                "engagement_template_written",
+                "Wrote deterministic engagement template",
+                {"bytes": len(engagement_template.encode("utf-8"))},
+            )
+        memory.add_item(
+            "engagement_template",
+            {
+                "path": str(engagement_path),
+                "bytes": engagement_path.stat().st_size,
+            },
+            "orchestrator",
+        )
+        memory.add_item(
+            "plan_run",
+            {
+                "latest_discovered_at": latest_discovered_at,
+                "planned_at": utc_now(),
+                "plan_path": str(report_dir / "plan.md"),
+                "links_path": str(report_dir / "links.json"),
+            },
+            "orchestrator",
+        )
+        memory.record_event(
+            "orchestrator",
+            "complete",
+            "Security test planning crew completed",
+            {"report_dir": str(report_dir), "engagement": engagement.id},
+        )
+        return report_dir
+
 
 def load_discovery_context(discovery_dir: Path) -> dict[str, Any]:
     if not discovery_dir.exists():
@@ -374,6 +532,103 @@ def load_assessment_evidence_bundle(
     }
 
 
+def load_engagement_assessment_evidence_bundle(
+    output_root: Path,
+    engagement_id: str,
+    *,
+    evidence_links: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    engagement = load_engagement(output_root, engagement_id)
+    live_discoveries: list[dict[str, Any]] = []
+    source_discoveries: list[dict[str, Any]] = []
+    skipped_assets: list[dict[str, str]] = []
+    for asset in engagement.assets:
+        discovery_dir = asset_discovery_dir(output_root, engagement.id, asset.id)
+        if asset.type == "live_url":
+            if discovery_dir.exists():
+                live_discoveries.append(
+                    {
+                        "asset_id": asset.id,
+                        "discovery": load_discovery_context(discovery_dir),
+                    }
+                )
+            else:
+                skipped_assets.append({"id": asset.id, "type": asset.type, "reason": "missing discovery output"})
+        elif asset.type == "source_tree":
+            if discovery_dir.exists():
+                source_discoveries.append(
+                    {
+                        "asset_id": asset.id,
+                        "discovery": load_source_discovery_context(discovery_dir),
+                    }
+                )
+            else:
+                skipped_assets.append({"id": asset.id, "type": asset.type, "reason": "missing discovery output"})
+        else:
+            skipped_assets.append({"id": asset.id, "type": asset.type, "reason": "unsupported for planning"})
+    if not live_discoveries and not source_discoveries:
+        raise FileNotFoundError(f"No discovery output found for engagement: {engagement.id}")
+    return {
+        "schema": "mosh.assessment-evidence-bundle.v1",
+        "engagement": {
+            "id": engagement.id,
+            "title": engagement.title,
+            "asset_refs": [{"id": asset.id, "type": asset.type} for asset in engagement.assets],
+        },
+        "live_discovery": live_discoveries[0]["discovery"] if live_discoveries else {},
+        "source_discovery": source_discoveries[0]["discovery"] if source_discoveries else {},
+        "asset_evidence": {
+            "live": live_discoveries,
+            "source": source_discoveries,
+            "skipped": skipped_assets,
+        },
+        "correlation": {"evidence_links": evidence_links or {}},
+        "prior_security_testing_feedback": {},
+        "prior_source_testing_feedback": {},
+    }
+
+
+def run_planning_evidence_linking(
+    config: AppConfig,
+    output_root: Path,
+    engagement_id: str,
+    *,
+    memory: FileMemory | None = None,
+) -> EvidenceLinkResult:
+    if memory is not None:
+        memory.record_event(
+            "evidence_linker",
+            "start",
+            "Starting evidence linking as the first planning stage",
+            {"engagement": engagement_id},
+        )
+    result = build_evidence_links(
+        output_root,
+        engagement_id,
+        model_assisted_linker=build_model_assisted_linker(config),
+    )
+    if memory is not None:
+        memory.add_item(
+            "evidence_links",
+            {
+                "path": str(result.links_path),
+                "links": len(result.payload.get("links") or []),
+                "pairs": len(result.payload.get("pairs") or []),
+            },
+            "evidence_linker",
+        )
+        memory.record_event(
+            "evidence_linker",
+            "complete",
+            "Evidence linking completed",
+            {
+                "path": str(result.links_path),
+                "links": len(result.payload.get("links") or []),
+            },
+        )
+    return result
+
+
 def _latest_memory_item(memory: Any, kind: str) -> Any:
     if not isinstance(memory, list):
         return {}
@@ -381,6 +636,103 @@ def _latest_memory_item(memory: Any, kind: str) -> Any:
         if isinstance(item, dict) and item.get("kind") == kind:
             return item.get("content") if isinstance(item.get("content"), dict) else item.get("content")
     return {}
+
+
+def _engagement_plan_is_current(output_root: Path, engagement: Engagement, report_dir: Path) -> bool:
+    latest_discovered_at = _latest_engagement_discovery_timestamp(output_root, engagement)
+    if not latest_discovered_at:
+        return False
+    if (
+        not (report_dir / "plan.md").exists()
+        or not (report_dir / "links.json").exists()
+        or not (engagement_dir(output_root, engagement.id) / "engagement_template.yaml").exists()
+    ):
+        return False
+    latest_discovered = _parse_timestamp(latest_discovered_at)
+    previous_discovered = _parse_timestamp(_latest_plan_discovery_timestamp(report_dir))
+    if latest_discovered is None or previous_discovered is None:
+        return False
+    return previous_discovered >= latest_discovered
+
+
+def _migrate_engagement_template_to_root(report_dir: Path, engagement_root: Path) -> None:
+    root_template = engagement_root / "engagement_template.yaml"
+    old_template = report_dir / "engagement_template.yaml"
+    if root_template.exists() or not old_template.exists():
+        return
+    old_template.replace(root_template)
+
+
+def _engagement_template_dir(state: SecurityTestPlanningState) -> Path:
+    return state.engagement_template_dir or state.report_dir
+
+
+def _latest_plan_discovery_timestamp(report_dir: Path) -> str | None:
+    memory = _read_json(report_dir / "memory.json", [])
+    if not isinstance(memory, list):
+        return None
+    for item in reversed(memory):
+        if not isinstance(item, dict) or item.get("kind") != "plan_run":
+            continue
+        content = item.get("content")
+        if isinstance(content, dict) and isinstance(content.get("latest_discovered_at"), str):
+            return content["latest_discovered_at"]
+    return None
+
+
+def _latest_engagement_discovery_timestamp(output_root: Path, engagement: Engagement) -> str | None:
+    timestamps: list[datetime] = []
+    for asset in engagement.assets:
+        discovery = asset.metadata.get("discovery") if isinstance(asset.metadata, dict) else None
+        discovered_at = discovery.get("last_discovered_at") if isinstance(discovery, dict) else None
+        parsed = _parse_timestamp(discovered_at) if isinstance(discovered_at, str) else None
+        if parsed is not None:
+            timestamps.append(parsed)
+            continue
+        artifact_timestamp = _latest_discovery_artifact_timestamp(output_root, engagement.id, asset.id)
+        if artifact_timestamp is not None:
+            timestamps.append(artifact_timestamp)
+    if not timestamps:
+        return None
+    return max(timestamps).isoformat()
+
+
+def _latest_discovery_artifact_timestamp(output_root: Path, engagement_id: str, asset_id: str) -> datetime | None:
+    discovery_dir = asset_discovery_dir(output_root, engagement_id, asset_id)
+    candidates = [discovery_dir / "report.md", discovery_dir / "memory.json", discovery_dir / "events.json"]
+    mtimes = [path.stat().st_mtime for path in candidates if path.exists()]
+    if not mtimes:
+        return None
+    return datetime.fromtimestamp(max(mtimes), timezone.utc)
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _engagement_primary_targets(engagement: Engagement) -> tuple[str, str | None]:
+    live = next((asset.locator for asset in engagement.assets if asset.type == "live_url"), "")
+    source = next((asset.locator for asset in engagement.assets if asset.type == "source_tree"), None)
+    if live:
+        return live, source
+    if source:
+        return f"source:{source}", source
+    return f"engagement:{engagement.id}", None
+
+
+def _first_asset_discovery_dir(output_root: Path, engagement: Engagement, asset_type: str) -> Path | None:
+    asset: EngagementAsset | None = next((item for item in engagement.assets if item.type == asset_type), None)
+    if asset is None:
+        return None
+    return asset_discovery_dir(output_root, engagement.id, asset.id)
 
 
 def _build_planning_engagement_template(target_url: str, source: str | None, plan: dict[str, Any]) -> dict[str, Any]:
@@ -759,22 +1111,23 @@ def _build_write_refined_engagement_template_tool(
 
         def _run(self, template: Any) -> str:
             candidate = _coerce_mapping(template)
+            template_dir = _engagement_template_dir(state)
             fallback_used = False
             try:
-                engagement_template = write_engagement_template_mapping(state.report_dir, candidate)
+                engagement_template = write_engagement_template_mapping(template_dir, candidate)
             except ValueError as exc:
                 fallback_used = True
-                engagement_template = write_engagement_template_mapping(state.report_dir, deterministic_template)
+                engagement_template = write_engagement_template_mapping(template_dir, deterministic_template)
                 state.memory.record_event(
                     "engagement_refiner",
                     "refinement_rejected",
                     "Refined engagement template was invalid; wrote deterministic fallback",
-                    {"error": str(exc)},
+                    {"error": str(exc), "path": str(template_dir / "engagement_template.yaml")},
                 )
             state.memory.add_item(
                 "engagement_template_refinement",
                 {
-                    "path": str(state.report_dir / "engagement_template.yaml"),
+                    "path": str(template_dir / "engagement_template.yaml"),
                     "bytes": len(engagement_template.encode("utf-8")),
                     "fallback_used": fallback_used,
                 },
@@ -785,13 +1138,14 @@ def _build_write_refined_engagement_template_tool(
                 "engagement_template_written",
                 "Engagement template refiner wrote engagement_template.yaml",
                 {
+                    "path": str(template_dir / "engagement_template.yaml"),
                     "bytes": len(engagement_template.encode("utf-8")),
                     "fallback_used": fallback_used,
                 },
             )
             return json.dumps(
                 {
-                    "path": str(state.report_dir / "engagement_template.yaml"),
+                    "path": str(template_dir / "engagement_template.yaml"),
                     "bytes": len(engagement_template.encode("utf-8")),
                     "fallback_used": fallback_used,
                 },

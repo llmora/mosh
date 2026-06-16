@@ -192,12 +192,29 @@ CrewAI agent and task definitions should use CrewAI's built-in YAML configuratio
 - Discovery crew:
   - `src/mosh/crews/discovery/agents.yaml`
   - `src/mosh/crews/discovery/tasks.yaml`
-- Security planning crew:
-  - `src/mosh/crews/security_planning/agents.yaml`
-  - `src/mosh/crews/security_planning/tasks.yaml`
-- Security testing crew:
-  - `src/mosh/crews/security_testing/agents.yaml`
-  - `src/mosh/crews/security_testing/tasks.yaml`
+- Security planning subcrews:
+  - `src/mosh/crews/security_planning/evidence_linker_agents.yaml`
+  - `src/mosh/crews/security_planning/evidence_linker_tasks.yaml`
+  - `src/mosh/crews/security_planning/planner_agents.yaml`
+  - `src/mosh/crews/security_planning/planner_tasks.yaml`
+  - `src/mosh/crews/security_planning/critic_agents.yaml`
+  - `src/mosh/crews/security_planning/critic_tasks.yaml`
+  - `src/mosh/crews/security_planning/reporter_agents.yaml`
+  - `src/mosh/crews/security_planning/reporter_tasks.yaml`
+  - `src/mosh/crews/security_planning/engagement_refiner_agents.yaml`
+  - `src/mosh/crews/security_planning/engagement_refiner_tasks.yaml`
+- Security testing subcrews:
+  - `src/mosh/crews/security_testing/executor_agents.yaml`
+  - `src/mosh/crews/security_testing/executor_tasks.yaml`
+  - `src/mosh/crews/security_testing/reviewer_agents.yaml`
+  - `src/mosh/crews/security_testing/reviewer_tasks.yaml`
+  - `src/mosh/crews/security_testing/reporter_agents.yaml`
+  - `src/mosh/crews/security_testing/reporter_tasks.yaml`
+- Final reporting subcrews:
+  - `src/mosh/crews/reporting/writer_agents.yaml`
+  - `src/mosh/crews/reporting/writer_tasks.yaml`
+  - `src/mosh/crews/reporting/reviewer_agents.yaml`
+  - `src/mosh/crews/reporting/reviewer_tasks.yaml`
 - Source discovery crew:
   - `src/mosh/crews/source_discovery/agents.yaml`
   - `src/mosh/crews/source_discovery/tasks.yaml`
@@ -269,12 +286,13 @@ By default `mosh discover <engagement-id>` runs discovery only for assets that
 do not already have discovery output. `--asset <asset-id>` narrows discovery to
 one or more assets, and `--refresh` forces a rerun for the selected assets.
 
-During the engagement migration, `mosh link <engagement-id>` is a temporary
-explicit command that reads asset discovery outputs and writes source/live
-evidence relationships to:
+Engagement-backed planning runs evidence linking as its first stage. The
+temporary `mosh link <engagement-id>` command exposes the same operation
+explicitly for diagnostics and regeneration. It reads asset discovery outputs
+and writes source/live evidence relationships to:
 
 ```text
-report/<engagement-id>/links.json
+report/<engagement-id>/plan/links.json
 ```
 
 The linker must not duplicate engagement or asset metadata from the directory
@@ -294,8 +312,12 @@ evidence reference IDs; invalid or invented refs must be ignored, and candidate
 links must be marked separately from deterministic links. The CLI should emit
 an immediate orchestrator start event for link generation and run the
 planning-owned evidence linker with CrewAI verbose output, matching discovery's
-user-visible execution style. Engagement-backed planning should later call the
-same linker automatically rather than implementing a second correlation path.
+user-visible execution style. `mosh plan <engagement-id>` must call the same
+linker automatically rather than implementing a second correlation path, then
+pass the resulting payload to the planner as
+`correlation.evidence_links`. If no attached asset has discovery newer than the
+previous engagement plan run, `mosh plan <engagement-id>` must not regenerate
+`plan/links.json` or `plan/plan.md`.
 
 The planning, testing, and final reporting commands are being migrated to this
 engagement root. During the migration, legacy URL/source compatibility commands
@@ -398,7 +420,7 @@ engagement assets, optional evidence links, and prior testing feedback, then
 writes one plan under:
 
 ```text
-report/<engagement-id>/security-test-planning/
+report/<engagement-id>/plan/
 ```
 
 During the engagement migration, the compatibility commands can still plan from
@@ -448,6 +470,17 @@ Security testing is engagement-wide and writes one result set under:
 report/<engagement-id>/security-testing/
 ```
 
+The engagement-backed command is:
+
+```bash
+mosh test-security <engagement-id>
+```
+
+It reads the current plan from `report/<engagement-id>/plan/` and the shared
+execution configuration from `report/<engagement-id>/engagement_template.yaml`.
+When the target is an engagement ID, testing uses attached assets only; callers
+must attach source assets instead of passing `--source`.
+
 Source, live, combined, and future mobile-specialist executors are internal
 routing choices. They must not create separate top-level testing result sets
 that need manual synchronization. During the migration, source-only compatibility
@@ -456,7 +489,7 @@ preflight may still write `report/<source>/source-security-testing/`.
 ## Engagement File
 
 The engagement template is user-owned execution configuration for the whole
-engagement. The target location is:
+engagement and is shared by planning and testing. The target location is:
 
 ```text
 report/<engagement-id>/engagement_template.yaml
@@ -477,7 +510,7 @@ The engagement file should stay small and directly editable. It should include:
 
 It should not include explanatory readiness metadata such as `status`,
 `needed_for`, `required_answers`, or long generated notes. Missing inputs,
-blocked tests, and questions belong in `security_test_plan.md`, `preflight.md`,
+blocked tests, and questions belong in `plan.md`, `security_test_plan.md`, `preflight.md`,
 `events.json`, or `memory.json`.
 
 Repeated security-planning runs must not overwrite non-empty values that the
@@ -608,7 +641,7 @@ testing engagement. It runs after discovery, security planning, and security
 testing:
 
 ```text
-discover -> plan-security -> test-security -> report
+discover -> plan -> test-security -> report
 ```
 
 The CLI command is:

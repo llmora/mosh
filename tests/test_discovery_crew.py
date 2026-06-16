@@ -142,25 +142,41 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
     def test_crewai_yaml_config_files_are_packaged(self) -> None:
         agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/agents.yaml")
         tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml")
-        planning_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml")
-        planning_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml")
+        planning_yaml = [
+            resources.files(CREW_CONFIG_PACKAGE).joinpath(f"security_planning/{file}")
+            for file in [
+                "evidence_linker_agents.yaml",
+                "evidence_linker_tasks.yaml",
+                "planner_agents.yaml",
+                "planner_tasks.yaml",
+                "critic_agents.yaml",
+                "critic_tasks.yaml",
+                "reporter_agents.yaml",
+                "reporter_tasks.yaml",
+                "engagement_refiner_agents.yaml",
+                "engagement_refiner_tasks.yaml",
+            ]
+        ]
         source_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/agents.yaml")
         source_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/tasks.yaml")
 
         self.assertTrue(agents_yaml.is_file())
         self.assertTrue(tasks_yaml.is_file())
-        self.assertTrue(planning_agents_yaml.is_file())
-        self.assertTrue(planning_tasks_yaml.is_file())
+        for path in planning_yaml:
+            self.assertTrue(path.is_file(), str(path))
         self.assertTrue(source_agents_yaml.is_file())
         self.assertTrue(source_tasks_yaml.is_file())
         self.assertIn("crawler:", agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("crawl_application_task:", tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("planner:", planning_agents_yaml.read_text(encoding="utf-8"))
-        self.assertIn("draft_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("reporter:", planning_agents_yaml.read_text(encoding="utf-8"))
-        self.assertIn("write_security_test_plan_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("engagement_refiner:", planning_agents_yaml.read_text(encoding="utf-8"))
-        self.assertIn("refine_engagement_template_task:", planning_tasks_yaml.read_text(encoding="utf-8"))
+        planning_text = "\n".join(path.read_text(encoding="utf-8") for path in planning_yaml)
+        self.assertIn("evidence_linker:", planning_text)
+        self.assertIn("suggest_evidence_link_candidates_task:", planning_text)
+        self.assertIn("planner:", planning_text)
+        self.assertIn("draft_security_test_plan_task:", planning_text)
+        self.assertIn("reporter:", planning_text)
+        self.assertIn("write_security_test_plan_task:", planning_text)
+        self.assertIn("engagement_refiner:", planning_text)
+        self.assertIn("refine_engagement_template_task:", planning_text)
         self.assertIn("source_intake:", source_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("source_route_resolver:", source_agents_yaml.read_text(encoding="utf-8"))
         self.assertIn("source_component_mapper:", source_agents_yaml.read_text(encoding="utf-8"))

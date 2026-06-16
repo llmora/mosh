@@ -10,7 +10,7 @@ from mosh.evidence_links import EVIDENCE_LINKS_SCHEMA, build_evidence_links, lin
 
 
 class EvidenceLinksTests(unittest.TestCase):
-    def test_build_evidence_links_writes_engagement_root_links_json(self) -> None:
+    def test_build_evidence_links_writes_engagement_plan_links_json(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
             source = Path(directory) / "source"
@@ -68,7 +68,9 @@ class EvidenceLinksTests(unittest.TestCase):
 
             self.assertEqual(result.links_path, links_path(output_root, engagement.id))
             self.assertTrue(result.links_path.exists())
+            self.assertEqual(result.links_path, output_root / engagement.id / "plan" / "links.json")
             self.assertFalse((output_root / engagement.id / "evidence-links").exists())
+            self.assertFalse((output_root / engagement.id / "links.json").exists())
             payload = json.loads(result.links_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema"], EVIDENCE_LINKS_SCHEMA)
             self.assertNotIn("engagement_id", payload)

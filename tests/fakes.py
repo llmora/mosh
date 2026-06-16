@@ -292,6 +292,69 @@ class FakeSecurityPlanningRunner:
         write_security_test_plan(report_dir, target_url, plan, review, accepted=True, iterations=1)
         return FakeSecurityPlanningResult(plan, review, accepted=True, iterations=1)
 
+    def run_engagement(
+        self,
+        output_root: Path,
+        engagement_id: str,
+        report_dir: Path,
+        memory: FileMemory,
+    ):
+        from mosh.evidence_links import build_evidence_links
+
+        self.calls.append(
+            {
+                "target_url": f"engagement:{engagement_id}",
+                "output_root": str(output_root),
+                "report_dir": str(report_dir),
+                "engagement_id": engagement_id,
+            }
+        )
+        links = build_evidence_links(output_root, engagement_id)
+        memory.add_item(
+            "evidence_links",
+            {
+                "path": str(links.links_path),
+                "links": len(links.payload.get("links") or []),
+            },
+            "evidence_linker",
+        )
+        plan = {
+            "title": "Security Test Plan",
+            "scope_summary": "Plan derived from engagement discovery output.",
+            "assumptions": ["Testing is authorised."],
+            "test_hypotheses": [
+                {
+                    "id": "COMBINED-001",
+                    "title": "Source route maps to deployed endpoint",
+                    "surface": "api",
+                    "priority": "high",
+                    "hypothesis": "Linked source and live evidence should guide combined verification.",
+                    "evidence": ["Engagement evidence links"],
+                    "requirements": ["No credentials required for baseline."],
+                    "tools_expected": ["HTTP client", "source inspection"],
+                    "preconditions": ["Discovery has run for attached assets."],
+                    "test_steps": ["Inspect linked source route.", "Verify the corresponding live endpoint safely."],
+                    "expected_secure_behavior": "The endpoint enforces expected controls.",
+                    "interesting_failure_modes": ["Live behavior diverges from source assumptions."],
+                    "safety_notes": ["Stay within attached asset scope."],
+                    "stopping_conditions": ["Stop after bounded verification."],
+                    "execution_mode": "combined",
+                    "evidence_sources": ["live", "source"],
+                    "affected_runtime": [{"method": "GET", "url": "https://app.example.test/api/status"}],
+                    "affected_source": [{"path": "api/status.py", "start_line": 1, "end_line": 1}],
+                    "verification_strategy": "source-guided-live-verification",
+                    "status": "planned",
+                }
+            ],
+            "deferred_test_opportunities": [],
+            "not_in_scope": [],
+            "open_questions": [],
+        }
+        review = {"accepted": True, "summary": "Accepted.", "blocking_findings": [], "non_blocking_suggestions": []}
+        memory.add_item("security_test_plan_final", {"structured": plan, "critic_review": review}, "reporter")
+        write_security_test_plan(report_dir, f"engagement:{engagement_id}", plan, review, accepted=True, iterations=1)
+        return FakeSecurityPlanningResult(plan, review, accepted=True, iterations=1)
+
 
 class FakeSecurityPlanningResult:
     def __init__(self, plan: dict[str, object], review: dict[str, object], accepted: bool, iterations: int) -> None:

@@ -20,6 +20,14 @@ from mosh.crews.discovery.crew import (
 )
 from mosh.docker_tools import DockerToolResult, DockerToolRunner
 from mosh.engagement import load_engagement_file, resolve_target_mapping
+from mosh.engagements import (
+    asset_discovery_dir,
+    engagement_dir,
+    engagement_exists,
+    engagement_plan_dir,
+    load_engagement,
+    record_asset_discovery,
+)
 from mosh.memory import FileMemory
 from mosh.models import Event, MemoryItem, utc_now
 from mosh.scope import report_dir_name, source_report_dir_name
@@ -95,13 +103,45 @@ class SecurityTestingOrchestrator:
     def run(self, url: str | None = None, engagement_file: Path | None = None, *, source: str | None = None) -> Path:
         if not url and not source:
             raise ValueError("Security testing requires a target URL, a source path, or both.")
-        domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
-        discovery_dir = domain_dir / ("discovery" if url else "source-discovery")
-        source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
-        planning_dir = domain_dir / "security-test-planning"
-        report_dir = domain_dir / ("security-testing" if url else "source-security-testing")
-        engagement_path = engagement_file or planning_dir / "engagement_template.yaml"
-        target = url or f"source:{source}"
+        engagement_id = url if url and engagement_exists(self.output_root, url) else None
+        planning_refresh_url = url
+        planning_refresh_source = source
+        live_discovery_asset: tuple[str, str] | None = None
+        source_discovery_asset: tuple[str, str] | None = None
+        if engagement_id:
+            if source:
+                raise ValueError("Engagement testing uses attached assets; attach the source asset instead of passing --source.")
+            engagement = load_engagement(self.output_root, engagement_id)
+            live_asset = next((asset for asset in engagement.assets if asset.type == "live_url"), None)
+            source_asset = next((asset for asset in engagement.assets if asset.type == "source_tree"), None)
+            url = live_asset.locator if live_asset else None
+            source = source_asset.locator if source_asset else None
+            if not url and not source:
+                raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
+            domain_dir = engagement_dir(self.output_root, engagement.id)
+            if live_asset:
+                discovery_dir = asset_discovery_dir(self.output_root, engagement.id, live_asset.id)
+            elif source_asset:
+                discovery_dir = asset_discovery_dir(self.output_root, engagement.id, source_asset.id)
+            source_discovery_dir = (
+                asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset else None
+            )
+            planning_refresh_url = engagement.id
+            planning_refresh_source = None
+            live_discovery_asset = (engagement.id, live_asset.id) if live_asset else None
+            source_discovery_asset = (engagement.id, source_asset.id) if source_asset else None
+            planning_dir = engagement_plan_dir(self.output_root, engagement.id)
+            report_dir = domain_dir / "security-testing"
+            engagement_path = engagement_file or domain_dir / "engagement_template.yaml"
+            target = f"engagement:{engagement.id}"
+        else:
+            domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
+            discovery_dir = domain_dir / ("discovery" if url else "source-discovery")
+            source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
+            planning_dir = domain_dir / "security-test-planning"
+            report_dir = domain_dir / ("security-testing" if url else "source-security-testing")
+            engagement_path = engagement_file or planning_dir / "engagement_template.yaml"
+            target = url or f"source:{source}"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         memory.record_event(
             "orchestrator",
@@ -154,8 +194,9 @@ class SecurityTestingOrchestrator:
                 discovery_dir=discovery_dir,
                 report_dir=report_dir,
                 memory=memory,
-                url=url,
-                source=source,
+                url=planning_refresh_url,
+                source=planning_refresh_source,
+                discovery_asset=live_discovery_asset,
             )
         if source_ready_pending and source:
             memory.record_event(
@@ -180,11 +221,12 @@ class SecurityTestingOrchestrator:
                 output_root=self.output_root,
                 event_sink=self.event_sink,
                 planning_crew_runner=self.planning_crew_runner,
-                discovery_dir=discovery_dir,
+                discovery_dir=source_discovery_dir or discovery_dir,
                 report_dir=report_dir,
                 memory=memory,
-                url=url,
-                source=source,
+                url=planning_refresh_url,
+                source=planning_refresh_source,
+                discovery_asset=source_discovery_asset,
             )
         if not ready_pending and not source_ready_pending:
             memory.record_event(
@@ -859,6 +901,7 @@ def _refresh_discovery_from_security_testing_feedback(
     memory: FileMemory,
     url: str | None,
     source: str | None,
+    discovery_asset: tuple[str, str] | None = None,
 ) -> None:
     feedback_updates = collect_security_testing_discovery_updates(report_dir)
     new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
@@ -869,6 +912,8 @@ def _refresh_discovery_from_security_testing_feedback(
             updates=new_feedback_updates,
             source_report_dir=report_dir,
         )
+        if discovery_asset:
+            record_asset_discovery(output_root, discovery_asset[0], discovery_asset[1], discovery_dir)
         memory.record_event(
             "orchestrator",
             "security_planning_refresh_start",

@@ -16,6 +16,7 @@ from mosh.engagement import (
     resolve_target_mapping,
     write_engagement_template_mapping,
 )
+from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
 from mosh.memory import FileMemory
 from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import (
@@ -29,6 +30,7 @@ from mosh.crews.security_planning.crew import (
     _build_write_refined_engagement_template_tool,
     _build_write_security_test_plan_tool,
     _normalize_security_test_plan,
+    load_engagement_assessment_evidence_bundle,
     load_assessment_evidence_bundle,
     load_discovery_context,
     load_source_discovery_context,
@@ -47,7 +49,9 @@ class FakeCrewAI:
 
 
 class FakeRuntimeCrewAI(FakeCrewAI):
+    planner_inputs: dict[str, object] | None = None
     critic_inputs: dict[str, object] | None = None
+    raise_after_reporter: bool = True
 
     class Process:
         sequential = "sequential"
@@ -80,6 +84,7 @@ class FakeRuntimeCrewAI(FakeCrewAI):
             for task in self.tasks:
                 for tool in task.agent.tools:
                     if tool.name == "submit_security_test_plan":
+                        FakeRuntimeCrewAI.planner_inputs = inputs
                         tool._run(_plan())
                     elif tool.name == "submit_security_test_plan_critique":
                         FakeRuntimeCrewAI.critic_inputs = inputs
@@ -95,7 +100,8 @@ class FakeRuntimeCrewAI(FakeCrewAI):
                             json.loads(inputs["security_test_plan"]),
                             json.loads(inputs["critic_review"]),
                         )
-                        raise RuntimeError("reporter post-processing failed")
+                        if FakeRuntimeCrewAI.raise_after_reporter:
+                            raise RuntimeError("reporter post-processing failed")
             return None
 
     @staticmethod
@@ -440,6 +446,69 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertIn("live_discovery", bundle)
             self.assertEqual(bundle["source_discovery"]["source_index"]["schema"], "mosh.source-index.v1")
 
+    def test_engagement_evidence_bundle_includes_asset_evidence_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_engagement_discovery_pair(output_root, engagement.id, live_asset.id, source_asset.id)
+            evidence_links = {"schema": "mosh.evidence-links.v1", "links": [{"id": "link_1"}]}
+
+            bundle = load_engagement_assessment_evidence_bundle(
+                output_root,
+                engagement.id,
+                evidence_links=evidence_links,
+            )
+
+            self.assertEqual(bundle["engagement"]["id"], engagement.id)
+            self.assertEqual(bundle["asset_evidence"]["live"][0]["asset_id"], live_asset.id)
+            self.assertEqual(bundle["asset_evidence"]["source"][0]["asset_id"], source_asset.id)
+            self.assertEqual(bundle["correlation"]["evidence_links"], evidence_links)
+
+    def test_engagement_planning_runs_linking_before_planner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_engagement_discovery_pair(output_root, engagement.id, live_asset.id, source_asset.id)
+            report_dir = output_root / engagement.id / "plan"
+            memory = FileMemory(report_dir)
+            FakeRuntimeCrewAI.planner_inputs = None
+            FakeRuntimeCrewAI.raise_after_reporter = False
+            config = AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
+
+            try:
+                with patch("mosh.crews.security_planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
+                    with patch(
+                        "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                        return_value=_NoopModelAssistedLinker(),
+                    ):
+                        CrewAISecurityTestPlanningCrewRunner(config).run_engagement(
+                            output_root,
+                            engagement.id,
+                            report_dir,
+                            memory,
+                        )
+            finally:
+                FakeRuntimeCrewAI.raise_after_reporter = True
+
+            self.assertIsNotNone(FakeRuntimeCrewAI.planner_inputs)
+            planner_inputs = FakeRuntimeCrewAI.planner_inputs or {}
+            context = json.loads(planner_inputs["discovery_context"])
+            links = context["correlation"]["evidence_links"]["links"]
+            self.assertEqual(links[0]["basis"], "exact_path")
+            self.assertTrue((output_root / engagement.id / "plan" / "links.json").exists())
+            self.assertTrue((report_dir / "plan.md").exists())
+            self.assertFalse((report_dir / "security_test_plan.md").exists())
+            self.assertTrue((output_root / engagement.id / "engagement_template.yaml").exists())
+            self.assertFalse((report_dir / "engagement_template.yaml").exists())
+
     def test_source_only_plan_normalization_defers_runtime_only_hypotheses(self) -> None:
         plan = {
             "title": "Source plan",
@@ -692,29 +761,39 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertFalse((report_dir / ".crew_config").exists())
 
     def test_security_planning_yaml_keeps_related_agents_and_tasks_together(self) -> None:
-        agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml").read_text(
-            encoding="utf-8"
+        agents = _read_security_planning_yaml(
+            [
+                "planner_agents.yaml",
+                "evidence_linker_agents.yaml",
+                "critic_agents.yaml",
+                "reporter_agents.yaml",
+                "engagement_refiner_agents.yaml",
+            ]
         )
-        tasks = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml").read_text(
-            encoding="utf-8"
+        tasks = _read_security_planning_yaml(
+            [
+                "evidence_linker_tasks.yaml",
+                "planner_tasks.yaml",
+                "critic_tasks.yaml",
+                "reporter_tasks.yaml",
+                "engagement_refiner_tasks.yaml",
+            ]
         )
 
         self.assertIn("planner:", agents)
+        self.assertIn("evidence_linker:", agents)
         self.assertIn("reviewer:", agents)
         self.assertIn("reporter:", agents)
         self.assertIn("engagement_refiner:", agents)
+        self.assertIn("suggest_evidence_link_candidates_task:", tasks)
         self.assertIn("draft_security_test_plan_task:", tasks)
         self.assertIn("critique_security_test_plan_task:", tasks)
         self.assertIn("write_security_test_plan_task:", tasks)
         self.assertIn("refine_engagement_template_task:", tasks)
 
     def test_security_planning_yaml_prioritizes_business_risk(self) -> None:
-        agents = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/agents.yaml").read_text(
-            encoding="utf-8"
-        )
-        tasks = resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/tasks.yaml").read_text(
-            encoding="utf-8"
-        )
+        agents = _read_security_planning_yaml(["planner_agents.yaml"])
+        tasks = _read_security_planning_yaml(["planner_tasks.yaml", "critic_tasks.yaml", "reporter_tasks.yaml"])
 
         self.assertIn("business risks", agents)
         self.assertIn("organisational_risk", tasks)
@@ -728,6 +807,75 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("generic security checklist", tasks)
         self.assertIn("{security_test_plan}", tasks)
         self.assertIn("Do not review the planner's prose summary", tasks)
+
+
+def _read_security_planning_yaml(files: list[str]) -> str:
+    return "\n".join(
+        resources.files(CREW_CONFIG_PACKAGE).joinpath(f"security_planning/{file}").read_text(encoding="utf-8")
+        for file in files
+    )
+
+
+def _write_engagement_discovery_pair(
+    output_root: Path,
+    engagement_id: str,
+    live_asset_id: str,
+    source_asset_id: str,
+) -> None:
+    live_dir = asset_discovery_dir(output_root, engagement_id, live_asset_id)
+    source_dir = asset_discovery_dir(output_root, engagement_id, source_asset_id)
+    live_dir.mkdir(parents=True)
+    source_dir.mkdir(parents=True)
+    (live_dir / "report.md").write_text("# Live Discovery\n", encoding="utf-8")
+    (live_dir / "events.json").write_text("[]", encoding="utf-8")
+    (live_dir / "memory.json").write_text(
+        json.dumps(
+            [
+                {
+                    "kind": "crawled_page",
+                    "content": {
+                        "url": "https://app.example.test/api/status",
+                        "status": 200,
+                        "links": [],
+                        "references": [],
+                        "forms": [],
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+    (source_dir / "events.json").write_text("[]", encoding="utf-8")
+    (source_dir / "memory.json").write_text(
+        json.dumps(
+            [
+                {
+                    "kind": "source_index",
+                    "content": {
+                        "inventory": {
+                            "routes": [
+                                {
+                                    "method": "GET",
+                                    "full_route": "/api/status",
+                                    "path": "api/status.py",
+                                    "line": 1,
+                                }
+                            ]
+                        }
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+class _NoopModelAssistedLinker:
+    model_metadata = {"crew": "security_planning", "agent": "evidence_linker", "model": "noop"}
+
+    def suggest_links(self, context: dict[str, object], tool_context: object | None = None) -> dict[str, object]:
+        return {"links": []}
 
 
 if __name__ == "__main__":

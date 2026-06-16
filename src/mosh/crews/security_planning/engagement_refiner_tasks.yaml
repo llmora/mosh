@@ -30,7 +30,7 @@ refine_engagement_template_task:
     - Keep all required schema keys:
       engagement, targets, contacts, limits, credentials, safe_test_data.
     - Readiness, blockers, missing inputs, and questions belong in
-      security_test_plan.md or preflight.md, not in engagement_template.yaml.
+      plan.md, security_test_plan.md, or preflight.md, not in engagement_template.yaml.
   expected_output: >
     Confirmation that write_refined_engagement_template persisted engagement_template.yaml.
   agent: engagement_refiner

@@ -21,10 +21,8 @@ from mosh.engagements import (
     load_engagement,
     record_asset_discovery,
 )
-from mosh.evidence_links import build_evidence_links
-from mosh.crews.security_planning.evidence_linker import build_model_assisted_linker
 from mosh.scope import report_dir_name, source_report_dir_name
-from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator, run_planning_evidence_linking
 from mosh.crews.security_testing.crew import (
     SecurityTestPreflightResult,
     SecurityTestingOrchestrator,
@@ -70,8 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     link_parser.add_argument("engagement_id", help="Engagement ID")
     link_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
-    plan_parser = subcommands.add_parser("plan-security", help="Create a security test plan from discovery output")
-    plan_parser.add_argument("url", nargs="?", help="Target application URL to plan from")
+    plan_parser = subcommands.add_parser("plan", help="Create a security test plan from discovery output")
+    plan_parser.add_argument("target", nargs="?", help="Engagement ID or target application URL to plan from")
     plan_parser.add_argument("--source", help="Local source tree path to include in planning")
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
@@ -99,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_source_discovery(config, args)
     if args.command == "link":
         return _run_evidence_linking(config, args)
-    if args.command == "plan-security":
+    if args.command == "plan":
         return _run_security_test_planning(config, args)
     if args.command == "test-security":
         return _run_security_testing(config, args)
@@ -263,10 +261,10 @@ def _run_evidence_linking(config: AppConfig, args: argparse.Namespace) -> int:
         )
     )
     try:
-        result = build_evidence_links(
+        result = run_planning_evidence_linking(
+            config,
             Path(args.output_root),
             args.engagement_id,
-            model_assisted_linker=build_model_assisted_linker(config),
         )
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
@@ -283,10 +281,13 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
         event_sink=_print_event,
     )
     try:
-        report_dir = orchestrator.run(args.url, source=args.source)
+        report_dir = orchestrator.run(args.target, source=args.source)
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
+    if getattr(orchestrator, "last_run_skipped", False):
+        print(f"Security test plan is current; no new discovery since previous plan at {report_dir}")
+        return 0
     print(f"Security test plan written to {report_dir}")
     return 0
 
@@ -296,15 +297,11 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     if not args.url and not args.source:
         print("mosh failed: test-security requires a target URL, --source, or both.", file=sys.stderr)
         return 1
-    default_engagement_dir = (
-        output_root / report_dir_name(args.url) / "security-test-planning"
-        if args.url
-        else output_root / source_report_dir_name(args.source) / "security-test-planning"
-    )
+    default_engagement_file = _default_security_testing_engagement_file(output_root, args.url, args.source)
     engagement_file = (
         Path(args.engagement_file)
         if args.engagement_file
-        else default_engagement_dir / "engagement_template.yaml"
+        else default_engagement_file
     )
     orchestrator = SecurityTestingOrchestrator(
         config,
@@ -321,6 +318,17 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     if summary:
         print(summary)
     return 0
+
+
+def _default_security_testing_engagement_file(output_root: Path, target_url: str | None, source: str | None) -> Path:
+    if target_url and engagement_exists(output_root, target_url):
+        return engagement_dir(output_root, target_url) / "engagement_template.yaml"
+    default_engagement_dir = (
+        output_root / report_dir_name(target_url) / "security-test-planning"
+        if target_url
+        else output_root / source_report_dir_name(source) / "security-test-planning"
+    )
+    return default_engagement_dir / "engagement_template.yaml"
 
 
 def _security_testing_blocked_summary(report_dir: Path, engagement_file: Path) -> str:
@@ -373,7 +381,7 @@ def _normalize_url_shorthand(argv: list[str] | None) -> list[str]:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         return args
-    commands = {"engagement", "discover", "discover-source", "link", "plan-security", "test-security", "report"}
+    commands = {"engagement", "discover", "discover-source", "link", "plan", "test-security", "report"}
     if args[0] in commands or args[0].startswith("-"):
         return args
     return ["discover", *args]
