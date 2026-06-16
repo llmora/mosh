@@ -423,6 +423,15 @@ writes one plan under:
 report/<engagement-id>/plan/
 ```
 
+Planning input must be a compact evidence bundle, not a raw dump of discovery
+artifacts. The planner context should omit orchestration events, raw memory
+logs, inline script bodies, and duplicated discovery blobs. It should retain
+security-relevant summaries, structured discovery reports, bounded live routes,
+forms, references, source routes, dependencies, configuration, evidence refs,
+asset-scoped discovery details, and `correlation.evidence_links`. Nested text,
+lists, and mappings must also be bounded so model-generated discovery reports
+cannot cause planning context-window failures.
+
 During the engagement migration, the compatibility commands can still plan from
 legacy URL/source discovery roots. The target architecture is one plan per
 engagement, even when specialist crews have discovered different asset types.
