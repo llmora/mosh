@@ -53,6 +53,16 @@ critique_security_test_plan_task:
     resolve them. Require the planner to move the source-executable portion into
     active test_hypotheses with execution_mode source unless the immediate
     executable test truly requires both live and source evidence.
+    Prefer active hypotheses when credentials, test accounts, safe test data,
+    authorization confirmation, rate-limit permission, or another planned
+    hypothesis are the only missing inputs and the current assets/targets make
+    the work specific and bounded. In that case, the planner should record the
+    missing inputs in requirements/preconditions and safety_notes, and use
+    depends_on for prerequisite planned hypotheses. Do not automatically reject
+    a deferred live opportunity for those inputs when live execution would be
+    costly, state-changing, external-service dependent, or not yet bounded by
+    explicit owner authorization, safe test data, or budget; require the defer
+    reason and requirements_to_proceed to make that boundary concrete.
   expected_output: >
     Confirmation that submit_security_test_plan_critique was called with a
     structured critic decision.

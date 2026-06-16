@@ -66,6 +66,7 @@ draft_security_test_plan_task:
     - affected_source: list of source evidence objects, such as path, start_line, end_line, symbol, and reason, or an empty list
     - verification_strategy: live-verification, source-inspection, source-guided-live-verification, or blocked-pending-inputs
     - source_assessment_type: static-source-inspection, generated-harness, local-runtime-service, dependency-tool-scan, deferred-live-verification, live-verification, or source-guided-live-verification
+    - depends_on: list of hypothesis IDs that should be completed first, or an empty list
     - status: planned
 
     Prefer fewer, higher-value hypotheses over a broad checklist. Use the
@@ -81,12 +82,26 @@ draft_security_test_plan_task:
     - source when source inspection or source tooling is sufficient and no live target is required
     - combined when the immediate executable test must use both source evidence
       and live verification in the same run
-    - deferred when valuable testing is blocked by missing source, URL, credentials, build instructions, authorization, or tooling
+    - deferred only when the work is outside current assessment capability or
+      scope because the needed asset/artifact is not attached, the required
+      source/live target is absent, the required tooling is unsupported, or a
+      separate specialist work stream is genuinely required. A live test may
+      also be deferred when missing authorization, budget, test data, or
+      credentials means the test cannot yet be made specific and safe enough for
+      execution planning.
 
     If the immediate useful work is source inspection/search/harnessing and any
     live verification is optional, credential-gated, or later, make the active
     hypothesis execution_mode source. Put the later live portion in
     test_steps as conditional future verification or in deferred_test_opportunities.
+    Prefer not to use deferred_test_opportunities for in-scope tests merely
+    because credentials, test accounts, safe test data, authorization
+    confirmation, or another planned hypothesis are not ready yet. When the
+    attached assets and targets make the work specific and bounded, keep the
+    hypothesis active and put those inputs in requirements, preconditions,
+    safety_notes, and depends_on so execution preflight can decide whether it is
+    currently runnable. If the missing input prevents a safe, specific test
+    definition, defer only that portion and explain the exact requirement.
 
     Use source_assessment_type deliberately:
     - static-source-inspection when bounded source reads/searches are enough
@@ -97,7 +112,8 @@ draft_security_test_plan_task:
     - dependency-tool-scan when package manifests, lockfiles, Semgrep, Bandit,
       pip-audit, or similar source tools are central to the test
     - deferred-live-verification when a source clue is useful but the test needs
-      a deployment, emulator, simulator, credentials, or external service
+      a deployment, emulator, simulator, external service, explicit budget, or
+      owner authorization that is not available
 
     If source_discovery is present in the assessment evidence bundle, use its
     source_index, route records, component_map, gap_analysis, and evidence_refs
@@ -122,8 +138,13 @@ draft_security_test_plan_task:
     tests. When a generated harness or local runtime would materially improve
     the source-only result, make that explicit in source_assessment_type,
     tools_expected, preconditions, and test_steps. Put live probing into deferred_test_opportunities or a deferred
-    hypothesis with requirements_to_proceed when it requires deployment,
-    credentials, a local run command, emulator, simulator, or container target.
+    hypothesis with requirements_to_proceed only when the live target, deployment,
+    emulator, simulator, source artifact, local run input, or required tooling is
+    absent from the assessment, or when external-service cost, production side
+    effects, or explicit owner authorization requirements mean the live test is
+    not yet bounded enough. If the live target exists and the test can be
+    specified safely without credentials or safe test data, keep it active and
+    let execution preflight block it until those values are supplied.
 
     If discovery identifies adjacent linked applications, external services,
     subdomains, integrations, or other valuable surfaces that should not be part
@@ -134,8 +155,13 @@ draft_security_test_plan_task:
     - evidence: discovery evidence such as URL, reference, script, or report finding
     - organisational_risk: why this surface may matter to the organisation
     - business_value: why testing it could be valuable
-    - defer_reason: why it is not in the immediate executable hypotheses, such as out-of-scope, needs explicit authorization, missing credentials, missing tool capability, or needs a separate crew
-    - requirements_to_proceed: what would be needed to test it later
+    - defer_reason: why it is not in the active hypotheses, such as out-of-scope,
+      missing asset/artifact, unsupported tool capability, absent source/live
+      target, needing a specialist crew, or live testing that is not yet bounded
+      by explicit owner authorization, safe test data, or budget
+    - requirements_to_proceed: what asset, target, tooling, or specialist
+      capability would be needed to test it later, and any authorization, safe
+      test data, or budget needed to bound live execution
     - suggested_next_step: concrete next action to decide whether to include it later
 
     If the previous critic review has blocking findings, address them directly

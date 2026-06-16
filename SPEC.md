@@ -296,8 +296,10 @@ report/<engagement-id>/plan/links.json
 ```
 
 The linker must not duplicate engagement or asset metadata from the directory
-layout, `engagement.json`, or `asset.json`. It should record typed references
-back to asset IDs and their evidence, link every discovered `live_url` and
+layout, `engagement.json`, or `asset.json`, including asset discovery
+timestamps. It should record typed references back to asset IDs and their
+evidence, plus an opaque discovery fingerprint used only to decide whether the
+existing link output is current. It should link every discovered `live_url` and
 `source_tree` pair, score exact and parameterized route matches, cap excessive
 links per asset pair, and record skipped asset IDs with missing or unsupported
 discovery evidence. After deterministic linking, it should run a bounded
@@ -311,13 +313,15 @@ linkage support, not new discovery facts. The model may only relate existing
 evidence reference IDs; invalid or invented refs must be ignored, and candidate
 links must be marked separately from deterministic links. The CLI should emit
 an immediate orchestrator start event for link generation and run the
-planning-owned evidence linker with CrewAI verbose output, matching discovery's
-user-visible execution style. `mosh plan <engagement-id>` must call the same
-linker automatically rather than implementing a second correlation path, then
-pass the resulting payload to the planner as
-`correlation.evidence_links`. If no attached asset has discovery newer than the
-previous engagement plan run, `mosh plan <engagement-id>` must not regenerate
-`plan/links.json` or `plan/plan.md`.
+planning-owned evidence linker with CrewAI verbose output when regeneration is
+needed, matching discovery's user-visible execution style. `mosh plan
+<engagement-id>` must call the same linker automatically rather than
+implementing a second correlation path, then pass the resulting payload to the
+planner as `correlation.evidence_links`. If no attached asset has discovery
+newer than the previous engagement plan run, `mosh plan <engagement-id>` must
+not regenerate `plan/links.json` or `plan/plan.md`. If the plan needs to run
+but `plan/links.json` already matches the current discovery fingerprint, the
+existing links must be reused rather than regenerated.
 
 The planning, testing, and final reporting commands are being migrated to this
 engagement root. During the migration, legacy URL/source compatibility commands
@@ -437,10 +441,24 @@ When an attached source asset is available, work that can be done with bounded
 source reads, source searches, manual route extraction, prompt-template
 extraction, configuration review, dependency inspection, generated harnesses, or
 local source-runtime checks belongs in active `source` hypotheses. Only the
-portion that genuinely needs missing credentials, live authorization, mobile
-binary tooling, external accounts, deployment access, or unavailable build/run
-inputs should remain deferred. The critic must reject accepted plans that defer
-source-executable work solely because additional source inspection is needed.
+portion that genuinely needs an unattached asset/artifact, unsupported tooling,
+mobile binary tooling, external accounts, deployment access, or unavailable
+build/run inputs should remain deferred. The critic must reject accepted plans
+that defer source-executable work solely because additional source inspection is
+needed.
+
+Planning must also distinguish scope/capability blockers from execution
+readiness blockers. Missing credentials, test accounts, safe test data,
+authorization confirmation, rate-limit permission, or completion of another
+planned hypothesis should normally be represented in active hypotheses as
+`requirements`, `preconditions`, `safety_notes`, and `depends_on`, with
+execution preflight responsible for blocking or sequencing tests whose current
+engagement inputs are incomplete. The planner may still defer the live portion
+when the missing input prevents a safe, specific test definition, such as
+external-service cost, production side effects, specialist tooling, or explicit
+owner authorization that must be agreed first. The deterministic critic guard
+must reject source-executable deferrals, but it must not force rejection solely
+for execution-readiness deferrals.
 
 During the engagement migration, the compatibility commands can still plan from
 legacy URL/source discovery roots. The target architecture is one plan per
@@ -879,3 +897,4 @@ At minimum, tests should cover:
 * Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required.
 * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
 * We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
+* As targets grow, we will run out of context very quickly during planning phase - check if planning can be done per asset + links, and what is the difference in output.
