@@ -27,7 +27,7 @@ from mosh.engagements import (
     engagement_plan_dir,
     load_engagement,
 )
-from mosh.evidence_links import EvidenceLinkResult, build_evidence_links
+from mosh.evidence_links import EvidenceLinkResult, build_evidence_links, load_evidence_links_if_current
 from mosh.memory import FileMemory
 from mosh.models import Event, utc_now
 from mosh.scope import report_dir_name, source_report_dir_name
@@ -693,7 +693,9 @@ def _planning_execution_capabilities(*, has_live: bool, has_source: bool) -> dic
         "planning_rules": [
             "Do not defer work solely because source inspection, source search, manual grep, route extraction, or prompt extraction is needed when source is available.",
             "Discovery extractor limitations are not execution blockers if bounded source-testing tools can resolve the gap.",
-            "Plan the source-executable portion as an active source hypothesis; keep only the genuinely blocked live, mobile, credential, or external-service portion deferred.",
+            "Prefer active hypotheses for in-scope tests when the attached assets and targets make the work specific and bounded, even if credentials or safe test data will be checked later by execution preflight.",
+            "Represent normal execution readiness as requirements, preconditions, safety notes, and depends_on entries; defer only the portion that cannot yet be made specific, safe, or authorised enough to plan.",
+            "Plan the source-executable portion as an active source hypothesis; keep only the genuinely absent asset, unsupported capability, out-of-scope, mobile-binary, or external-service portion deferred.",
         ],
     }
 
@@ -904,6 +906,29 @@ def run_planning_evidence_linking(
     *,
     memory: FileMemory | None = None,
 ) -> EvidenceLinkResult:
+    current = load_evidence_links_if_current(output_root, engagement_id)
+    if current is not None:
+        if memory is not None:
+            memory.add_item(
+                "evidence_links",
+                {
+                    "path": str(current.links_path),
+                    "links": len(current.payload.get("links") or []),
+                    "pairs": len(current.payload.get("pairs") or []),
+                    "reused": True,
+                },
+                "evidence_linker",
+            )
+            memory.record_event(
+                "evidence_linker",
+                "skipped_current",
+                "Evidence links are current; reusing existing links.json",
+                {
+                    "path": str(current.links_path),
+                    "links": len(current.payload.get("links") or []),
+                },
+            )
+        return current
     if memory is not None:
         memory.record_event(
             "evidence_linker",
@@ -956,6 +981,8 @@ def _engagement_plan_is_current(output_root: Path, engagement: Engagement, repor
         or not (report_dir / "links.json").exists()
         or not (engagement_dir(output_root, engagement.id) / "engagement_template.yaml").exists()
     ):
+        return False
+    if load_evidence_links_if_current(output_root, engagement.id) is None:
         return False
     latest_discovered = _parse_timestamp(latest_discovered_at)
     previous_discovered = _parse_timestamp(_latest_plan_discovery_timestamp(report_dir))
@@ -1348,14 +1375,14 @@ def _apply_deterministic_review_guards(
     plan: dict[str, Any],
     assessment_context: dict[str, Any],
 ) -> dict[str, Any]:
-    source_deferred_findings = _source_actionable_deferred_findings(plan, assessment_context)
-    if not source_deferred_findings:
+    guard_findings = _source_actionable_deferred_findings(plan, assessment_context)
+    if not guard_findings:
         return review
 
     guarded = dict(review)
     blocking_findings = [item for item in _list(guarded.get("blocking_findings")) if isinstance(item, dict)]
     existing_ids = {_text(item.get("id")) for item in blocking_findings}
-    for finding in source_deferred_findings:
+    for finding in guard_findings:
         if _text(finding.get("id")) not in existing_ids:
             blocking_findings.append(finding)
     guarded["blocking_findings"] = blocking_findings
@@ -1396,8 +1423,9 @@ def _source_actionable_deferred_findings(
                     "when the immediate work is source-only, or `combined` only when the same executable test "
                     "must use both live and source evidence. Use source_assessment_type such as "
                     "`static-source-inspection`, `generated-harness`, or `local-runtime-service`, populate "
-                    "affected_source, and keep only genuinely blocked live, mobile, credential, deployment, "
-                    "or external-service work in deferred_test_opportunities."
+                    "affected_source, and keep only genuinely absent asset, unsupported capability, "
+                    "out-of-scope, mobile-binary, deployment, or external-service work in "
+                    "deferred_test_opportunities."
                 ),
             }
         )
@@ -1411,25 +1439,7 @@ def _deferred_opportunity_is_source_actionable(opportunity: dict[str, Any]) -> b
     ).lower()
     if not action_text:
         return False
-    hard_blockers = (
-        "apk",
-        "ipa",
-        "app store",
-        "google play",
-        "decompil",
-        "emulator",
-        "simulator",
-        "physical device",
-        "jailbroken",
-        "mobile app security testing",
-        "api key",
-        "secret",
-        ".env",
-        "credential",
-        "production data",
-        "external account",
-    )
-    if any(blocker in action_text for blocker in hard_blockers):
+    if _has_hard_defer_blocker(action_text):
         return False
     source_actions = (
         "source inspection",
@@ -1448,6 +1458,31 @@ def _deferred_opportunity_is_source_actionable(opportunity: dict[str, Any]) -> b
     has_source_action = any(marker in action_text for marker in source_actions)
     has_source_file = any(suffix in action_text for suffix in (".js", ".ts", ".py", ".kt", ".swift", ".java", ".go", ".rb", ".php"))
     return has_source_action and has_source_file
+
+
+def _has_hard_defer_blocker(text: str) -> bool:
+    hard_blockers = (
+        "apk",
+        "ipa",
+        "app store",
+        "google play",
+        "decompil",
+        "emulator",
+        "simulator",
+        "physical device",
+        "jailbroken",
+        "jailbreak",
+        "mobile app security testing",
+        "production data",
+        "external account",
+        "apple developer account",
+        "google play console",
+        "app store connect",
+        "missing live url",
+        "missing source",
+        "not attached",
+    )
+    return any(blocker in text for blocker in hard_blockers)
 
 
 def _build_write_security_test_plan_tool(crewai: Any, state: SecurityTestPlanningState):
@@ -1651,6 +1686,7 @@ def _normalize_security_test_plan(plan: dict[str, Any], assessment_context: dict
             hypothesis.get("source_assessment_type"),
             _default_source_assessment_type(hypothesis),
         )
+        hypothesis["depends_on"] = _string_list(hypothesis.get("depends_on"))
         hypotheses.append(hypothesis)
     normalized["test_hypotheses"] = hypotheses
     normalized.setdefault("deferred_test_opportunities", [])

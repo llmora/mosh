@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
-from mosh.evidence_links import EVIDENCE_LINKS_SCHEMA, build_evidence_links, links_path
+from mosh.evidence_links import (
+    EVIDENCE_LINKS_SCHEMA,
+    build_evidence_links,
+    discovery_fingerprint,
+    links_path,
+    load_evidence_links_if_current,
+)
 
 
 class EvidenceLinksTests(unittest.TestCase):
@@ -73,8 +79,10 @@ class EvidenceLinksTests(unittest.TestCase):
             self.assertFalse((output_root / engagement.id / "links.json").exists())
             payload = json.loads(result.links_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema"], EVIDENCE_LINKS_SCHEMA)
+            self.assertTrue(payload["discovery_fingerprint"].startswith("sha256:"))
             self.assertNotIn("engagement_id", payload)
             self.assertNotIn("assets", payload)
+            self.assertNotIn("discovered_at", json.dumps(payload))
             self.assertEqual(len(payload["links"]), 2)
             bases = {link["basis"] for link in payload["links"]}
             self.assertEqual(bases, {"exact_path", "parameterized_path"})
@@ -148,6 +156,76 @@ class EvidenceLinksTests(unittest.TestCase):
             self.assertEqual(result.payload["pairs"][0]["deterministic_links"], 0)
             self.assertEqual(result.payload["pairs"][0]["model_candidate_links"], 1)
             self.assertEqual(result.payload["model_assisted"]["model"], "fake-linker")
+
+    def test_load_evidence_links_if_current_invalidates_when_discovery_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            live_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            _write_memory(
+                live_dir,
+                [
+                    {
+                        "kind": "crawled_page",
+                        "content": {
+                            "url": "https://app.example.test/api/status",
+                            "status": 200,
+                            "links": [],
+                            "references": [],
+                            "forms": [],
+                        },
+                    }
+                ],
+            )
+            _write_memory(
+                asset_discovery_dir(output_root, engagement.id, source_asset.id),
+                [
+                    {
+                        "kind": "source_index",
+                        "content": {
+                            "inventory": {
+                                "routes": [
+                                    {
+                                        "method": "GET",
+                                        "full_route": "/api/status",
+                                        "path": "api/status.py",
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            )
+
+            result = build_evidence_links(output_root, engagement.id)
+            original_fingerprint = result.payload["discovery_fingerprint"]
+
+            current = load_evidence_links_if_current(output_root, engagement.id)
+            self.assertIsNotNone(current)
+            self.assertEqual(current.payload["discovery_fingerprint"], original_fingerprint)
+
+            _write_memory(
+                live_dir,
+                [
+                    {
+                        "kind": "crawled_page",
+                        "content": {
+                            "url": "https://app.example.test/api/status",
+                            "status": 200,
+                            "links": ["https://app.example.test/api/users"],
+                            "references": [],
+                            "forms": [],
+                        },
+                    }
+                ],
+            )
+
+            self.assertNotEqual(discovery_fingerprint(output_root, engagement.id), original_fingerprint)
+            self.assertIsNone(load_evidence_links_if_current(output_root, engagement.id))
 
     def test_build_evidence_links_links_every_live_source_pair_and_caps_each_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
