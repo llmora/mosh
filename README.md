@@ -267,6 +267,10 @@ Planning uses a compact evidence bundle instead of passing raw discovery memory
 or orchestration logs to the model. It keeps the discovery summaries, bounded
 live routes/forms/references, source routes/dependencies/configuration, asset
 details, and source/live evidence links needed for cross-asset hypotheses.
+When source is attached, source-inspection work such as bounded reads/searches,
+manual route extraction, prompt-template review, and small harnesses should be
+planned as active source tests rather than deferred just because discovery did
+not extract them automatically.
 
 For legacy URL planning:
 
