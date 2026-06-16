@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlparse
 from mosh.engagements import (
     EngagementAsset,
     asset_discovery_dir,
-    engagement_dir,
+    engagement_plan_dir,
     load_engagement,
 )
 from mosh.models import utc_now
@@ -73,7 +73,7 @@ class EvidenceLinkerToolContext:
 
 
 def links_path(output_root: Path, engagement_id: str) -> Path:
-    return engagement_dir(output_root, engagement_id) / "links.json"
+    return engagement_plan_dir(output_root, engagement_id) / "links.json"
 
 
 def build_evidence_links(

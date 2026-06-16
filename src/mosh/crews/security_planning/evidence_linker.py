@@ -50,7 +50,7 @@ class CrewAIModelAssistedEvidenceLinker:
 
         crewai = _load_crewai()
         state = EvidenceLinkerState(context=context, tool_context=tool_context)
-        crew = _build_evidence_linker_crew(crewai, self.config, state)
+        crew = _build_planning_evidence_linker_crew(crewai, self.config, state)
         crew.crew().kickoff(inputs={"link_context": json.dumps(context, sort_keys=True)})
         if state.candidates is None:
             raise RuntimeError("Evidence linker did not submit candidate links.")
@@ -61,7 +61,7 @@ def build_model_assisted_linker(config: AppConfig) -> CrewAIModelAssistedEvidenc
     return CrewAIModelAssistedEvidenceLinker(config)
 
 
-def _build_evidence_linker_crew(crewai: Any, config: AppConfig, state: EvidenceLinkerState):
+def _build_planning_evidence_linker_crew(crewai: Any, config: AppConfig, state: EvidenceLinkerState):
     submit_tool = _build_submit_evidence_link_candidates_tool(crewai, state)
     load_ref_tool = _build_load_evidence_ref_tool(crewai, state)
     source_search_tool = _build_source_search_tool(crewai, state)

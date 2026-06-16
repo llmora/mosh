@@ -15,6 +15,12 @@ draft_security_test_plan_task:
     Discovery context JSON:
     {discovery_context}
 
+    For engagement-backed planning, review all asset-scoped evidence in
+    asset_evidence and use correlation.evidence_links as source/live linkage
+    input. Deterministic links are stronger than model-assisted candidates, but
+    candidate links may still justify combined hypotheses when the rationale is
+    concrete and useful for later verification.
+
     Previous plan JSON, if any:
     {previous_plan}
 

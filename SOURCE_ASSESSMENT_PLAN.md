@@ -40,7 +40,7 @@ Engagement-backed live discovery:
 
 ```text
 engagement create -> engagement attach URL -> discover ENGAGEMENT
--> plan-security ENGAGEMENT -> test-security ENGAGEMENT -> report ENGAGEMENT
+-> plan ENGAGEMENT -> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
 ### Source Only
@@ -49,7 +49,7 @@ Engagement-backed source discovery:
 
 ```text
 engagement create -> engagement attach SOURCE -> discover ENGAGEMENT
--> plan-security ENGAGEMENT -> test-security ENGAGEMENT -> report ENGAGEMENT
+-> plan ENGAGEMENT -> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
 `SOURCE` may be a local path at first. Repository URL support can follow once
@@ -66,7 +66,7 @@ Live-first assessment:
 
 ```text
 engagement create -> engagement attach URL -> discover ENGAGEMENT
-attach SOURCE -> discover ENGAGEMENT -> link evidence -> re-plan deltas
+attach SOURCE -> discover ENGAGEMENT -> plan ENGAGEMENT
 -> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
@@ -74,7 +74,7 @@ Source-first assessment:
 
 ```text
 engagement create -> engagement attach SOURCE -> discover ENGAGEMENT
-attach URL -> discover ENGAGEMENT -> link evidence -> re-plan deltas
+attach URL -> discover ENGAGEMENT -> plan ENGAGEMENT
 -> test-security ENGAGEMENT -> report ENGAGEMENT
 ```
 
@@ -82,8 +82,7 @@ Both-provided assessment:
 
 ```text
 engagement create -> attach URL and SOURCE -> discover ENGAGEMENT
-link evidence as soon as both sides have useful facts
-plan-security ENGAGEMENT
+plan ENGAGEMENT
 test-security ENGAGEMENT
 report ENGAGEMENT
 ```
@@ -107,10 +106,11 @@ Proposed outputs:
 
 ```text
 report/<engagement-id>/engagement.json
+report/<engagement-id>/engagement_template.yaml
 report/<engagement-id>/assets/<asset-id>/asset.json
 report/<engagement-id>/assets/<asset-id>/discovery/
-report/<engagement-id>/links.json
-report/<engagement-id>/security-test-planning/
+report/<engagement-id>/plan/links.json
+report/<engagement-id>/plan/plan.md
 report/<engagement-id>/security-testing/
 report/<engagement-id>/final-report/
 ```
@@ -129,8 +129,9 @@ refs, and fetch safe metadata for already discovered live refs. These tool
 observations support correlation only and should not become a second discovery
 artifact. The temporary command should print an immediate orchestrator event
 and use verbose CrewAI output for the model phase, matching discovery's
-visibility. Engagement-backed planning should later invoke the same linker
-automatically.
+visibility. Engagement-backed `mosh plan <engagement-id>` invokes the same
+linker automatically as the first planning stage, unless no attached asset has
+discovery newer than the previous plan run.
 
 ## New Crews
 
@@ -388,7 +389,7 @@ mosh link eng_a1b2c3d4
 Then migrate planning, testing, and reporting to the engagement ID:
 
 ```bash
-mosh plan-security eng_a1b2c3d4
+mosh plan eng_a1b2c3d4
 mosh test-security eng_a1b2c3d4
 mosh report eng_a1b2c3d4
 ```
@@ -430,18 +431,21 @@ mosh discover eng_a1b2c3d4 --asset asset_repo_1
 8a. Done: Add engagement manifests, generic asset attachment, asset type
     inference, and engagement-backed discovery dispatch with `--asset` and
     `--refresh`.
-9. Migrate planning to consume engagement asset discovery and write one
+9. Done, stage 2: Migrate planning to consume engagement asset discovery,
+   run evidence linking as the first planning stage, and write one
    engagement-level security plan.
-10. Migrate security testing to write one engagement-level result set while
-    keeping source, live, combined, and future mobile executors as internal
-    routing choices.
+10. Done, stage 1: `test-security <engagement-id>` reads the engagement-root
+    template and engagement plan, then writes one engagement-level result set
+    while keeping source, live, combined, and future mobile executors as
+    internal routing choices.
 11. Done, stage 1: Add source-live evidence linking for combined assessments
-   with `mosh link <engagement-id>` writing `report/<engagement-id>/links.json`.
+   with `mosh link <engagement-id>` writing `report/<engagement-id>/plan/links.json`.
    The command includes deterministic links and planning-model-assisted
    candidate links, with bounded read-only linkage tools for inspecting
-   existing refs. A later increment should run this automatically when both live
-   and source evidence are present, and planning should consume the current
-   links without requiring a separate user-visible correlation command.
+   existing refs. `mosh plan <engagement-id>` now runs the same linkage stage
+   automatically, passes current links to planning without requiring a separate
+   user-visible correlation command, and skips both linking and planning when
+   discovery has not changed since the previous plan run.
 12. Extend final reporting bundle and renderer with source evidence, source
     remediation guidance, and evidence labels.
 13. Add repository URL materialization after local path source assessment is
