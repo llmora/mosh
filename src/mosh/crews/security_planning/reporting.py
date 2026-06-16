@@ -117,6 +117,7 @@ def _add_hypotheses(lines: list[str], value: Any) -> None:
                 f"- Priority: `{_text(hypothesis.get('priority')) or 'unknown'}`",
                 f"- Status: `{_text(hypothesis.get('status')) or 'planned'}`",
                 f"- Execution mode: `{_text(hypothesis.get('execution_mode')) or 'live'}`",
+                f"- Execution readiness: `{_text(hypothesis.get('execution_readiness')) or 'ready'}`",
                 f"- Evidence sources: `{', '.join(_string_list(hypothesis.get('evidence_sources'))) or 'live'}`",
                 f"- Verification strategy: `{_text(hypothesis.get('verification_strategy')) or 'live-verification'}`",
                 f"- Source assessment type: `{_text(hypothesis.get('source_assessment_type')) or 'live-verification'}`",
@@ -131,6 +132,7 @@ def _add_hypotheses(lines: list[str], value: Any) -> None:
         _add_bullets(lines, "Affected Runtime", _format_structured_items(hypothesis.get("affected_runtime")))
         _add_bullets(lines, "Affected Source", _format_structured_items(hypothesis.get("affected_source")))
         _add_bullets(lines, "Dependencies", hypothesis.get("depends_on"))
+        _add_bullets(lines, "Readiness Blockers", hypothesis.get("readiness_blockers"))
         _add_bullets(lines, "Requirements", hypothesis.get("requirements"))
         _add_bullets(lines, "Tools Expected", hypothesis.get("tools_expected"))
         _add_bullets(lines, "Preconditions", hypothesis.get("preconditions"))

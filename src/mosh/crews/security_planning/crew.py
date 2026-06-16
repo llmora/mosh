@@ -1687,6 +1687,8 @@ def _normalize_security_test_plan(plan: dict[str, Any], assessment_context: dict
             _default_source_assessment_type(hypothesis),
         )
         hypothesis["depends_on"] = _string_list(hypothesis.get("depends_on"))
+        hypothesis["readiness_blockers"] = _normalized_readiness_blockers(hypothesis)
+        hypothesis["execution_readiness"] = _normalized_execution_readiness(hypothesis)
         hypotheses.append(hypothesis)
     normalized["test_hypotheses"] = hypotheses
     normalized.setdefault("deferred_test_opportunities", [])
@@ -1787,6 +1789,61 @@ def _normalized_source_assessment_type(value: Any, default: str) -> str:
         "source-guided-live-verification",
     }
     return assessment_type if assessment_type in valid else default
+
+
+def _normalized_execution_readiness(hypothesis: dict[str, Any]) -> str:
+    mode = _text(hypothesis.get("execution_mode")).lower()
+    if mode == "deferred":
+        return "deferred"
+    readiness = _text(hypothesis.get("execution_readiness")).lower().replace("-", "_")
+    valid = {"ready", "preflight_blocked", "depends_on", "deferred"}
+    if readiness in valid:
+        return readiness
+    if _string_list(hypothesis.get("depends_on")):
+        return "depends_on"
+    if _normalized_readiness_blockers(hypothesis):
+        return "preflight_blocked"
+    return "ready"
+
+
+def _normalized_readiness_blockers(hypothesis: dict[str, Any]) -> list[str]:
+    explicit = _string_list(hypothesis.get("readiness_blockers"))
+    if explicit:
+        return explicit
+    blockers: list[str] = []
+    readiness_items = [
+        item.lower()
+        for key in ("requirements", "preconditions", "safety_notes")
+        for item in _string_list(hypothesis.get(key))
+    ]
+    if _has_readiness_marker(readiness_items, ("credential", "test account", "jwt", "token")):
+        blockers.append("Credential or test account material must be provided before execution.")
+    if _has_readiness_marker(readiness_items, ("authorization", "authorisation", "permission", "approval")):
+        blockers.append("Explicit authorization or permission must be confirmed before execution.")
+    if _has_readiness_marker(readiness_items, ("safe test data", "synthetic", "test customer", "customer id", "activation code")):
+        blockers.append("Safe test data must be provided before execution.")
+    if _has_readiness_marker(readiness_items, ("budget", "billing", "cost ceiling", "cost limit")):
+        blockers.append("Budget or cost limits must be agreed before execution.")
+    return blockers
+
+
+def _has_readiness_marker(items: list[str], markers: tuple[str, ...]) -> bool:
+    negative_markers = (
+        "no credentials required",
+        "no credential required",
+        "no test account required",
+        "does not require authentication",
+        "no authorization required",
+        "no authorisation required",
+        "no safe test data required",
+        "no budget required",
+    )
+    for item in items:
+        if any(marker in item for marker in negative_markers):
+            continue
+        if any(marker in item for marker in markers):
+            return True
+    return False
 
 
 def _default_source_assessment_type(hypothesis: dict[str, Any]) -> str:

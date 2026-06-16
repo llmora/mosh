@@ -31,7 +31,10 @@ critique_security_test_plan_task:
     crews and every hypothesis includes requirements, tools_expected,
     organisational_risk, business_value, execution_mode, evidence_sources,
     affected_runtime, affected_source, verification_strategy, and
-    source_assessment_type. Reject if credentials,
+    source_assessment_type. Each hypothesis must also include
+    execution_readiness and readiness_blockers so the execution crew can
+    distinguish ready tests from tests that are planned but preflight-blocked.
+    Reject if credentials,
     authorization, test data, safety limits, evidence, expected secure
     behaviour, or business-risk rationale are missing where needed. Reject plans
     that read like a generic security checklist instead of a prioritized plan
@@ -63,6 +66,15 @@ critique_security_test_plan_task:
     costly, state-changing, external-service dependent, or not yet bounded by
     explicit owner authorization, safe test data, or budget; require the defer
     reason and requirements_to_proceed to make that boundary concrete.
+    Missing credentials, authorization, safe test data, target mapping, budget,
+    or prerequisite work are not blocking reviewer findings when the hypothesis
+    is otherwise specific and the missing inputs are recorded in requirements,
+    preconditions, safety_notes, depends_on, execution_readiness, and
+    readiness_blockers. Treat those as expected execution preflight metadata.
+    Reject plans that duplicate the same concrete test in active hypotheses and
+    deferred_test_opportunities; require the planner to keep the active
+    preflight_blocked/depends_on hypothesis and remove or narrow the deferred
+    duplicate.
   expected_output: >
     Confirmation that submit_security_test_plan_critique was called with a
     structured critic decision.
