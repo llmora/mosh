@@ -175,6 +175,8 @@ def _plan() -> dict[str, object]:
                 "verification_strategy": "live-verification",
                 "source_assessment_type": "live-verification",
                 "depends_on": ["AUTH-001"],
+                "execution_readiness": "depends_on",
+                "readiness_blockers": ["Complete AUTH-001 and provide valid credentials for authenticated baseline."],
                 "status": "planned",
             }
         ],
@@ -216,11 +218,14 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("#### Business Value", markdown)
         self.assertIn("before deeper API testing", markdown)
         self.assertIn("Execution mode: `live`", markdown)
+        self.assertIn("Execution readiness: `depends_on`", markdown)
         self.assertIn("Evidence sources: `live`", markdown)
         self.assertIn("Verification strategy: `live-verification`", markdown)
         self.assertIn("Source assessment type: `live-verification`", markdown)
         self.assertIn("#### Dependencies", markdown)
         self.assertIn("AUTH-001", markdown)
+        self.assertIn("#### Readiness Blockers", markdown)
+        self.assertIn("Complete AUTH-001 and provide valid credentials", markdown)
         self.assertIn("#### Affected Runtime", markdown)
         self.assertIn("GET https://api.example.test/api/private/auth/me", markdown)
         self.assertIn("## Deferred Test Opportunities", markdown)
@@ -742,6 +747,48 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertEqual(hypothesis["source_assessment_type"], "deferred-live-verification")
         self.assertEqual(hypothesis["evidence_sources"], ["source"])
         self.assertIn("Provide a live URL", hypothesis["requirements_to_proceed"][0])
+        self.assertEqual(hypothesis["execution_readiness"], "deferred")
+
+    def test_plan_normalization_marks_preflight_blocked_hypotheses(self) -> None:
+        plan = {
+            "title": "Live plan",
+            "test_hypotheses": [
+                {
+                    "id": "AUTH-LIVE",
+                    "title": "Credentialed authorization check",
+                    "execution_mode": "live",
+                    "requirements": [
+                        "Valid backoffice JWT token.",
+                        "Written authorization from the system owner.",
+                        "Safe test customer IDs from two tenants.",
+                    ],
+                    "preconditions": ["Cost ceiling agreed before execution."],
+                },
+                {
+                    "id": "FOLLOW-UP",
+                    "title": "Follow-up after auth review",
+                    "execution_mode": "combined",
+                    "depends_on": ["AUTH-LIVE"],
+                },
+            ],
+        }
+        context = {
+            "schema": "mosh.assessment-evidence-bundle.v1",
+            "live_discovery": {"available": True},
+            "source_discovery": {"available": True},
+        }
+
+        normalized = _normalize_security_test_plan(plan, context)
+        auth_live = normalized["test_hypotheses"][0]
+        follow_up = normalized["test_hypotheses"][1]
+
+        self.assertEqual(auth_live["execution_readiness"], "preflight_blocked")
+        self.assertIn("Credential or test account material", "\n".join(auth_live["readiness_blockers"]))
+        self.assertIn("Explicit authorization", "\n".join(auth_live["readiness_blockers"]))
+        self.assertIn("Safe test data", "\n".join(auth_live["readiness_blockers"]))
+        self.assertIn("Budget", "\n".join(auth_live["readiness_blockers"]))
+        self.assertEqual(follow_up["execution_readiness"], "depends_on")
+        self.assertEqual(follow_up["readiness_blockers"], [])
 
     def test_source_plan_normalization_classifies_dynamic_assessment_shapes(self) -> None:
         plan = {
@@ -1016,6 +1063,10 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("Discovery extractor gaps are not blockers", tasks)
         self.assertIn("credentials, test accounts, safe test data", tasks)
         self.assertIn("depends_on", tasks)
+        self.assertIn("execution_readiness", tasks)
+        self.assertIn("readiness_blockers", tasks)
+        self.assertIn("preflight_blocked", tasks)
+        self.assertIn("not blocking reviewer findings", tasks)
         self.assertIn("Planning/execution capability context JSON", tasks)
         self.assertIn("source-executable portion", tasks)
         self.assertIn("{security_test_plan}", tasks)

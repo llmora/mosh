@@ -279,10 +279,11 @@ not extract them automatically.
 Planning prefers to keep in-scope tests active when credentials, safe test
 data, authorization confirmation, or another planned test are normal execution
 readiness inputs. Those appear as requirements, preconditions, or dependencies
-and are handled by execution preflight. Deferred opportunities are still valid
-when the missing input means the live test cannot yet be bounded safely, such as
-external-service cost, production side effects, specialist tooling, or explicit
-owner authorization that must be agreed first.
+with `execution_readiness` set to `preflight_blocked` or `depends_on`, plus
+concrete `readiness_blockers`, and are handled by execution preflight. Deferred
+opportunities are still valid when the missing input means the live test cannot
+yet be bounded safely, such as external-service cost, production side effects,
+specialist tooling, or explicit owner authorization that must be agreed first.
 
 For legacy URL planning:
 

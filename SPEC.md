@@ -451,10 +451,15 @@ Planning must also distinguish scope/capability blockers from execution
 readiness blockers. Missing credentials, test accounts, safe test data,
 authorization confirmation, rate-limit permission, or completion of another
 planned hypothesis should normally be represented in active hypotheses as
-`requirements`, `preconditions`, `safety_notes`, and `depends_on`, with
-execution preflight responsible for blocking or sequencing tests whose current
-engagement inputs are incomplete. The planner may still defer the live portion
-when the missing input prevents a safe, specific test definition, such as
+`requirements`, `preconditions`, `safety_notes`, `depends_on`,
+`execution_readiness`, and `readiness_blockers`, with execution preflight
+responsible for blocking or sequencing tests whose current engagement inputs are
+incomplete. Valid `execution_readiness` values are `ready`,
+`preflight_blocked`, `depends_on`, and `deferred`. Missing credentials,
+authorization, safe test data, target mapping, budget, or prerequisite work are
+not reviewer-blocking defects when they are explicitly represented on an
+otherwise specific hypothesis. The planner may still defer the live portion when
+the missing input prevents a safe, specific test definition, such as
 external-service cost, production side effects, specialist tooling, or explicit
 owner authorization that must be agreed first. The deterministic critic guard
 must reject source-executable deferrals, but it must not force rejection solely

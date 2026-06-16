@@ -67,6 +67,10 @@ draft_security_test_plan_task:
     - verification_strategy: live-verification, source-inspection, source-guided-live-verification, or blocked-pending-inputs
     - source_assessment_type: static-source-inspection, generated-harness, local-runtime-service, dependency-tool-scan, deferred-live-verification, live-verification, or source-guided-live-verification
     - depends_on: list of hypothesis IDs that should be completed first, or an empty list
+    - execution_readiness: ready, preflight_blocked, depends_on, or deferred
+    - readiness_blockers: list of concrete inputs that execution preflight must
+      verify before running, such as credentials, authorization, safe test data,
+      budget, target mapping, or completion of depends_on hypotheses
     - status: planned
 
     Prefer fewer, higher-value hypotheses over a broad checklist. Use the
@@ -102,6 +106,16 @@ draft_security_test_plan_task:
     safety_notes, and depends_on so execution preflight can decide whether it is
     currently runnable. If the missing input prevents a safe, specific test
     definition, defer only that portion and explain the exact requirement.
+    Use execution_readiness to keep this distinction clear:
+    - ready: the test appears runnable once ordinary engagement safety limits are confirmed
+    - preflight_blocked: the test is planned and specific, but execution preflight
+      must obtain credentials, authorization, safe data, target mapping, or budget
+    - depends_on: the test is planned and specific, but should wait for the
+      listed depends_on hypotheses
+    - deferred: use only with execution_mode deferred
+    For preflight_blocked and depends_on hypotheses, keep the test in
+    test_hypotheses rather than deferred_test_opportunities, and populate
+    readiness_blockers with the concrete missing inputs.
 
     Use source_assessment_type deliberately:
     - static-source-inspection when bounded source reads/searches are enough
@@ -163,6 +177,12 @@ draft_security_test_plan_task:
       capability would be needed to test it later, and any authorization, safe
       test data, or budget needed to bound live execution
     - suggested_next_step: concrete next action to decide whether to include it later
+
+    Do not duplicate the same test in both test_hypotheses and
+    deferred_test_opportunities. If a live portion is already represented as an
+    active preflight_blocked or depends_on hypothesis, remove the corresponding
+    deferred opportunity or narrow it to only the genuinely unplanned future
+    scope.
 
     If the previous critic review has blocking findings, address them directly
     in the revised plan.
