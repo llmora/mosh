@@ -299,7 +299,7 @@ class FakeSecurityPlanningRunner:
         report_dir: Path,
         memory: FileMemory,
     ):
-        from mosh.evidence_links import build_evidence_links
+        from mosh.evidence_links import build_evidence_links, load_evidence_links_if_current
 
         self.calls.append(
             {
@@ -309,7 +309,7 @@ class FakeSecurityPlanningRunner:
                 "engagement_id": engagement_id,
             }
         )
-        links = build_evidence_links(output_root, engagement_id)
+        links = load_evidence_links_if_current(output_root, engagement_id) or build_evidence_links(output_root, engagement_id)
         memory.add_item(
             "evidence_links",
             {

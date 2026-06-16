@@ -20,6 +20,7 @@ from mosh.models import utc_now
 
 
 EVIDENCE_LINKS_SCHEMA = "mosh.evidence-links.v1"
+EVIDENCE_LINKS_DISCOVERY_FINGERPRINT_SCHEMA = "mosh.evidence-links.discovery-fingerprint.v1"
 DEFAULT_MAX_LINKS_PER_ASSET_PAIR = 500
 MODEL_CONTEXT_MAX_ROUTES_PER_PAIR = 120
 MODEL_CONTEXT_MAX_ENDPOINTS_PER_PAIR = 120
@@ -74,6 +75,26 @@ class EvidenceLinkerToolContext:
 
 def links_path(output_root: Path, engagement_id: str) -> Path:
     return engagement_plan_dir(output_root, engagement_id) / "links.json"
+
+
+def discovery_fingerprint(output_root: Path, engagement_id: str) -> str:
+    engagement = load_engagement(output_root, engagement_id)
+    return _discovery_fingerprint_for_engagement(output_root, engagement)
+
+
+def load_evidence_links_if_current(output_root: Path, engagement_id: str) -> EvidenceLinkResult | None:
+    path = links_path(output_root, engagement_id)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != EVIDENCE_LINKS_SCHEMA:
+        return None
+    if payload.get("discovery_fingerprint") != discovery_fingerprint(output_root, engagement_id):
+        return None
+    return EvidenceLinkResult(links_path=path, payload=payload)
 
 
 def build_evidence_links(
@@ -167,6 +188,7 @@ def build_evidence_links(
 
     payload = {
         "schema": EVIDENCE_LINKS_SCHEMA,
+        "discovery_fingerprint": _discovery_fingerprint_for_engagement(output_root, engagement),
         "generated_at": utc_now(),
         "pairs": pair_summaries,
         "links": _dedupe_and_sort_links(link_records),
@@ -177,6 +199,44 @@ def build_evidence_links(
     path = links_path(output_root, engagement.id)
     _write_json(path, payload)
     return EvidenceLinkResult(links_path=path, payload=payload)
+
+
+def _discovery_fingerprint_for_engagement(output_root: Path, engagement: Any) -> str:
+    assets = []
+    for asset in sorted(engagement.assets, key=lambda item: item.id):
+        discovery = asset.metadata.get("discovery") if isinstance(asset.metadata, dict) else None
+        last_discovery = discovery.get("last_discovered_at") if isinstance(discovery, dict) else None
+        assets.append(
+            {
+                "id": asset.id,
+                "type": asset.type,
+                "locator": asset.locator,
+                "created_at": asset.created_at,
+                "last_discovery": last_discovery if isinstance(last_discovery, str) else None,
+                "artifacts": _discovery_artifact_state(output_root, engagement.id, asset.id),
+            }
+        )
+    raw = json.dumps(
+        {
+            "schema": EVIDENCE_LINKS_DISCOVERY_FINGERPRINT_SCHEMA,
+            "assets": assets,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _discovery_artifact_state(output_root: Path, engagement_id: str, asset_id: str) -> list[dict[str, Any]]:
+    discovery_dir = asset_discovery_dir(output_root, engagement_id, asset_id)
+    artifacts: list[dict[str, Any]] = []
+    for name in ("report.md", "memory.json", "events.json"):
+        path = discovery_dir / name
+        if not path.exists():
+            continue
+        stat = path.stat()
+        artifacts.append({"name": name, "mtime_ns": stat.st_mtime_ns, "size": stat.st_size})
+    return artifacts
 
 
 def _link_asset_pair(

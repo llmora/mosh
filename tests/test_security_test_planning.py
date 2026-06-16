@@ -35,6 +35,7 @@ from mosh.crews.security_planning.crew import (
     load_assessment_evidence_bundle,
     load_discovery_context,
     load_source_discovery_context,
+    run_planning_evidence_linking,
 )
 from mosh.crews.security_planning.reporting import render_security_test_plan, write_security_test_plan
 from tests.fakes import FakeSecurityPlanningRunner
@@ -173,6 +174,7 @@ def _plan() -> dict[str, object]:
                 "affected_source": [],
                 "verification_strategy": "live-verification",
                 "source_assessment_type": "live-verification",
+                "depends_on": ["AUTH-001"],
                 "status": "planned",
             }
         ],
@@ -217,6 +219,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("Evidence sources: `live`", markdown)
         self.assertIn("Verification strategy: `live-verification`", markdown)
         self.assertIn("Source assessment type: `live-verification`", markdown)
+        self.assertIn("#### Dependencies", markdown)
+        self.assertIn("AUTH-001", markdown)
         self.assertIn("#### Affected Runtime", markdown)
         self.assertIn("GET https://api.example.test/api/private/auth/me", markdown)
         self.assertIn("## Deferred Test Opportunities", markdown)
@@ -579,6 +583,63 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertNotIn("Mobile binary decompilation", issues)
             self.assertIn("source-executable portion", review["blocking_findings"][0]["required_change"])
 
+    def test_critic_guard_does_not_force_reject_execution_readiness_deferrals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "plan"
+            state = SecurityTestPlanningState(
+                target_url="engagement:eng_test",
+                discovery_dir=Path(directory) / "discovery",
+                report_dir=report_dir,
+                memory=FileMemory(report_dir),
+                discovery_context={
+                    "live_discovery": {"available": True},
+                    "source_discovery": {"available": True},
+                    "execution_capabilities": {
+                        "live": {"available": True},
+                        "source": {"available": True},
+                    },
+                },
+            )
+            state.current_plan = {
+                "title": "Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "AUTH-001",
+                        "title": "Authentication implementation review",
+                        "execution_mode": "source",
+                    }
+                ],
+                "deferred_test_opportunities": [
+                    {
+                        "title": "Credentialed live authorization test",
+                        "defer_reason": "Requires valid test account credentials to obtain a token.",
+                        "requirements_to_proceed": "Backoffice test account credentials and safe customer IDs.",
+                        "suggested_next_step": "Request credentials from the customer.",
+                    },
+                    {
+                        "title": "Follow-up live validation",
+                        "defer_reason": "Requires results from AUTH-001 before choosing the exact payload.",
+                        "requirements_to_proceed": "Completion of AUTH-001.",
+                        "suggested_next_step": "Run this once AUTH-001 is complete.",
+                    },
+                    {
+                        "title": "Unavailable mobile binary work",
+                        "defer_reason": "Requires downloading APK/IPA and emulator-based mobile analysis tooling.",
+                        "requirements_to_proceed": "Android APK or iOS IPA plus emulator.",
+                        "suggested_next_step": "Attach the mobile binary asset.",
+                    },
+                ],
+            }
+
+            tool = _build_submit_critique_tool(FakeCrewAI, state)
+            result = json.loads(tool._run({"accepted": True, "summary": "Model accepted the plan."}))
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["blocking_findings"], 0)
+            review = state.current_review or {}
+            self.assertTrue(review["accepted"])
+            self.assertEqual(review.get("blocking_findings", []), [])
+
     def test_engagement_planning_runs_linking_before_planner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
@@ -619,6 +680,35 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertFalse((report_dir / "security_test_plan.md").exists())
             self.assertTrue((output_root / engagement.id / "engagement_template.yaml").exists())
             self.assertFalse((report_dir / "engagement_template.yaml").exists())
+
+    def test_planning_evidence_linking_reuses_current_links_without_model_linker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_engagement_discovery_pair(output_root, engagement.id, live_asset.id, source_asset.id)
+            report_dir = output_root / engagement.id / "plan"
+            memory = FileMemory(report_dir)
+
+            with patch(
+                "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                return_value=_NoopModelAssistedLinker(),
+            ):
+                first = run_planning_evidence_linking(AppConfig(openrouter_api_key="test-key"), output_root, engagement.id)
+
+            with patch(
+                "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                side_effect=AssertionError("model linker should not be constructed for current links"),
+            ):
+                second = run_planning_evidence_linking(AppConfig(), output_root, engagement.id, memory=memory)
+
+            self.assertEqual(second.links_path, first.links_path)
+            self.assertEqual(second.payload["discovery_fingerprint"], first.payload["discovery_fingerprint"])
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertEqual(events[-1]["action"], "skipped_current")
 
     def test_source_only_plan_normalization_defers_runtime_only_hypotheses(self) -> None:
         plan = {
@@ -924,6 +1014,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("execution_capabilities", tasks)
         self.assertIn("do not defer work solely because it requires", tasks)
         self.assertIn("Discovery extractor gaps are not blockers", tasks)
+        self.assertIn("credentials, test accounts, safe test data", tasks)
+        self.assertIn("depends_on", tasks)
         self.assertIn("Planning/execution capability context JSON", tasks)
         self.assertIn("source-executable portion", tasks)
         self.assertIn("{security_test_plan}", tasks)

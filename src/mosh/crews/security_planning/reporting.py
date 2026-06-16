@@ -130,6 +130,7 @@ def _add_hypotheses(lines: list[str], value: Any) -> None:
         _add_bullets(lines, "Evidence", hypothesis.get("evidence"))
         _add_bullets(lines, "Affected Runtime", _format_structured_items(hypothesis.get("affected_runtime")))
         _add_bullets(lines, "Affected Source", _format_structured_items(hypothesis.get("affected_source")))
+        _add_bullets(lines, "Dependencies", hypothesis.get("depends_on"))
         _add_bullets(lines, "Requirements", hypothesis.get("requirements"))
         _add_bullets(lines, "Tools Expected", hypothesis.get("tools_expected"))
         _add_bullets(lines, "Preconditions", hypothesis.get("preconditions"))

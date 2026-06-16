@@ -15,7 +15,7 @@ class DiscoveryModelConfig:
 
 @dataclass(frozen=True)
 class SecurityPlanningModelConfig:
-    planner: str = "deepseek/deepseek-v4-flash"
+    planner: str = "deepseek/deepseek-v4-pro"
     evidence_linker: str = "deepseek/deepseek-v4-flash"
     reviewer: str = "deepseek/deepseek-v4-pro"
     reporter: str = "deepseek/deepseek-v4-flash"

@@ -220,8 +220,10 @@ report/<engagement-id>/plan/links.json
 ```
 
 `links.json` records source-route to live-endpoint relationships with typed
-references back to source and live asset IDs. Asset details stay in each
-`asset.json`; the engagement ID is implied by the file path. The linker first
+references back to source and live asset IDs. Asset details and discovery
+timestamps stay in each `asset.json`; the engagement ID is implied by the file
+path. The file includes only an opaque discovery fingerprint so the linker can
+reuse current output without duplicating asset metadata. The linker first
 computes deterministic exact and parameterized path matches, then asks the
 planning-owned `evidence_linker` model for additional candidate links using
 only existing evidence refs. The evidence linker can use narrow read-only tools
@@ -231,9 +233,10 @@ known source refs and already discovered live endpoint refs; they support
 linkage only and do not create new discovery facts. Candidate links are marked
 separately and are not authoritative discovery facts. Like discovery, the
 command prints an orchestrator start event immediately and runs the CrewAI
-model phase with verbose task/agent output. The artifact also records asset IDs
-skipped because they do not yet have usable discovery evidence. This command is
-temporary; `mosh plan <engagement-id>` calls the same linker automatically.
+model phase with verbose task/agent output when regeneration is needed. The
+artifact also records asset IDs skipped because they do not yet have usable
+discovery evidence. This command is temporary; `mosh plan <engagement-id>`
+calls the same linker automatically.
 
 ### 4. Create A Security Test Plan
 
@@ -253,7 +256,7 @@ report/<engagement-id>/plan/plan.md
 report/<engagement-id>/engagement_template.yaml
 ```
 
-It also refreshes:
+It also creates or refreshes:
 
 ```text
 report/<engagement-id>/plan/links.json
@@ -261,7 +264,9 @@ report/<engagement-id>/plan/links.json
 
 If no attached asset has new discovery output since the previous engagement
 plan run, `mosh plan <engagement-id>` exits without regenerating either
-`plan/links.json` or `plan/plan.md`.
+`plan/links.json` or `plan/plan.md`. If `plan.md` is missing or stale but
+`plan/links.json` already matches the current discovery fingerprint, planning
+reuses the existing links and only regenerates the plan.
 
 Planning uses a compact evidence bundle instead of passing raw discovery memory
 or orchestration logs to the model. It keeps the discovery summaries, bounded
@@ -271,6 +276,13 @@ When source is attached, source-inspection work such as bounded reads/searches,
 manual route extraction, prompt-template review, and small harnesses should be
 planned as active source tests rather than deferred just because discovery did
 not extract them automatically.
+Planning prefers to keep in-scope tests active when credentials, safe test
+data, authorization confirmation, or another planned test are normal execution
+readiness inputs. Those appear as requirements, preconditions, or dependencies
+and are handled by execution preflight. Deferred opportunities are still valid
+when the missing input means the live test cannot yet be bounded safely, such as
+external-service cost, production side effects, specialist tooling, or explicit
+owner authorization that must be agreed first.
 
 For legacy URL planning:
 
