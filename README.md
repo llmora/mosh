@@ -263,6 +263,11 @@ If no attached asset has new discovery output since the previous engagement
 plan run, `mosh plan <engagement-id>` exits without regenerating either
 `plan/links.json` or `plan/plan.md`.
 
+Planning uses a compact evidence bundle instead of passing raw discovery memory
+or orchestration logs to the model. It keeps the discovery summaries, bounded
+live routes/forms/references, source routes/dependencies/configuration, asset
+details, and source/live evidence links needed for cross-asset hypotheses.
+
 For legacy URL planning:
 
 ```bash
