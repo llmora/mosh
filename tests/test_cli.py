@@ -20,7 +20,6 @@ from tests.fakes import (
     FakeSecurityPlanningRunner,
     FakeSecurityTestingRunner,
     FakeSourceDiscoveryRunner,
-    FakeSourceSecurityTestingRunner,
 )
 from tests.fixtures import fixture_server, fixture_source_tree
 
