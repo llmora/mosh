@@ -45,6 +45,7 @@ class SecurityTestPreflightResult:
     source_ready: list[dict[str, Any]] = field(default_factory=list)
     combined: list[dict[str, Any]] = field(default_factory=list)
     deferred: list[dict[str, Any]] = field(default_factory=list)
+    selected_hypothesis_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -57,6 +58,10 @@ class SecurityTestExecutionState:
     engagement: dict[str, Any]
     targets: dict[str, str]
     executed_report_path: Path
+    source: str | None = None
+    source_root: Path | None = None
+    source_context: dict[str, Any] = field(default_factory=dict)
+    evidence_links: dict[str, Any] = field(default_factory=dict)
     plan_revision_id: str = ""
     hypothesis_fingerprint: str = ""
     revision: int = 1
@@ -64,6 +69,11 @@ class SecurityTestExecutionState:
     review: dict[str, Any] | None = None
     report_written: bool = False
     commands: list[dict[str, Any]] = field(default_factory=list)
+    source_reads: list[dict[str, Any]] = field(default_factory=list)
+    source_searches: list[dict[str, Any]] = field(default_factory=list)
+    workspace_files: list[dict[str, Any]] = field(default_factory=list)
+    local_processes: list[dict[str, Any]] = field(default_factory=list)
+    local_requests: list[dict[str, Any]] = field(default_factory=list)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     archived_report_paths: list[str] = field(default_factory=list)
@@ -73,12 +83,15 @@ class SecurityTestingCrewRunner(Protocol):
     def run(
         self,
         target_url: str,
+        source: str | None,
+        source_discovery_dir: Path | None,
+        evidence_links: dict[str, Any],
         report_dir: Path,
         memory: FileMemory,
         plan: dict[str, Any],
         engagement: dict[str, Any],
         preflight: SecurityTestPreflightResult,
-        ready_pending: list[dict[str, Any]],
+        executable_pending: list[dict[str, Any]],
     ) -> None:
         pass
 
@@ -90,19 +103,25 @@ class SecurityTestingOrchestrator:
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
         crew_runner: SecurityTestingCrewRunner | None = None,
-        source_crew_runner: Any | None = None,
         planning_crew_runner: Any | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_security_testing_crew_runner(config)
-        self.source_crew_runner = source_crew_runner
         self.planning_crew_runner = planning_crew_runner
 
-    def run(self, url: str | None = None, engagement_file: Path | None = None, *, source: str | None = None) -> Path:
+    def run(
+        self,
+        url: str | None = None,
+        engagement_file: Path | None = None,
+        *,
+        source: str | None = None,
+        hypothesis_ids: list[str] | None = None,
+    ) -> Path:
         if not url and not source:
             raise ValueError("Security testing requires a target URL, a source path, or both.")
+        selected_hypothesis_ids = _normalize_hypothesis_ids(hypothesis_ids)
         engagement_id = url if url and engagement_exists(self.output_root, url) else None
         planning_refresh_url = url
         planning_refresh_source = source
@@ -147,18 +166,25 @@ class SecurityTestingOrchestrator:
             "orchestrator",
             "start",
             "Starting security testing preflight",
-            {"target": target, "source": source, "engagement_file": str(engagement_path)},
+            {
+                "target": target,
+                "source": source,
+                "engagement_file": str(engagement_path),
+                "selected_hypotheses": selected_hypothesis_ids,
+            },
         )
         plan = load_security_test_plan(planning_dir)
         engagement = load_engagement_file(engagement_path)
+        evidence_links = _load_testing_evidence_links(planning_dir)
         result = run_security_testing_preflight(
             plan,
             engagement,
             live_target_available=bool(url),
             source_available=bool(source),
+            completed_test_ids=_current_executed_test_ids(report_dir),
+            selected_hypothesis_ids=selected_hypothesis_ids,
         )
-        ready_pending = _ready_pending_hypotheses(plan, result, report_dir)
-        source_ready_pending = _source_ready_pending_hypotheses(plan, result, report_dir)
+        executable_pending = _executable_pending_hypotheses(plan, result, report_dir)
         markdown = render_preflight_report(target, engagement_path, result)
         (report_dir / "preflight.md").write_text(markdown, encoding="utf-8")
         memory.add_item(
@@ -170,65 +196,56 @@ class SecurityTestingOrchestrator:
                 "combined": result.combined,
                 "deferred": result.deferred,
                 "targets": result.targets,
-                "ready_pending": [_hypothesis_id(item) for item in ready_pending],
-                "source_ready_pending": [_hypothesis_id(item) for item in source_ready_pending],
+                "ready_pending": [_hypothesis_id(item) for item in executable_pending],
+                "executable_pending": [_hypothesis_id(item) for item in executable_pending],
+                "selected_hypotheses": selected_hypothesis_ids,
                 "plan_revision_id": plan_revision_id(plan),
             },
             "security_test_coordinator",
         )
         executed_count = 0
-        if ready_pending and url:
+        if executable_pending:
             memory.record_event(
                 "orchestrator",
                 "execution_start",
-                "Starting security test execution",
-                {"tests": [_hypothesis_id(item) for item in ready_pending]},
+                "Starting unified security test execution",
+                {"tests": [_hypothesis_id(item) for item in executable_pending]},
             )
-            self.crew_runner.run(url, report_dir, memory, plan, engagement, result, ready_pending)
-            executed_count += len(ready_pending)
-            _refresh_discovery_from_security_testing_feedback(
-                config=self.config,
-                output_root=self.output_root,
-                event_sink=self.event_sink,
-                planning_crew_runner=self.planning_crew_runner,
-                discovery_dir=discovery_dir,
-                report_dir=report_dir,
-                memory=memory,
-                url=planning_refresh_url,
-                source=planning_refresh_source,
-                discovery_asset=live_discovery_asset,
-            )
-        if source_ready_pending and source:
-            memory.record_event(
-                "orchestrator",
-                "source_execution_start",
-                "Starting source security test execution",
-                {"tests": [_hypothesis_id(item) for item in source_ready_pending]},
-            )
-            self._source_runner().run(
+            self.crew_runner.run(
+                target,
                 source,
                 source_discovery_dir,
+                evidence_links,
                 report_dir,
                 memory,
                 plan,
                 engagement,
                 result,
-                source_ready_pending,
+                executable_pending,
             )
-            executed_count += len(source_ready_pending)
-            _refresh_discovery_from_security_testing_feedback(
-                config=self.config,
-                output_root=self.output_root,
-                event_sink=self.event_sink,
-                planning_crew_runner=self.planning_crew_runner,
-                discovery_dir=source_discovery_dir or discovery_dir,
-                report_dir=report_dir,
-                memory=memory,
-                url=planning_refresh_url,
-                source=planning_refresh_source,
-                discovery_asset=source_discovery_asset,
-            )
-        if not ready_pending and not source_ready_pending:
+            executed_count += len(executable_pending)
+            refresh_targets: list[tuple[Path, tuple[str, str] | None]] = []
+            if url:
+                refresh_targets.append((discovery_dir, live_discovery_asset))
+            if source_discovery_dir and source_discovery_dir != discovery_dir:
+                refresh_targets.append((source_discovery_dir, source_discovery_asset))
+            if not refresh_targets:
+                refresh_targets.append((discovery_dir, live_discovery_asset or source_discovery_asset))
+            for index, (target_discovery_dir, discovery_asset) in enumerate(refresh_targets):
+                _refresh_discovery_from_security_testing_feedback(
+                    config=self.config,
+                    output_root=self.output_root,
+                    event_sink=self.event_sink,
+                    planning_crew_runner=self.planning_crew_runner,
+                    discovery_dir=target_discovery_dir,
+                    report_dir=report_dir,
+                    memory=memory,
+                    url=planning_refresh_url,
+                    source=planning_refresh_source,
+                    discovery_asset=discovery_asset,
+                    refresh_planning=index == len(refresh_targets) - 1,
+                )
+        if not executable_pending:
             memory.record_event(
                 "orchestrator",
                 "execution_skipped",
@@ -257,13 +274,6 @@ class SecurityTestingOrchestrator:
         )
         return report_dir
 
-    def _source_runner(self) -> Any:
-        if self.source_crew_runner is None:
-            from mosh.crews.source_security_testing.crew import build_source_security_testing_crew_runner
-
-            self.source_crew_runner = build_source_security_testing_crew_runner(self.config)
-        return self.source_crew_runner
-
 
 def build_security_testing_crew_runner(config: AppConfig) -> SecurityTestingCrewRunner:
     return CrewAISecurityTestingCrewRunner(config)
@@ -276,12 +286,15 @@ class CrewAISecurityTestingCrewRunner:
     def run(
         self,
         target_url: str,
+        source: str | None,
+        source_discovery_dir: Path | None,
+        evidence_links: dict[str, Any],
         report_dir: Path,
         memory: FileMemory,
         plan: dict[str, Any],
         engagement: dict[str, Any],
         preflight: SecurityTestPreflightResult,
-        ready_pending: list[dict[str, Any]],
+        executable_pending: list[dict[str, Any]],
     ) -> None:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
@@ -294,11 +307,17 @@ class CrewAISecurityTestingCrewRunner:
             raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
         crewai = _load_crewai()
         current_plan_revision_id = plan_revision_id(plan)
-        for hypothesis in ready_pending:
+        source_root = _validated_source_root(source) if source else None
+        source_context = _load_unified_source_context(source_discovery_dir)
+        for hypothesis in executable_pending:
             _run_one_security_test(
                 crewai=crewai,
                 config=self.config,
                 target_url=target_url,
+                source=source,
+                source_root=source_root,
+                source_context=source_context,
+                evidence_links=evidence_links,
                 report_dir=report_dir,
                 memory=memory,
                 hypothesis=hypothesis,
@@ -312,6 +331,10 @@ def _run_one_security_test(
     crewai: Any,
     config: AppConfig,
     target_url: str,
+    source: str | None,
+    source_root: Path | None,
+    source_context: dict[str, Any],
+    evidence_links: dict[str, Any],
     report_dir: Path,
     memory: FileMemory,
     hypothesis: dict[str, Any],
@@ -327,6 +350,10 @@ def _run_one_security_test(
     executed_report_path.parent.mkdir(parents=True, exist_ok=True)
     state = SecurityTestExecutionState(
         target_url=target_url,
+        source=source,
+        source_root=source_root,
+        source_context=source_context,
+        evidence_links=evidence_links,
         report_dir=report_dir,
         workspace_dir=workspace_dir,
         memory=memory,
@@ -345,21 +372,37 @@ def _run_one_security_test(
         state.evidence = None
         state.review = None
         command_start = len(state.commands)
+        read_start = len(state.source_reads)
+        search_start = len(state.source_searches)
+        workspace_file_start = len(state.workspace_files)
+        local_process_start = len(state.local_processes)
+        local_request_start = len(state.local_requests)
         executor_crew = _build_executor_crew(crewai, config, state)
         _kickoff_capturing_tool_state(
             executor_crew,
             state,
             agent_name="executor",
             task_name="execute_security_test_task",
-            captured=lambda: state.evidence is not None or bool(state.commands),
+            captured=lambda: state.evidence is not None
+            or bool(
+                state.commands
+                or state.source_reads
+                or state.source_searches
+                or state.workspace_files
+                or state.local_processes
+                or state.local_requests
+            ),
             inputs={
                 "target_url": target_url,
+                "source": str(source_root) if source_root else "",
                 "test_id": test_id,
                 "revision": revision,
                 "max_attempts": max_attempts,
                 "hypothesis": json.dumps(hypothesis, sort_keys=True),
                 "engagement": json.dumps(engagement, sort_keys=True),
                 "targets": json.dumps(targets, sort_keys=True),
+                "source_context": json.dumps(_compact_unified_source_context(source_context), sort_keys=True),
+                "evidence_links": json.dumps(evidence_links, sort_keys=True),
                 "previous_review": json.dumps(previous_review or {}, sort_keys=True),
             },
         )
@@ -399,11 +442,20 @@ def _run_one_security_test(
                 "requested_changes": ["Submit a structured review."],
             }
         _apply_review_artifact_decisions(state.artifacts, state.review)
-        _record_execution_attempt(state, command_start)
+        _record_execution_attempt(
+            state,
+            command_start,
+            read_start,
+            search_start,
+            workspace_file_start,
+            local_process_start,
+            local_request_start,
+        )
         previous_review = state.review
         if state.review.get("accepted"):
             break
 
+    _cleanup_unified_source_processes(state)
     execution_bundle = _execution_bundle(state)
     memory.add_item(
         "security_test_execution_bundle",
@@ -476,14 +528,22 @@ def _kickoff_capturing_tool_state(
 
 
 def _fallback_executor_evidence(state: SecurityTestExecutionState) -> dict[str, Any]:
-    if state.commands:
+    if (
+        state.commands
+        or state.source_reads
+        or state.source_searches
+        or state.workspace_files
+        or state.local_processes
+        or state.local_requests
+    ):
         return {
             "status": "inconclusive",
-            "summary": "Executor ran commands but did not submit structured evidence.",
-            "observations": state.commands,
-            "result": "Review the recorded command outputs; the executor did not provide a final supported conclusion.",
-            "safety_notes": "Commands were captured by the security command tool and redacted before persistence.",
-            "follow_up": "Reviewer should request a focused re-run if the command outputs are insufficient.",
+            "summary": "Executor collected evidence but did not submit structured evidence.",
+            "observations": _execution_observations(state),
+            "source_evidence": _source_evidence_refs(state),
+            "result": "Review the recorded tool outputs; the executor did not provide a final supported conclusion.",
+            "safety_notes": "Tool output was captured and redacted before persistence.",
+            "follow_up": "Reviewer should request a focused re-run if the collected evidence is insufficient.",
             "commands": state.commands,
         }
     return {
@@ -497,12 +557,25 @@ def _fallback_executor_evidence(state: SecurityTestExecutionState) -> dict[str, 
     }
 
 
-def _record_execution_attempt(state: SecurityTestExecutionState, command_start: int) -> None:
+def _record_execution_attempt(
+    state: SecurityTestExecutionState,
+    command_start: int,
+    read_start: int,
+    search_start: int,
+    workspace_file_start: int,
+    local_process_start: int,
+    local_request_start: int,
+) -> None:
     attempt = {
         "revision": state.revision,
         "evidence": state.evidence or {},
         "review": state.review or {},
         "commands": state.commands[command_start:],
+        "source_reads": state.source_reads[read_start:],
+        "source_searches": state.source_searches[search_start:],
+        "workspace_files": state.workspace_files[workspace_file_start:],
+        "local_processes": state.local_processes[local_process_start:],
+        "local_requests": state.local_requests[local_request_start:],
         "artifacts": [
             artifact
             for artifact in state.artifacts
@@ -523,6 +596,9 @@ def _record_execution_attempt(state: SecurityTestExecutionState, command_start: 
 def _execution_bundle(state: SecurityTestExecutionState) -> dict[str, Any]:
     return {
         "test_id": _hypothesis_id(state.hypothesis),
+        "execution_mode": _execution_mode(state.hypothesis),
+        "evidence_type": _evidence_type_label(state.hypothesis),
+        "source": str(state.source_root) if state.source_root else None,
         "plan_revision_id": state.plan_revision_id,
         "hypothesis_fingerprint": state.hypothesis_fingerprint,
         "final_evidence": state.evidence or {},
@@ -530,9 +606,61 @@ def _execution_bundle(state: SecurityTestExecutionState) -> dict[str, Any]:
         "attempts": state.attempts,
         "artifacts": state.artifacts,
         "commands": state.commands,
+        "source_reads": state.source_reads,
+        "source_searches": state.source_searches,
+        "workspace_files": state.workspace_files,
+        "local_processes": state.local_processes,
+        "local_requests": state.local_requests,
         "report_path": str(state.executed_report_path),
         "archived_previous_reports": state.archived_report_paths,
     }
+
+
+def _evidence_type_label(hypothesis: dict[str, Any]) -> str:
+    needs_source = _hypothesis_needs_source(hypothesis)
+    needs_live = _hypothesis_needs_live(hypothesis)
+    if needs_source and needs_live:
+        return "combined"
+    if needs_source:
+        return "source"
+    return "live"
+
+
+def _execution_observations(state: SecurityTestExecutionState) -> dict[str, Any]:
+    return {
+        "commands": state.commands,
+        "source_reads": state.source_reads,
+        "source_searches": state.source_searches,
+        "workspace_files": state.workspace_files,
+        "local_processes": state.local_processes,
+        "local_requests": state.local_requests,
+    }
+
+
+def _source_evidence_refs(state: SecurityTestExecutionState) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for read in state.source_reads:
+        refs.append(
+            {
+                "path": read.get("path"),
+                "start_line": read.get("start_line"),
+                "end_line": read.get("end_line"),
+                "snippet_hash": read.get("snippet_hash"),
+                "reason": read.get("purpose"),
+            }
+        )
+    for search in state.source_searches:
+        for match in search.get("matches") or []:
+            refs.append(
+                {
+                    "path": match.get("path"),
+                    "start_line": match.get("line"),
+                    "end_line": match.get("line"),
+                    "snippet_hash": match.get("snippet_hash"),
+                    "reason": search.get("purpose"),
+                }
+            )
+    return refs
 
 
 def plan_revision_id(plan: dict[str, Any]) -> str:
@@ -601,6 +729,13 @@ def _with_execution_metadata(markdown: str, state: SecurityTestExecutionState, r
         report_path=str(state.executed_report_path),
         archived_previous_reports=state.archived_report_paths,
         report_content=report_content,
+    )
+    metadata.update(
+        {
+            "execution_mode": _execution_mode(state.hypothesis),
+            "evidence_type": _evidence_type_label(state.hypothesis),
+            "source": str(state.source_root) if state.source_root else None,
+        }
     )
     return _with_execution_metadata_mapping(markdown, metadata)
 
@@ -902,6 +1037,7 @@ def _refresh_discovery_from_security_testing_feedback(
     url: str | None,
     source: str | None,
     discovery_asset: tuple[str, str] | None = None,
+    refresh_planning: bool = True,
 ) -> None:
     feedback_updates = collect_security_testing_discovery_updates(report_dir)
     new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
@@ -914,6 +1050,14 @@ def _refresh_discovery_from_security_testing_feedback(
         )
         if discovery_asset:
             record_asset_discovery(output_root, discovery_asset[0], discovery_asset[1], discovery_dir)
+        if not refresh_planning:
+            memory.record_event(
+                "orchestrator",
+                "security_planning_refresh_deferred",
+                "Security test planning refresh deferred until all discovery feedback targets are updated",
+                {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
+            )
+            return
         memory.record_event(
             "orchestrator",
             "security_planning_refresh_start",
@@ -1187,8 +1331,33 @@ def _artifact_decision_names(value: Any) -> set[str]:
 
 
 def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
-    command_tool = _build_run_security_command_tool(crewai, config, state)
+    tools = []
+    if _has_live_execution_target(state):
+        tools.append(_build_run_security_command_tool(crewai, config, state))
+    if state.source_root is not None:
+        from mosh.crews.source_security_testing.crew import (
+            _build_read_source_slice_tool,
+            _build_request_local_http_tool,
+            _build_run_source_command_tool,
+            _build_source_search_tool,
+            _build_start_source_process_tool,
+            _build_stop_source_process_tool,
+            _build_write_workspace_file_tool,
+        )
+
+        tools.extend(
+            [
+                _build_read_source_slice_tool(crewai, state),
+                _build_source_search_tool(crewai, state),
+                _build_write_workspace_file_tool(crewai, state),
+                _build_run_source_command_tool(crewai, config, state),
+                _build_start_source_process_tool(crewai, config, state),
+                _build_request_local_http_tool(crewai, config, state),
+                _build_stop_source_process_tool(crewai, state),
+            ]
+        )
     evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
+    tools.append(evidence_tool)
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/executor_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/executor_tasks.yaml"))
 
@@ -1202,7 +1371,7 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
             return crewai.Agent(
                 config=self.agents_config["executor"],
                 llm=_llm(crewai, config, config.models.security_testing.executor),
-                tools=[command_tool, evidence_tool],
+                tools=tools,
                 allow_delegation=False,
             )
 
@@ -1227,6 +1396,15 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
             )
 
     return SecurityTestExecutorCrew()
+
+
+def _has_live_execution_target(state: SecurityTestExecutionState) -> bool:
+    if state.target_url.startswith("http://") or state.target_url.startswith("https://"):
+        return True
+    for value in state.targets.values():
+        if _text(value).startswith(("http://", "https://")):
+            return True
+    return False
 
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
@@ -1394,6 +1572,12 @@ def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecut
         def _run(self, evidence: Any) -> str:
             content = _coerce_mapping(evidence)
             content.setdefault("commands", state.commands)
+            content.setdefault("source_reads", state.source_reads)
+            content.setdefault("source_searches", state.source_searches)
+            content.setdefault("workspace_files", state.workspace_files)
+            content.setdefault("local_processes", state.local_processes)
+            content.setdefault("local_requests", state.local_requests)
+            content.setdefault("source_evidence", _source_evidence_refs(state))
             content = _normalize_execution_evidence(content)
             state.evidence = content
             _preserve_evidence_artifacts(state, content)
@@ -1414,9 +1598,25 @@ def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecut
                     "test_id": _hypothesis_id(state.hypothesis),
                     "revision": state.revision,
                     "commands": len(state.commands),
+                    "source_reads": len(state.source_reads),
+                    "source_searches": len(state.source_searches),
+                    "workspace_files": len(state.workspace_files),
+                    "local_processes": len(state.local_processes),
+                    "local_requests": len(state.local_requests),
                 },
             )
-            return json.dumps({"accepted": True, "commands": len(state.commands)}, sort_keys=True)
+            return json.dumps(
+                {
+                    "accepted": True,
+                    "commands": len(state.commands),
+                    "source_reads": len(state.source_reads),
+                    "source_searches": len(state.source_searches),
+                    "workspace_files": len(state.workspace_files),
+                    "local_processes": len(state.local_processes),
+                    "local_requests": len(state.local_requests),
+                },
+                sort_keys=True,
+            )
 
     return SubmitExecutionEvidenceTool()
 
@@ -1540,21 +1740,71 @@ def load_security_test_plan(planning_dir: Path) -> dict[str, Any]:
     raise RuntimeError(f"No structured security test plan found in {memory_path}")
 
 
+def _load_testing_evidence_links(planning_dir: Path) -> dict[str, Any]:
+    links_path = planning_dir / "links.json"
+    if not links_path.exists():
+        return {}
+    try:
+        payload = json.loads(links_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _validated_source_root(source: str) -> Path:
+    from mosh.crews.source_discovery.tools import _validated_root
+
+    return _validated_root(source)
+
+
+def _load_unified_source_context(source_discovery_dir: Path | None) -> dict[str, Any]:
+    from mosh.crews.source_security_testing.crew import _load_source_context
+
+    return _load_source_context(source_discovery_dir)
+
+
+def _compact_unified_source_context(source_context: dict[str, Any]) -> dict[str, Any]:
+    from mosh.crews.source_security_testing.crew import _compact_source_context
+
+    return _compact_source_context(source_context)
+
+
+def _cleanup_unified_source_processes(state: SecurityTestExecutionState) -> None:
+    if not state.local_processes:
+        return
+    from mosh.crews.source_security_testing.crew import _cleanup_source_processes
+
+    _cleanup_source_processes(state)
+
+
 def run_security_testing_preflight(
     plan: dict[str, Any],
     engagement: dict[str, Any],
     *,
     live_target_available: bool = True,
     source_available: bool = False,
+    completed_test_ids: set[str] | None = None,
+    selected_hypothesis_ids: list[str] | None = None,
 ) -> SecurityTestPreflightResult:
     targets = resolve_target_mapping(engagement)
+    completed = completed_test_ids or set()
+    selected_ids = _normalize_hypothesis_ids(selected_hypothesis_ids)
+    _validate_selected_hypothesis_ids(plan, selected_ids)
+    selected = set(selected_ids)
     ready: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     source_ready: list[dict[str, Any]] = []
     combined: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
     for hypothesis in _hypotheses(plan):
+        if selected and _hypothesis_id(hypothesis) not in selected:
+            continue
         mode = _execution_mode(hypothesis)
+        readiness = _execution_readiness(hypothesis)
+        needs_source = _hypothesis_needs_source(hypothesis)
+        needs_live = _hypothesis_needs_live(hypothesis)
+        if not needs_source and not needs_live:
+            needs_live = True
         blockers: list[str] = []
         item = {
             "id": _text(hypothesis.get("id")) or "unknown",
@@ -1562,41 +1812,34 @@ def run_security_testing_preflight(
             "priority": _text(hypothesis.get("priority")) or "unknown",
             "surface": _text(hypothesis.get("surface")) or "unknown",
             "execution_mode": mode,
+            "execution_readiness": readiness or "ready",
             "verification_strategy": _text(hypothesis.get("verification_strategy")) or _default_verification_strategy(mode),
             "evidence_sources": _string_list(hypothesis.get("evidence_sources")),
+            "evidence_requirements": _evidence_requirements(needs_source=needs_source, needs_live=needs_live),
             "blockers": blockers,
         }
-        if mode == "live":
+        if mode == "deferred" or readiness == "deferred":
+            blockers.extend(_deferred_reasons(hypothesis))
+            deferred.append(item)
+            continue
+        blockers.extend(_dependency_blockers(hypothesis, completed))
+        if needs_live:
             blockers.extend(_hypothesis_blockers(hypothesis, engagement, targets))
             if not live_target_available:
                 blockers.append("live target URL is not available for this assessment")
-            if blockers:
-                blocked.append(item)
-            else:
-                ready.append(item)
-        elif mode == "source":
+        if needs_source:
             if not source_available:
-                blockers.append("source code is not available for source execution")
-            if not _list(hypothesis.get("affected_source")):
-                blockers.append("affected_source is missing for source execution")
-            if blockers:
-                blocked.append(item)
-            else:
-                source_ready.append(item)
-        elif mode == "combined":
-            if live_target_available:
-                blockers.extend(_hypothesis_blockers(hypothesis, engagement, targets))
-            if not source_available:
-                blockers.append("source code is not available for combined execution")
-            if not live_target_available:
-                blockers.append("live target URL is not available for combined execution")
-            combined.append(item)
-        elif mode == "deferred":
-            blockers.extend(_deferred_reasons(hypothesis))
-            deferred.append(item)
-        else:
+                blockers.append("source code is not available for this hypothesis")
+        if mode not in {"live", "source", "combined", "deferred"}:
             blockers.append(f"unsupported execution_mode `{mode}`")
+        if blockers:
             blocked.append(item)
+        else:
+            ready.append(item)
+            if needs_source and needs_live:
+                combined.append(item)
+            elif needs_source:
+                source_ready.append(item)
     return SecurityTestPreflightResult(
         ready=ready,
         blocked=blocked,
@@ -1604,6 +1847,7 @@ def run_security_testing_preflight(
         source_ready=source_ready,
         combined=combined,
         deferred=deferred,
+        selected_hypothesis_ids=selected_ids,
     )
 
 
@@ -1613,15 +1857,13 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
         "",
         f"- Target URL: `{target_url}`",
         f"- Engagement file: `{engagement_file}`",
-        f"- Ready tests: `{len(result.ready)}`",
-        f"- Source-routed tests: `{len(result.source_ready)}`",
-        f"- Combined tests: `{len(result.combined)}`",
+        f"- Executable tests: `{len(result.ready)}`",
         f"- Deferred tests: `{len(result.deferred)}`",
         f"- Blocked tests: `{len(result.blocked)}`",
-        "",
-        "## Effective Targets",
-        "",
     ]
+    if result.selected_hypothesis_ids:
+        lines.append(f"- Selected hypotheses: `{', '.join(result.selected_hypothesis_ids)}`")
+    lines.extend(["", "## Effective Targets", ""])
     if result.targets:
         for key, value in result.targets.items():
             lines.append(f"- {key}: `{value}`")
@@ -1633,30 +1875,9 @@ def render_preflight_report(target_url: str, engagement_file: Path, result: Secu
             suffix = ""
             if item.get("execution_status"):
                 suffix = f" - `{item['execution_status']}`: {item.get('execution_reason', '')}"
-            lines.append(_preflight_item_line(item, suffix=suffix))
+            lines.append(_preflight_item_line(item, suffix=suffix, include_evidence_profile=True))
     else:
-        lines.append("No live tests are ready to execute.")
-    lines.extend(["", "## Source-Routed Tests", ""])
-    if result.source_ready:
-        for item in result.source_ready:
-            suffix = ""
-            if item.get("execution_status"):
-                suffix = f" - `{item['execution_status']}`: {item.get('execution_reason', '')}"
-            lines.append(_preflight_item_line(item, suffix=suffix))
-        lines.append("")
-        lines.append("These tests are routed to source security testing and are not sent to the live URL executor.")
-    else:
-        lines.append("No tests are routed to source security testing.")
-    lines.extend(["", "## Combined Tests", ""])
-    if result.combined:
-        for item in result.combined:
-            lines.append(_preflight_item_line(item))
-            for blocker in item["blockers"]:
-                lines.append(f"  - {blocker}")
-        lines.append("")
-        lines.append("Combined tests need coordinated source inspection and live verification before execution.")
-    else:
-        lines.append("No tests require combined source and live execution.")
+        lines.append("No tests are ready to execute.")
     lines.extend(["", "## Deferred Tests", ""])
     if result.deferred:
         for item in result.deferred:
@@ -1681,6 +1902,80 @@ def _execution_mode(hypothesis: dict[str, Any]) -> str:
     return mode or "live"
 
 
+def _execution_readiness(hypothesis: dict[str, Any]) -> str:
+    readiness = _text(hypothesis.get("execution_readiness")).lower().replace("-", "_")
+    return readiness if readiness in {"ready", "preflight_blocked", "depends_on", "deferred"} else "ready"
+
+
+def _hypothesis_needs_source(hypothesis: dict[str, Any]) -> bool:
+    if _list(hypothesis.get("affected_source")):
+        return True
+    mode_hint = _text(hypothesis.get("execution_mode")).lower()
+    if mode_hint in {"source", "combined"}:
+        return True
+    text = _hypothesis_execution_text(hypothesis)
+    return any(
+        marker in text
+        for marker in (
+            "source",
+            "repository",
+            "code",
+            "static inspection",
+            "source inspection",
+            "local runtime",
+            "source_search",
+            "read_source_slice",
+            "run_source_command",
+        )
+    )
+
+
+def _hypothesis_needs_live(hypothesis: dict[str, Any]) -> bool:
+    if _list(hypothesis.get("affected_runtime")):
+        return True
+    mode_hint = _text(hypothesis.get("execution_mode")).lower()
+    if mode_hint in {"live", "combined"}:
+        return True
+    text = _hypothesis_execution_text(hypothesis)
+    return any(
+        marker in text
+        for marker in (
+            "live",
+            "runtime",
+            "http client",
+            "http request",
+            "live endpoint",
+            "browser",
+            "curl",
+            "deployed",
+            "api request",
+            "run_security_command",
+        )
+    )
+
+
+def _hypothesis_execution_text(hypothesis: dict[str, Any]) -> str:
+    material = [
+        hypothesis.get("evidence_sources"),
+        hypothesis.get("tools_expected"),
+        hypothesis.get("verification_strategy"),
+        hypothesis.get("test_steps"),
+        hypothesis.get("requirements"),
+        hypothesis.get("preconditions"),
+        hypothesis.get("source_assessment_type"),
+    ]
+    return json.dumps(material, sort_keys=True, default=str).lower()
+
+
+def _evidence_requirements(*, needs_source: bool, needs_live: bool) -> list[str]:
+    requirements = []
+    if needs_source:
+        requirements.append("source")
+    if needs_live:
+        requirements.append("live")
+    return requirements
+
+
 def _default_verification_strategy(execution_mode: str) -> str:
     if execution_mode == "source":
         return "source-inspection"
@@ -1698,17 +1993,37 @@ def _deferred_reasons(hypothesis: dict[str, Any]) -> list[str]:
     return reasons or ["execution_mode is deferred"]
 
 
-def _preflight_item_line(item: dict[str, Any], *, suffix: str = "") -> str:
+def _dependency_blockers(hypothesis: dict[str, Any], completed_test_ids: set[str]) -> list[str]:
+    blockers = []
+    for dependency in _string_list(hypothesis.get("depends_on")):
+        if dependency not in completed_test_ids:
+            blockers.append(f"dependency `{dependency}` has no accepted current execution report")
+    return blockers
+
+
+def _preflight_item_line(item: dict[str, Any], *, suffix: str = "", include_evidence_profile: bool = False) -> str:
     mode = _text(item.get("execution_mode")) or "live"
     strategy = _text(item.get("verification_strategy"))
-    route = f"mode `{mode}`"
+    details = [f"mode `{mode}`"]
     if strategy:
-        route = f"{route}, `{strategy}`"
+        details.append(f"`{strategy}`")
+    if include_evidence_profile:
+        details.append(f"evidence `{_preflight_evidence_profile(item)}`")
+    route = ", ".join(details)
     return f"- **{item['id']}**: {item['title']} ({item['priority']}; {route}){suffix}"
 
 
+def _preflight_evidence_profile(item: dict[str, Any]) -> str:
+    requirements = set(_string_list(item.get("evidence_requirements")))
+    if {"source", "live"}.issubset(requirements):
+        return "combined"
+    if "source" in requirements:
+        return "source"
+    return "live"
+
+
 def render_blocked_tests_cli_summary(result: SecurityTestPreflightResult, engagement_file: Path) -> str:
-    if not (result.blocked or result.combined or result.deferred):
+    if not (result.blocked or result.deferred):
         return ""
     lines: list[str] = [""]
     if result.blocked:
@@ -1720,15 +2035,6 @@ def render_blocked_tests_cli_summary(result: SecurityTestPreflightResult, engage
             ]
         )
         for item in result.blocked:
-            lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
-            blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
-            for blocker in blockers:
-                lines.append(f"  - {_unblock_guidance(_text(blocker))}")
-    if result.combined:
-        if len(lines) > 1:
-            lines.append("")
-        lines.append("Combined tests need source and live coordination before execution:")
-        for item in result.combined:
             lines.append(f"- {item['id']}: {item['title']} ({item['priority']})")
             blockers = item.get("blockers") if isinstance(item.get("blockers"), list) else []
             for blocker in blockers:
@@ -2186,6 +2492,32 @@ def _hypotheses(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in _list(plan.get("test_hypotheses")) if isinstance(item, dict)]
 
 
+def _normalize_hypothesis_ids(hypothesis_ids: list[str] | None) -> list[str]:
+    if not hypothesis_ids:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in hypothesis_ids:
+        for item in str(raw).split(","):
+            hypothesis_id = item.strip()
+            if hypothesis_id and hypothesis_id not in seen:
+                normalized.append(hypothesis_id)
+                seen.add(hypothesis_id)
+    return normalized
+
+
+def _validate_selected_hypothesis_ids(plan: dict[str, Any], selected_hypothesis_ids: list[str]) -> None:
+    if not selected_hypothesis_ids:
+        return
+    available = {_hypothesis_id(hypothesis) for hypothesis in _hypotheses(plan)}
+    missing = [hypothesis_id for hypothesis_id in selected_hypothesis_ids if hypothesis_id not in available]
+    if not missing:
+        return
+    available_text = ", ".join(sorted(available)) or "none"
+    missing_text = ", ".join(missing)
+    raise ValueError(f"Unknown hypothesis ID(s): {missing_text}. Available hypothesis IDs: {available_text}.")
+
+
 def _has_hypotheses(plan: dict[str, Any] | None) -> bool:
     return bool(plan and _hypotheses(plan))
 
@@ -2222,7 +2554,7 @@ def _safe_test_id(test_id: str) -> str:
     return safe or "unknown"
 
 
-def _ready_pending_hypotheses(
+def _executable_pending_hypotheses(
     plan: dict[str, Any],
     preflight: SecurityTestPreflightResult,
     report_dir: Path,
@@ -2230,12 +2562,12 @@ def _ready_pending_hypotheses(
     return _pending_hypotheses_for_preflight_items(plan, preflight.ready, report_dir)
 
 
-def _source_ready_pending_hypotheses(
+def _ready_pending_hypotheses(
     plan: dict[str, Any],
     preflight: SecurityTestPreflightResult,
     report_dir: Path,
 ) -> list[dict[str, Any]]:
-    return _pending_hypotheses_for_preflight_items(plan, preflight.source_ready, report_dir)
+    return _executable_pending_hypotheses(plan, preflight, report_dir)
 
 
 def _pending_hypotheses_for_preflight_items(

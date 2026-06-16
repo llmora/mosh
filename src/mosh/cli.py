@@ -77,6 +77,14 @@ def main(argv: list[str] | None = None) -> int:
     test_parser.add_argument("url", nargs="?", help="Target application URL to test")
     test_parser.add_argument("--source", help="Local source tree path to test or include in routing")
     test_parser.add_argument("--engagement-file", help="Path to the engagement YAML file")
+    test_parser.add_argument(
+        "--hypothesis",
+        "--hypothesis-id",
+        dest="hypotheses",
+        action="append",
+        default=[],
+        help="Run only the selected hypothesis ID; can be repeated or comma-separated",
+    )
     test_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     report_parser = subcommands.add_parser("report", help="Create the final customer-facing report")
@@ -309,7 +317,12 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
         event_sink=_print_event,
     )
     try:
-        report_dir = orchestrator.run(args.url, engagement_file=engagement_file, source=args.source)
+        report_dir = orchestrator.run(
+            args.url,
+            engagement_file=engagement_file,
+            source=args.source,
+            hypothesis_ids=args.hypotheses,
+        )
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1

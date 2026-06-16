@@ -345,6 +345,15 @@ When the plan and engagement file are ready, run:
 mosh test-security eng_a1b2c3d4
 ```
 
+Temporary targeted execution for testing the tester is available with a
+hypothesis ID from `plan/plan.md`:
+
+```bash
+mosh test-security eng_a1b2c3d4 --hypothesis AUTH-001
+```
+
+Repeat `--hypothesis` or pass comma-separated IDs to run a small subset.
+
 For legacy URL planning, run:
 
 ```bash
@@ -393,23 +402,23 @@ report/<source>/source-security-testing/executed_tests/
 report/<source>/source-security-testing/executed_tests/history/
 ```
 
-Source-only security testing executes source-routed hypotheses without requiring
-a deployed production URL. The source executor can read bounded source slices,
-search nonignored text files, write generated harnesses or fuzz scripts under
-`/work`, run local commands with explicit environment overrides, start a local
-process in the security tools container, issue localhost HTTP requests to it,
-and stop it after collecting evidence. The repository is mounted read-only at
-`/source` and `/work` is the only writable workspace. This supports static
-inspection, local tests, build or framework introspection, function-level
-experiments, route-table inspection, and local runtime checks while keeping
-external live URL testing separate.
+Security testing uses one executor per hypothesis. The executor can use live
+target tools, source inspection tools, source-local harnesses, or both, depending
+on the planned test steps and attached artifacts. For source-backed tests, it can
+read bounded source slices, search nonignored text files, write generated
+harnesses or fuzz scripts under `/work`, run local commands with explicit
+environment overrides, start a local process in the security tools container,
+issue localhost HTTP requests to it, and stop it after collecting evidence. The
+repository is mounted read-only at `/source` and `/work` is the only writable
+workspace.
 
 Source plans include a `source_assessment_type` for each hypothesis so the
-executor knows whether the test is expected to be static source inspection, a
-generated harness/function experiment, a local runtime service/API experiment,
-a dependency or tool scan, or deferred live verification. Executed source
-reports include a dedicated dynamic source evidence section when generated
-harnesses, local processes, or local HTTP requests were used.
+executor understands whether source evidence is expected to be static inspection,
+a generated harness/function experiment, a local runtime service/API experiment,
+a dependency or tool scan, or deferred live verification. `execution_mode` is a
+planning hint, not a hard executor boundary. Executed reports include a dedicated
+dynamic source evidence section when generated harnesses, local processes, or
+local HTTP requests were used.
 Reports distinguish the original hypothesis result from residual hardening
 gaps; a disproved source hypothesis is not reported as a confirmed finding
 unless a separate supported finding is submitted with its own severity and
@@ -417,11 +426,12 @@ evidence.
 
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
-- **Ready tests:** live URL tests with enough authorization, target, credential, and safe test-data information available, so the live executor can run them.
-- **Source-routed tests:** source inspection, source tooling, or local-runtime tests. These are sent to the source security executor, not the live URL executor.
-- **Combined tests:** tests that need both source inspection and live verification. They are preserved for coordinated source/live execution.
+- **Executable tests:** hypotheses with the required attached artifacts and engagement inputs available.
 - **Deferred tests:** useful tests blocked by missing deployment, runtime, credentials, tooling, scope, or setup.
 - **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
+
+Executable tests are tagged with their expected evidence profile: `live`,
+`source`, or `combined`.
 
 Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with deterministic engagement-file fields to update. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
 
@@ -434,9 +444,9 @@ mosh test-security eng_a1b2c3d4
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
 
 If executed tests discover new application surface area, `mosh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
-This feedback loop applies to live tests, source-routed tests, and source/live
-evidence links, including new routes, API specifications, components, entry
-points, and configuration facts discovered during source security testing.
+This feedback loop applies to live, source-backed, and combined tests, including
+new routes, API specifications, components, entry points, and configuration facts
+discovered during testing.
 
 ### 7. Create The Final Report
 

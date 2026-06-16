@@ -34,7 +34,9 @@ write_executed_security_test_report_task:
     was disproved, do not render it as Finding Confirmed. Residual hardening
     gaps belong in residual_findings or in a separate retitled finding object
     with its own severity; do not inherit the planned priority as finding
-    severity.
+    severity. For source or combined tests, preserve source paths, local runtime
+    evidence, and source/live correlation in the evidence and result sections
+    rather than splitting them into separate reports.
 
     You must call write_executed_test_report exactly once. The report argument
     must be a structured object with:
