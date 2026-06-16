@@ -384,15 +384,63 @@ class SecurityTestPlanningTests(unittest.TestCase):
     def test_load_discovery_context_reads_discovery_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             discovery_dir = Path(directory)
-            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
-            (discovery_dir / "memory.json").write_text('[{"kind":"summary"}]', encoding="utf-8")
-            (discovery_dir / "events.json").write_text('[{"action":"complete"}]', encoding="utf-8")
+            (discovery_dir / "report.md").write_text("# Discovery\n" + ("detail\n" * 20_000), encoding="utf-8")
+            (discovery_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {"kind": "summary", "content": {"pages_crawled": 1}},
+                        {
+                            "kind": "crawled_page",
+                            "content": {
+                                "url": "https://app.example.test",
+                                "status": 200,
+                                "content_type": "text/html",
+                                "title": "Example",
+                                "headers": {
+                                    "Content-Security-Policy": "default-src 'self'",
+                                    "x-noisy-header": "omit",
+                                },
+                                "links": [f"https://app.example.test/page/{index}" for index in range(50)],
+                                "references": [f"https://app.example.test/static/{index}.js" for index in range(50)],
+                                "forms": [f"form-{index}" for index in range(50)],
+                                "inline_scripts": ["x" * 100_000],
+                            },
+                        },
+                        {
+                            "kind": "llm_report",
+                            "content": {
+                                "structured": {
+                                    "title": "Discovery",
+                                    "long_detail": "y" * 100_000,
+                                    "api_endpoints": [{"endpoint": f"/api/{index}"} for index in range(250)],
+                                }
+                            },
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (discovery_dir / "events.json").write_text(json.dumps([{"action": "complete", "data": "x" * 100_000}]), encoding="utf-8")
 
             context = load_discovery_context(discovery_dir)
 
-            self.assertEqual(context["report_markdown"], "# Discovery\n")
-            self.assertEqual(context["memory"][0]["kind"], "summary")
-            self.assertEqual(context["events"][0]["action"], "complete")
+            serialized = json.dumps(context)
+            self.assertEqual(context["schema"], "mosh.live-discovery-planning-context.v1")
+            self.assertEqual(context["summary"]["pages_crawled"], 1)
+            self.assertLessEqual(len(context["report_markdown"]), 60_100)
+            self.assertEqual(len(context["crawled_pages"][0]["links"]), 20)
+            self.assertEqual(len(context["crawled_pages"][0]["references"]), 30)
+            self.assertEqual(len(context["crawled_pages"][0]["forms"]), 20)
+            self.assertIn("Content-Security-Policy", context["crawled_pages"][0]["headers"])
+            self.assertNotIn("x-noisy-header", context["crawled_pages"][0]["headers"])
+            self.assertLessEqual(len(context["structured_report"]["long_detail"]), 4_100)
+            self.assertLessEqual(len(context["structured_report"]["api_endpoints"]), 101)
+            self.assertEqual(context["structured_report"]["api_endpoints"][-1]["_omitted_items"], 150)
+            self.assertNotIn("events", context)
+            self.assertNotIn("memory", context)
+            self.assertNotIn("inline_scripts", context["crawled_pages"][0])
+            self.assertNotIn("x" * 1000, serialized)
+            self.assertNotIn("y" * 5000, serialized)
 
     def test_load_source_discovery_context_reads_source_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -420,6 +468,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(context["report_markdown"], "# Source Discovery\n")
             self.assertEqual(context["source_index"]["schema"], "mosh.source-index.v1")
             self.assertEqual(context["source_index"]["evidence_refs"][0]["path"], "app.py")
+            self.assertNotIn("events", context)
+            self.assertNotIn("memory", context)
 
     def test_assessment_evidence_bundle_can_combine_live_and_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -467,6 +517,10 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(bundle["asset_evidence"]["live"][0]["asset_id"], live_asset.id)
             self.assertEqual(bundle["asset_evidence"]["source"][0]["asset_id"], source_asset.id)
             self.assertEqual(bundle["correlation"]["evidence_links"], evidence_links)
+            self.assertEqual(bundle["live_discovery"]["primary_asset_id"], live_asset.id)
+            self.assertEqual(bundle["source_discovery"]["primary_asset_id"], source_asset.id)
+            self.assertNotIn("report_markdown", bundle["live_discovery"])
+            self.assertIn("report_markdown", bundle["asset_evidence"]["live"][0]["discovery"])
 
     def test_engagement_planning_runs_linking_before_planner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -805,6 +859,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("deferred_test_opportunities", tasks)
         self.assertIn("requirements_to_proceed", tasks)
         self.assertIn("generic security checklist", tasks)
+        self.assertIn("asset_evidence.source[].discovery.source_index", tasks)
+        self.assertIn("correlation.evidence_links", tasks)
         self.assertIn("{security_test_plan}", tasks)
         self.assertIn("Do not review the planner's prose summary", tasks)
 

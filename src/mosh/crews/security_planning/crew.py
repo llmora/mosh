@@ -59,6 +59,27 @@ class SecurityTestPlanningResult:
     iterations: int
 
 
+DISCOVERY_REPORT_MAX_CHARS = 60_000
+COMPACT_TEXT_MAX_CHARS = 4_000
+COMPACT_LIST_MAX_ITEMS = 100
+COMPACT_MAPPING_MAX_ITEMS = 200
+COMPACT_VALUE_MAX_DEPTH = 8
+LIVE_CONTEXT_MAX_PAGES = 200
+LIVE_CONTEXT_MAX_LINKS_PER_PAGE = 20
+LIVE_CONTEXT_MAX_REFERENCES_PER_PAGE = 30
+LIVE_CONTEXT_MAX_FORMS_PER_PAGE = 20
+LIVE_CONTEXT_MAX_CANDIDATES = 200
+LIVE_CONTEXT_MAX_OUT_OF_SCOPE = 100
+LIVE_CONTEXT_MAX_FAILED_REQUESTS = 50
+SOURCE_CONTEXT_MAX_APPS = 50
+SOURCE_CONTEXT_MAX_ENTRYPOINTS = 100
+SOURCE_CONTEXT_MAX_ROUTES = 200
+SOURCE_CONTEXT_MAX_SECURITY_ITEMS = 100
+SOURCE_CONTEXT_MAX_DEPENDENCIES = 200
+SOURCE_CONTEXT_MAX_CONFIG = 150
+SOURCE_CONTEXT_MAX_EVIDENCE_REFS = 200
+
+
 class SecurityTestPlanningCrewRunner(Protocol):
     def run(
         self,
@@ -495,10 +516,30 @@ class SecurityTestPlanningOrchestrator:
 def load_discovery_context(discovery_dir: Path) -> dict[str, Any]:
     if not discovery_dir.exists():
         raise FileNotFoundError(f"Discovery output not found: {discovery_dir}")
+    memory = _read_json(discovery_dir / "memory.json", [])
     return {
-        "report_markdown": _read_text(discovery_dir / "report.md"),
-        "memory": _read_json(discovery_dir / "memory.json", []),
-        "events": _read_json(discovery_dir / "events.json", []),
+        "schema": "mosh.live-discovery-planning-context.v1",
+        "report_markdown": _truncate_text(_read_text(discovery_dir / "report.md"), DISCOVERY_REPORT_MAX_CHARS),
+        "summary": _compact_value(_latest_memory_item(memory, "summary")),
+        "structured_report": _latest_structured_report(memory),
+        "robots": _compact_value(_latest_memory_item(memory, "robots")),
+        "crawled_pages": _compact_crawled_pages(memory),
+        "discovery_candidates": _compact_discovery_candidates(memory),
+        "out_of_scope": _compact_memory_urls(memory, "out_of_scope", "urls", LIVE_CONTEXT_MAX_OUT_OF_SCOPE),
+        "failed_requests": _compact_memory_urls(memory, "failed_requests", "requests", LIVE_CONTEXT_MAX_FAILED_REQUESTS),
+        "context_limits": {
+            "events_omitted": True,
+            "raw_memory_omitted": True,
+            "inline_scripts_omitted": True,
+            "max_report_chars": DISCOVERY_REPORT_MAX_CHARS,
+            "max_pages": LIVE_CONTEXT_MAX_PAGES,
+            "max_links_per_page": LIVE_CONTEXT_MAX_LINKS_PER_PAGE,
+            "max_references_per_page": LIVE_CONTEXT_MAX_REFERENCES_PER_PAGE,
+            "max_forms_per_page": LIVE_CONTEXT_MAX_FORMS_PER_PAGE,
+            "max_candidates": LIVE_CONTEXT_MAX_CANDIDATES,
+            "max_nested_text_chars": COMPACT_TEXT_MAX_CHARS,
+            "max_nested_list_items": COMPACT_LIST_MAX_ITEMS,
+        },
     }
 
 
@@ -507,11 +548,29 @@ def load_source_discovery_context(source_discovery_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"Source discovery output not found: {source_discovery_dir}")
     memory = _read_json(source_discovery_dir / "memory.json", [])
     source_index = _latest_memory_item(memory, "source_index")
+    source_index_mapping = source_index if isinstance(source_index, dict) else {}
     return {
-        "report_markdown": _read_text(source_discovery_dir / "report.md"),
-        "memory": memory,
-        "events": _read_json(source_discovery_dir / "events.json", []),
-        "source_index": source_index,
+        "schema": "mosh.source-discovery-planning-context.v1",
+        "report_markdown": _truncate_text(_read_text(source_discovery_dir / "report.md"), DISCOVERY_REPORT_MAX_CHARS),
+        "source_index": _compact_source_index(source_index_mapping),
+        "component_map": _compact_value(_latest_memory_item(memory, "source_component_map")),
+        "gap_analysis": _compact_value(_latest_memory_item(memory, "source_gap_analysis")),
+        "route_resolution": _compact_value(
+            _latest_memory_item(memory, "source_route_resolution") or source_index_mapping.get("route_resolution", {})
+        ),
+        "structured_report": _latest_structured_report(memory),
+        "context_limits": {
+            "events_omitted": True,
+            "raw_memory_omitted": True,
+            "source_files_omitted": True,
+            "max_report_chars": DISCOVERY_REPORT_MAX_CHARS,
+            "max_routes": SOURCE_CONTEXT_MAX_ROUTES,
+            "max_dependencies": SOURCE_CONTEXT_MAX_DEPENDENCIES,
+            "max_configuration": SOURCE_CONTEXT_MAX_CONFIG,
+            "max_evidence_refs": SOURCE_CONTEXT_MAX_EVIDENCE_REFS,
+            "max_nested_text_chars": COMPACT_TEXT_MAX_CHARS,
+            "max_nested_list_items": COMPACT_LIST_MAX_ITEMS,
+        },
     }
 
 
@@ -575,8 +634,8 @@ def load_engagement_assessment_evidence_bundle(
             "title": engagement.title,
             "asset_refs": [{"id": asset.id, "type": asset.type} for asset in engagement.assets],
         },
-        "live_discovery": live_discoveries[0]["discovery"] if live_discoveries else {},
-        "source_discovery": source_discoveries[0]["discovery"] if source_discoveries else {},
+        "live_discovery": _primary_asset_discovery_marker(live_discoveries),
+        "source_discovery": _primary_asset_discovery_marker(source_discoveries),
         "asset_evidence": {
             "live": live_discoveries,
             "source": source_discoveries,
@@ -586,6 +645,189 @@ def load_engagement_assessment_evidence_bundle(
         "prior_security_testing_feedback": {},
         "prior_source_testing_feedback": {},
     }
+
+
+def _latest_structured_report(memory: Any) -> dict[str, Any]:
+    report = _latest_memory_item(memory, "llm_report")
+    if isinstance(report, dict) and isinstance(report.get("structured"), dict):
+        return _compact_mapping(report["structured"])
+    return {}
+
+
+def _compact_crawled_pages(memory: Any) -> list[dict[str, Any]]:
+    pages = [
+        item.get("content")
+        for item in _list(memory)
+        if isinstance(item, dict) and item.get("kind") == "crawled_page" and isinstance(item.get("content"), dict)
+    ]
+    compact_pages = []
+    for page in pages[:LIVE_CONTEXT_MAX_PAGES]:
+        compact_pages.append(
+            {
+                "url": _compact_value(page.get("url")),
+                "status": page.get("status"),
+                "content_type": _compact_value(page.get("content_type")),
+                "title": _compact_value(page.get("title")),
+                "headers": _security_relevant_headers(page.get("headers")),
+                "links": _limit_items(page.get("links"), LIVE_CONTEXT_MAX_LINKS_PER_PAGE),
+                "references": _limit_items(page.get("references"), LIVE_CONTEXT_MAX_REFERENCES_PER_PAGE),
+                "forms": _limit_items(page.get("forms"), LIVE_CONTEXT_MAX_FORMS_PER_PAGE),
+            }
+        )
+    return compact_pages
+
+
+def _compact_discovery_candidates(memory: Any) -> list[dict[str, Any]]:
+    candidates = [
+        item.get("content")
+        for item in _list(memory)
+        if isinstance(item, dict)
+        and item.get("kind") == "discovery_candidate"
+        and isinstance(item.get("content"), dict)
+    ]
+    compact_candidates = []
+    for candidate in candidates[:LIVE_CONTEXT_MAX_CANDIDATES]:
+        compact_candidates.append(
+            {
+                "url": _compact_value(candidate.get("url")),
+                "source_tool": _compact_value(candidate.get("source_tool")),
+                "status": candidate.get("status"),
+                "kind": _compact_value(candidate.get("kind")),
+                "confidence": candidate.get("confidence"),
+                "reason": _compact_value(candidate.get("reason")),
+                "evidence": _limit_items(candidate.get("evidence"), 10),
+                "should_crawl": candidate.get("should_crawl"),
+            }
+        )
+    return compact_candidates
+
+
+def _compact_memory_urls(memory: Any, kind: str, key: str, limit: int) -> list[Any]:
+    content = _latest_memory_item(memory, kind)
+    if not isinstance(content, dict):
+        return []
+    return _limit_items(content.get(key), limit)
+
+
+def _security_relevant_headers(headers: Any) -> dict[str, Any]:
+    if not isinstance(headers, dict):
+        return {}
+    relevant = {}
+    names = {
+        "content-security-policy",
+        "strict-transport-security",
+        "x-frame-options",
+        "x-content-type-options",
+        "referrer-policy",
+        "permissions-policy",
+        "set-cookie",
+        "server",
+        "x-powered-by",
+        "access-control-allow-origin",
+        "access-control-allow-credentials",
+        "www-authenticate",
+        "location",
+    }
+    for key, value in headers.items():
+        if str(key).lower() in names:
+            relevant[str(key)] = _compact_value(value)
+    return relevant
+
+
+def _compact_source_index(source_index: Any) -> dict[str, Any]:
+    if not isinstance(source_index, dict):
+        return {}
+    inventory = source_index.get("inventory") if isinstance(source_index.get("inventory"), dict) else {}
+    compact = {
+        "schema": source_index.get("schema"),
+        "source": source_index.get("source"),
+        "summary": source_index.get("summary"),
+        "inventory": {
+            "apps": _limit_items(inventory.get("apps"), SOURCE_CONTEXT_MAX_APPS),
+            "languages": inventory.get("languages"),
+            "frameworks": _limit_items(inventory.get("frameworks"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
+            "entrypoints": _limit_items(inventory.get("entrypoints"), SOURCE_CONTEXT_MAX_ENTRYPOINTS),
+            "routes": _limit_items(inventory.get("routes"), SOURCE_CONTEXT_MAX_ROUTES),
+            "apis": _limit_items(inventory.get("apis"), SOURCE_CONTEXT_MAX_ROUTES),
+            "auth": _limit_items(inventory.get("auth"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
+            "sessions": _limit_items(inventory.get("sessions"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
+            "data_stores": _limit_items(inventory.get("data_stores"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
+            "dependencies": _limit_items(inventory.get("dependencies"), SOURCE_CONTEXT_MAX_DEPENDENCIES),
+            "configuration": _limit_items(inventory.get("configuration"), SOURCE_CONTEXT_MAX_CONFIG),
+            "environment_variables": _limit_items(inventory.get("environment_variables"), SOURCE_CONTEXT_MAX_CONFIG),
+            "compose_topology": _limit_items(inventory.get("compose_topology"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
+        },
+        "evidence_refs": _limit_items(source_index.get("evidence_refs"), SOURCE_CONTEXT_MAX_EVIDENCE_REFS),
+        "route_resolution": source_index.get("route_resolution"),
+        "component_map": source_index.get("component_map"),
+        "gap_analysis": source_index.get("gap_analysis"),
+        "context_limits": {
+            "files_omitted": True,
+            "max_apps": SOURCE_CONTEXT_MAX_APPS,
+            "max_entrypoints": SOURCE_CONTEXT_MAX_ENTRYPOINTS,
+            "max_routes": SOURCE_CONTEXT_MAX_ROUTES,
+            "max_dependencies": SOURCE_CONTEXT_MAX_DEPENDENCIES,
+            "max_configuration": SOURCE_CONTEXT_MAX_CONFIG,
+            "max_evidence_refs": SOURCE_CONTEXT_MAX_EVIDENCE_REFS,
+        },
+    }
+    return _compact_mapping(compact)
+
+
+def _primary_asset_discovery_marker(discoveries: list[dict[str, Any]]) -> dict[str, Any]:
+    if not discoveries:
+        return {}
+    primary = discoveries[0]
+    discovery = primary.get("discovery") if isinstance(primary.get("discovery"), dict) else {}
+    marker: dict[str, Any] = {
+        "available": True,
+        "primary_asset_id": primary.get("asset_id"),
+        "details": "See asset_evidence for compact per-asset discovery details.",
+    }
+    if isinstance(discovery.get("summary"), dict):
+        marker["summary"] = discovery["summary"]
+    source_index = discovery.get("source_index") if isinstance(discovery.get("source_index"), dict) else {}
+    if isinstance(source_index.get("summary"), dict):
+        marker["source_summary"] = source_index["summary"]
+    return marker
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars].rstrip() + f"\n\n[mosh: truncated to {max_chars} characters for planning context]\n"
+
+
+def _limit_items(value: Any, limit: int) -> list[Any]:
+    return [_compact_value(item) for item in _list(value)[: max(limit, 0)]]
+
+
+def _compact_mapping(value: dict[str, Any], *, depth: int = 0) -> dict[str, Any]:
+    if depth >= COMPACT_VALUE_MAX_DEPTH:
+        return {"_omitted": "nested value exceeded planning context depth limit"}
+    compact: dict[str, Any] = {}
+    for index, (key, item) in enumerate(value.items()):
+        if index >= COMPACT_MAPPING_MAX_ITEMS:
+            compact["_omitted_keys"] = len(value) - COMPACT_MAPPING_MAX_ITEMS
+            break
+        if item not in (None, [], {}):
+            compact[str(key)] = _compact_value(item, depth=depth + 1)
+    return compact
+
+
+def _compact_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= COMPACT_VALUE_MAX_DEPTH:
+        return "[mosh: omitted nested value beyond planning context depth limit]"
+    if isinstance(value, dict):
+        return _compact_mapping(value, depth=depth + 1)
+    if isinstance(value, list):
+        compact = [_compact_value(item, depth=depth + 1) for item in value[:COMPACT_LIST_MAX_ITEMS]]
+        if len(value) > COMPACT_LIST_MAX_ITEMS:
+            compact.append({"_omitted_items": len(value) - COMPACT_LIST_MAX_ITEMS})
+        return compact
+    if isinstance(value, str):
+        return _truncate_text(value, COMPACT_TEXT_MAX_CHARS)
+    return value
 
 
 def run_planning_evidence_linking(
@@ -1276,6 +1518,16 @@ def _default_affected_source(hypothesis: dict[str, Any], assessment_context: dic
         return []
     source = assessment_context.get("source_discovery") if isinstance(assessment_context.get("source_discovery"), dict) else {}
     source_index = source.get("source_index") if isinstance(source.get("source_index"), dict) else {}
+    if not source_index:
+        asset_evidence = assessment_context.get("asset_evidence") if isinstance(assessment_context.get("asset_evidence"), dict) else {}
+        source_assets = asset_evidence.get("source") if isinstance(asset_evidence.get("source"), list) else []
+        for asset in source_assets:
+            if not isinstance(asset, dict):
+                continue
+            discovery = asset.get("discovery") if isinstance(asset.get("discovery"), dict) else {}
+            source_index = discovery.get("source_index") if isinstance(discovery.get("source_index"), dict) else {}
+            if source_index:
+                break
     evidence_refs = source_index.get("evidence_refs") if isinstance(source_index.get("evidence_refs"), list) else []
     return [item for item in evidence_refs[:5] if isinstance(item, dict)]
 
