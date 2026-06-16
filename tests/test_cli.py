@@ -20,7 +20,6 @@ from tests.fakes import (
     FakeSecurityPlanningRunner,
     FakeSecurityTestingRunner,
     FakeSourceDiscoveryRunner,
-    FakeSourceSecurityTestingRunner,
 )
 from tests.fixtures import fixture_server, fixture_source_tree
 
@@ -705,10 +704,123 @@ class CliTests(unittest.TestCase):
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
             self.assertEqual(exit_code, 0)
             self.assertIn("Security testing preflight written to", stdout.getvalue())
-            self.assertEqual(runner.calls[0]["target_url"], target_url)
+            self.assertEqual(runner.calls[0]["target_url"], f"engagement:{engagement.id}")
             self.assertTrue((report_dir / "executed_tests" / "HDR-001.md").exists())
             self.assertIn(f"Engagement file: `{output_root / engagement.id / 'engagement_template.yaml'}`", preflight)
             self.assertFalse((planning_dir / "engagement_template.yaml").exists())
+
+    def test_cli_test_security_hypothesis_option_runs_only_selected_hypothesis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://app.example.test"
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, target_url)
+            planning_dir = output_root / engagement.id / "plan"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Engagement Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "HDR-001",
+                        "title": "Security headers are present",
+                        "priority": "medium",
+                        "surface": "headers",
+                        "requirements": ["No credentials required."],
+                        "tools_expected": ["HTTP client"],
+                        "execution_mode": "live",
+                    },
+                    {
+                        "id": "AUTH-001",
+                        "title": "Private API requires authentication",
+                        "priority": "high",
+                        "surface": "authentication",
+                        "requirements": ["No credentials required."],
+                        "tools_expected": ["HTTP client"],
+                        "execution_mode": "live",
+                    },
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template(output_root / engagement.id, target_url, plan)
+            runner = FakeSecurityTestingRunner()
+            stdout = io.StringIO()
+
+            with patch(
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                return_value=runner,
+            ):
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "test-security",
+                            engagement.id,
+                            "--hypothesis",
+                            "AUTH-001",
+                            "--output-root",
+                            str(output_root),
+                        ]
+                    )
+
+            report_dir = output_root / engagement.id / "security-testing"
+            preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(runner.calls[0]["executable_pending"], ["AUTH-001"])
+            self.assertFalse((report_dir / "executed_tests" / "HDR-001.md").exists())
+            self.assertTrue((report_dir / "executed_tests" / "AUTH-001.md").exists())
+            self.assertIn("Selected hypotheses: `AUTH-001`", preflight)
+
+    def test_cli_test_security_hypothesis_option_reports_unknown_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://app.example.test"
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, target_url)
+            planning_dir = output_root / engagement.id / "plan"
+            planning_dir.mkdir(parents=True)
+            plan = {
+                "title": "Engagement Security Test Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "HDR-001",
+                        "title": "Security headers are present",
+                        "priority": "medium",
+                        "surface": "headers",
+                        "requirements": ["No credentials required."],
+                        "execution_mode": "live",
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template(output_root / engagement.id, target_url, plan)
+            runner = FakeSecurityTestingRunner()
+            stderr = io.StringIO()
+
+            with patch(
+                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                return_value=runner,
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(
+                        [
+                            "test-security",
+                            engagement.id,
+                            "--hypothesis",
+                            "MISSING-001",
+                            "--output-root",
+                            str(output_root),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(runner.calls, [])
+            self.assertIn("Unknown hypothesis ID(s): MISSING-001", stderr.getvalue())
+            self.assertIn("Available hypothesis IDs: HDR-001", stderr.getvalue())
 
     def test_cli_test_security_subcommand_accepts_source_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -746,12 +858,8 @@ class CliTests(unittest.TestCase):
                 "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
                 return_value=FakeSecurityTestingRunner(),
             ):
-                with patch(
-                    "mosh.crews.source_security_testing.crew.build_source_security_testing_crew_runner",
-                    return_value=FakeSourceSecurityTestingRunner(),
-                ):
-                    with contextlib.redirect_stdout(stdout):
-                        exit_code = main(["test-security", "--source", source, "--output-root", str(output_root)])
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(["test-security", "--source", source, "--output-root", str(output_root)])
 
             report_dir = source_root / "source-security-testing"
             self.assertEqual(exit_code, 0)

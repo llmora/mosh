@@ -34,6 +34,7 @@ from mosh.crews.security_testing.crew import (
     _status_label,
     load_security_test_plan,
     render_executed_test_report,
+    render_preflight_report,
     run_security_testing_preflight,
 )
 from mosh.crews.source_security_testing.crew import (
@@ -52,7 +53,7 @@ from mosh.crews.source_security_testing.crew import (
     _build_write_workspace_file_tool,
     _run_bounded_source_search,
 )
-from tests.fakes import FakeSecurityTestingRunner, FakeSourceSecurityTestingRunner
+from tests.fakes import FakeSecurityTestingRunner
 
 
 def _plan() -> dict[str, object]:
@@ -201,13 +202,94 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
         result = run_security_testing_preflight(plan, engagement, live_target_available=True, source_available=True)
 
-        self.assertEqual([item["id"] for item in result.ready], ["LIVE-001"])
+        self.assertEqual([item["id"] for item in result.ready], ["LIVE-001", "SRC-001", "COMBO-001"])
         self.assertEqual([item["id"] for item in result.source_ready], ["SRC-001"])
         self.assertEqual([item["id"] for item in result.combined], ["COMBO-001"])
         self.assertEqual([item["id"] for item in result.deferred], ["DEF-001"])
         self.assertEqual(result.blocked, [])
 
-    def test_source_only_security_testing_executes_source_ready_tests_not_live_runner(self) -> None:
+    def test_security_testing_preflight_can_target_selected_hypothesis(self) -> None:
+        plan = {
+            "title": "Mixed plan",
+            "test_hypotheses": [
+                {
+                    "id": "LIVE-001",
+                    "title": "Live header check",
+                    "priority": "medium",
+                    "surface": "headers",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "live",
+                },
+                {
+                    "id": "COMBO-001",
+                    "title": "Source-guided live verification",
+                    "priority": "high",
+                    "surface": "api",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "combined",
+                    "affected_source": [{"path": "api/routes/accounts.js", "start_line": 10, "end_line": 30}],
+                    "affected_runtime": [{"method": "GET", "url": "/api/accounts"}],
+                },
+            ],
+        }
+        engagement = _engagement_template(target="https://example.test")
+
+        result = run_security_testing_preflight(
+            plan,
+            engagement,
+            live_target_available=True,
+            source_available=True,
+            selected_hypothesis_ids=["COMBO-001"],
+        )
+
+        self.assertEqual([item["id"] for item in result.ready], ["COMBO-001"])
+        self.assertEqual([item["id"] for item in result.combined], ["COMBO-001"])
+        self.assertEqual(result.source_ready, [])
+        self.assertEqual(result.selected_hypothesis_ids, ["COMBO-001"])
+        rendered = render_preflight_report("https://example.test", Path("engagement_template.yaml"), result)
+        self.assertIn("evidence `combined`", rendered)
+        self.assertNotIn("## Combined-Evidence Tests", rendered)
+
+    def test_security_testing_preflight_blocks_unmet_dependencies(self) -> None:
+        plan = {
+            "title": "Dependent plan",
+            "test_hypotheses": [
+                {
+                    "id": "AUTH-BASE",
+                    "title": "Authentication baseline",
+                    "priority": "high",
+                    "surface": "authentication",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "live",
+                },
+                {
+                    "id": "AUTH-FOLLOWUP",
+                    "title": "Authenticated follow-up",
+                    "priority": "high",
+                    "surface": "authorization",
+                    "requirements": ["No credentials required."],
+                    "execution_mode": "live",
+                    "depends_on": ["AUTH-BASE"],
+                    "execution_readiness": "depends_on",
+                },
+            ],
+        }
+        engagement = _engagement_template(target="https://example.test")
+
+        blocked_result = run_security_testing_preflight(plan, engagement, live_target_available=True)
+        ready_result = run_security_testing_preflight(
+            plan,
+            engagement,
+            live_target_available=True,
+            completed_test_ids={"AUTH-BASE"},
+        )
+
+        self.assertEqual([item["id"] for item in blocked_result.ready], ["AUTH-BASE"])
+        self.assertEqual([item["id"] for item in blocked_result.blocked], ["AUTH-FOLLOWUP"])
+        self.assertIn("dependency `AUTH-BASE`", blocked_result.blocked[0]["blockers"][0])
+        self.assertEqual([item["id"] for item in ready_result.ready], ["AUTH-BASE", "AUTH-FOLLOWUP"])
+
+    def test_source_only_security_testing_executes_through_unified_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory) / "example-source"
             source_file = source_dir / "api" / "routes" / "auth.js"
@@ -237,31 +319,32 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 encoding="utf-8",
             )
             write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
-            live_runner = FakeSecurityTestingRunner()
-            source_runner = FakeSourceSecurityTestingRunner()
+            runner = FakeSecurityTestingRunner()
 
             report_dir = SecurityTestingOrchestrator(
                 AppConfig(),
                 output_root=output_root,
-                crew_runner=live_runner,
-                source_crew_runner=source_runner,
+                crew_runner=runner,
             ).run(
                 source=source,
             )
 
             self.assertEqual(report_dir, source_root / "source-security-testing")
-            self.assertEqual(live_runner.calls, [])
-            self.assertEqual(source_runner.calls[0]["source_ready_pending"], ["SRC-001"])
+            self.assertEqual(runner.calls[0]["executable_pending"], ["SRC-001"])
+            self.assertEqual(runner.calls[0]["source"], source)
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
-            self.assertIn("Source-routed tests: `1`", preflight)
-            self.assertIn("No live tests are ready to execute.", preflight)
-            self.assertIn("These tests are routed to source security testing", preflight)
+            self.assertIn("Executable tests: `1`", preflight)
+            self.assertIn("evidence `source`", preflight)
+            self.assertNotIn("Source-evidence tests:", preflight)
+            self.assertNotIn("Combined-evidence tests:", preflight)
+            self.assertNotIn("## Source-Evidence Tests", preflight)
+            self.assertNotIn("## Combined-Evidence Tests", preflight)
             self.assertTrue((report_dir / "executed_tests" / "SRC-001.md").exists())
             memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
             preflight_memory = next(item["content"] for item in memory if item["kind"] == "security_testing_preflight")
             self.assertEqual([item["id"] for item in preflight_memory["source_ready"]], ["SRC-001"])
-            self.assertEqual(preflight_memory["ready_pending"], [])
-            self.assertEqual(preflight_memory["source_ready_pending"], ["SRC-001"])
+            self.assertEqual(preflight_memory["ready_pending"], ["SRC-001"])
+            self.assertEqual(preflight_memory["executable_pending"], ["SRC-001"])
 
     def test_security_testing_preflight_uses_alternative_targets_and_blocks_missing_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -392,18 +475,15 @@ class SecurityTestingCrewTests(unittest.TestCase):
             metadata.update({"execution_mode": "source", "evidence_type": "source", "source": source})
             report_path.write_text(_with_execution_metadata_mapping("# source already executed\n", metadata), encoding="utf-8")
             write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
-            live_runner = FakeSecurityTestingRunner()
-            source_runner = FakeSourceSecurityTestingRunner()
+            runner = FakeSecurityTestingRunner()
 
             report_dir = SecurityTestingOrchestrator(
                 AppConfig(),
                 output_root=output_root,
-                crew_runner=live_runner,
-                source_crew_runner=source_runner,
+                crew_runner=runner,
             ).run(source=source)
 
-            self.assertEqual(live_runner.calls, [])
-            self.assertEqual(source_runner.calls, [])
+            self.assertEqual(runner.calls, [])
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
             self.assertIn("`current`: matching accepted execution already exists", preflight)
             self.assertIn("# source already executed", (report_dir / "executed_tests" / "SRC-001.md").read_text(encoding="utf-8"))
@@ -643,8 +723,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             report_dir = SecurityTestingOrchestrator(
                 AppConfig(openrouter_api_key="test-key"),
                 output_root=output_root,
-                crew_runner=FakeSecurityTestingRunner(),
-                source_crew_runner=_DiscoveryFeedbackSourceSecurityTestingRunner(),
+                crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
                 planning_crew_runner=planning_runner,
             ).run(source=source)
 
@@ -698,6 +777,70 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("last_discovered_at", updated_asset.metadata["discovery"])
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+
+    def test_engagement_combined_testing_feedback_updates_live_and_source_discovery_before_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target_url = "https://example.test"
+            source_dir = Path(directory) / "source"
+            source_dir.mkdir()
+            (source_dir / "app.py").write_text("def status(): return 'ok'\n", encoding="utf-8")
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, target_url).asset
+            source_asset = attach_asset(output_root, engagement.id, str(source_dir)).asset
+            live_discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            source_discovery_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
+            planning_dir = output_root / engagement.id / "plan"
+            live_discovery_dir.mkdir(parents=True)
+            source_discovery_dir.mkdir(parents=True)
+            planning_dir.mkdir(parents=True)
+            for discovery_dir in (live_discovery_dir, source_discovery_dir):
+                (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+                (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+                (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            plan = {
+                "title": "Combined plan",
+                "test_hypotheses": [
+                    {
+                        "id": "COMBO-001",
+                        "title": "Source route maps to live endpoint",
+                        "priority": "high",
+                        "surface": "api",
+                        "requirements": ["No credentials required."],
+                        "execution_mode": "combined",
+                        "affected_source": [{"path": "app.py", "start_line": 1, "end_line": 1}],
+                        "affected_runtime": [{"method": "GET", "url": "/status"}],
+                    }
+                ],
+            }
+            (planning_dir / "memory.json").write_text(
+                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+                encoding="utf-8",
+            )
+            write_engagement_template(output_root / engagement.id, target_url, plan)
+            planning_runner = _CountingPlanningRunner()
+
+            SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"),
+                output_root=output_root,
+                crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
+                planning_crew_runner=planning_runner,
+            ).run(engagement.id)
+
+            live_feedback = [
+                item
+                for item in json.loads((live_discovery_dir / "memory.json").read_text(encoding="utf-8"))
+                if item["kind"] == "security_testing_discovery_feedback"
+            ]
+            source_feedback = [
+                item
+                for item in json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
+                if item["kind"] == "security_testing_discovery_feedback"
+            ]
+            self.assertEqual(len(live_feedback), 1)
+            self.assertEqual(len(source_feedback), 1)
+            self.assertEqual(len(planning_runner.calls), 1)
+            self.assertEqual(planning_runner.calls[0]["target_url"], f"engagement:{engagement.id}")
 
     def test_collect_security_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1952,23 +2095,52 @@ class _FakeRuntimeCrewAI(_FakeCrewAI):
 
 
 class _DiscoveryFeedbackSecurityTestingRunner:
-    def run(self, target_url, report_dir, memory, plan, engagement, preflight, ready_pending) -> None:
+    def run(
+        self,
+        target_url,
+        source,
+        source_discovery_dir,
+        evidence_links,
+        report_dir,
+        memory,
+        plan,
+        engagement,
+        preflight,
+        executable_pending,
+    ) -> None:
+        test_id = str((executable_pending[0] or {}).get("id") if executable_pending else "API-001")
+        if test_id == "SRC-API-001":
+            evidence = {
+                "status": "finding",
+                "summary": "Source execution discovered frontend API endpoints.",
+                "discovery_updates": {
+                    "frontend_api_endpoints_inventoried": [
+                        "GET ${API_BASE}/team",
+                        "POST ${API_BASE}/team/invite",
+                    ],
+                    "deployment_config": {
+                        "platform": "Cloudflare Pages",
+                    },
+                },
+            }
+        else:
+            evidence = {
+                "status": "no-finding",
+                "summary": "Execution discovered a backend version header.",
+                "discovery_updates": [
+                    {
+                        "type": "component",
+                        "detail": "Express 4.18.2 is exposed by the API service header.",
+                        "confidence": "confirmed",
+                        "evidence": ["X-Powered-By: Express 4.18.2"],
+                    }
+                ],
+            }
         memory.add_item(
             "security_test_execution_bundle",
             {
-                "test_id": "API-001",
-                "final_evidence": {
-                    "status": "no-finding",
-                    "summary": "Execution discovered a backend version header.",
-                    "discovery_updates": [
-                        {
-                            "type": "component",
-                            "detail": "Express 4.18.2 is exposed by the API service header.",
-                            "confidence": "confirmed",
-                            "evidence": ["X-Powered-By: Express 4.18.2"],
-                        }
-                    ],
-                },
+                "test_id": test_id,
+                "final_evidence": evidence,
                 "final_review": {"accepted": True},
                 "attempts": [],
                 "artifacts": [],
@@ -1979,7 +2151,19 @@ class _DiscoveryFeedbackSecurityTestingRunner:
 
 
 class _DiscoveryFeedbackSourceSecurityTestingRunner:
-    def run(self, source, source_discovery_dir, report_dir, memory, plan, engagement, preflight, source_ready_pending) -> None:
+    def run(
+        self,
+        target_url,
+        source,
+        source_discovery_dir,
+        evidence_links,
+        report_dir,
+        memory,
+        plan,
+        engagement,
+        preflight,
+        executable_pending,
+    ) -> None:
         memory.add_item(
             "security_test_execution_bundle",
             {

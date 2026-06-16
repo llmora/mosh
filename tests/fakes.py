@@ -368,29 +368,56 @@ class FakeSecurityTestingRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def run(self, target_url, report_dir, memory, plan, engagement, preflight, ready_pending) -> None:
+    def run(
+        self,
+        target_url,
+        source,
+        source_discovery_dir,
+        evidence_links,
+        report_dir,
+        memory,
+        plan,
+        engagement,
+        preflight,
+        executable_pending,
+    ) -> None:
         self.calls.append(
             {
                 "target_url": target_url,
+                "source": source,
+                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
+                "evidence_links": bool(evidence_links),
                 "report_dir": str(report_dir),
-                "ready_pending": [item.get("id") for item in ready_pending],
+                "ready_pending": [item.get("id") for item in executable_pending],
+                "executable_pending": [item.get("id") for item in executable_pending],
             }
         )
         executed_dir = report_dir / "executed_tests"
         executed_dir.mkdir(parents=True, exist_ok=True)
-        for hypothesis in ready_pending:
+        for hypothesis in executable_pending:
             test_id = str(hypothesis.get("id") or "unknown")
             archived = _archive_latest_report(report_dir, test_id, memory=memory)
+            evidence_type = (
+                "combined"
+                if hypothesis.get("affected_source") and hypothesis.get("affected_runtime")
+                else "source"
+                if hypothesis.get("affected_source")
+                else "live"
+            )
             markdown = render_executed_test_report(
                 target_url=target_url,
                 hypothesis=hypothesis,
                 evidence={
                     "status": "no-finding",
                     "summary": "Fake execution completed.",
+                    "source_evidence": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}]
+                    if evidence_type in {"source", "combined"}
+                    else [],
                     "result": "No finding in fake runner.",
                 },
                 review={"accepted": True, "summary": "Accepted."},
                 commands=[],
+                targets=preflight.targets,
             )
             report_path = executed_dir / f"{test_id}.md"
             metadata = _execution_metadata(
@@ -406,63 +433,12 @@ class FakeSecurityTestingRunner:
                 report_path=str(report_path),
                 archived_previous_reports=archived,
             )
+            metadata.update({"execution_mode": hypothesis.get("execution_mode"), "evidence_type": evidence_type, "source": source})
             report_path.write_text(_with_execution_metadata_mapping(markdown, metadata), encoding="utf-8")
             memory.add_item(
                 "executed_security_test_report",
-                {"test_id": test_id, "path": str(report_path)},
+                {"test_id": test_id, "path": str(report_path), "evidence_type": evidence_type},
                 "reporter",
-            )
-
-
-class FakeSourceSecurityTestingRunner:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def run(self, source, source_discovery_dir, report_dir, memory, plan, engagement, preflight, source_ready_pending) -> None:
-        self.calls.append(
-            {
-                "source": source,
-                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
-                "report_dir": str(report_dir),
-                "source_ready_pending": [item.get("id") for item in source_ready_pending],
-            }
-        )
-        executed_dir = report_dir / "executed_tests"
-        executed_dir.mkdir(parents=True, exist_ok=True)
-        for hypothesis in source_ready_pending:
-            test_id = str(hypothesis.get("id") or "unknown")
-            archived = _archive_latest_report(report_dir, test_id, memory=memory)
-            evidence = {
-                "status": "no-finding",
-                "summary": "Fake source execution completed.",
-                "observations": [{"path": "api/routes/auth.js", "line": 1, "preview": "auth guard"}],
-                "source_evidence": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}],
-                "result": "No source finding in fake runner.",
-            }
-            markdown = render_executed_test_report(
-                target_url=f"source:{source}",
-                hypothesis=hypothesis,
-                targets=preflight.targets,
-                evidence=evidence,
-                review={"accepted": True, "summary": "Accepted."},
-                commands=[],
-            )
-            report_path = executed_dir / f"{test_id}.md"
-            metadata = _execution_metadata(
-                test_id=test_id,
-                plan_revision_id=plan_revision_id(plan),
-                hypothesis_fingerprint=hypothesis_fingerprint(hypothesis),
-                evidence=evidence,
-                review={"accepted": True, "summary": "Accepted."},
-                report_path=str(report_path),
-                archived_previous_reports=archived,
-            )
-            metadata.update({"execution_mode": "source", "evidence_type": "source", "source": str(source)})
-            report_path.write_text(_with_execution_metadata_mapping(markdown, metadata), encoding="utf-8")
-            memory.add_item(
-                "executed_security_test_report",
-                {"test_id": test_id, "path": str(report_path), "execution_mode": "source"},
-                "source_reporter",
             )
 
 
