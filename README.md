@@ -214,6 +214,12 @@ When the plan and engagement file are ready, run:
 mosh test-security eng_a1b2c3d4
 ```
 
+For legacy URL planning, run:
+
+```bash
+mosh test-security eng_a1b2c3d4
+```
+
 If an engagement later gains another input, attach the new asset, re-run discovery, planning, and testing with the engagement ID. Existing evidence is reused, new mappings enrich the plan, and only ready hypotheses execute. The legacy compatibility path can still combine URL and source inputs
 with both arguments.
 
