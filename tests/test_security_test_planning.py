@@ -27,6 +27,7 @@ from mosh.crews.security_planning.crew import (
     _build_planning_critic_crew,
     _build_planning_planner_crew,
     _build_planning_reporter_crew,
+    _build_submit_critique_tool,
     _build_write_refined_engagement_template_tool,
     _build_write_security_test_plan_tool,
     _normalize_security_test_plan,
@@ -522,6 +523,61 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(bundle["source_discovery"]["primary_asset_id"], source_asset.id)
             self.assertNotIn("report_markdown", bundle["live_discovery"])
             self.assertIn("report_markdown", bundle["asset_evidence"]["live"][0]["discovery"])
+            self.assertTrue(bundle["execution_capabilities"]["source"]["available"])
+            self.assertTrue(bundle["execution_capabilities"]["live"]["available"])
+            self.assertIn("source_search", bundle["execution_capabilities"]["source"]["tools"])
+
+    def test_critic_guard_rejects_source_actionable_deferred_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "plan"
+            state = SecurityTestPlanningState(
+                target_url="engagement:eng_test",
+                discovery_dir=Path(directory) / "discovery",
+                report_dir=report_dir,
+                memory=FileMemory(report_dir),
+                discovery_context={
+                    "source_discovery": {"available": True},
+                    "execution_capabilities": {
+                        "source": {"available": True, "tools": ["source_search", "read_source_slice"]}
+                    },
+                },
+            )
+            state.current_plan = {
+                "title": "Plan",
+                "test_hypotheses": [],
+                "deferred_test_opportunities": [
+                    {
+                        "title": "OpenAI prompt analysis",
+                        "defer_reason": "Requires deeper source inspection of fraudService.js to identify the exact prompt template.",
+                        "requirements_to_proceed": "Source access to api/fraud/fraudService.js.",
+                        "suggested_next_step": "Extract the exact OpenAI prompt template from fraudService.js.",
+                    },
+                    {
+                        "title": "Python FastAPI classifier route extraction",
+                        "defer_reason": "Requires manual extraction of FastAPI route decorators from classifier/main.py.",
+                        "requirements_to_proceed": "Python source analysis skills.",
+                        "suggested_next_step": "Manually grep classifier/main.py for @app.get and @app.post decorators.",
+                    },
+                    {
+                        "title": "Mobile binary decompilation",
+                        "defer_reason": "Requires downloading APK/IPA from app stores and decompilation tooling.",
+                        "requirements_to_proceed": "Android APK download and emulator.",
+                        "suggested_next_step": "Download the APK from Google Play.",
+                    },
+                ],
+            }
+
+            tool = _build_submit_critique_tool(FakeCrewAI, state)
+            result = json.loads(tool._run({"accepted": True, "summary": "Model accepted the plan."}))
+
+            self.assertFalse(result["accepted"])
+            self.assertEqual(result["blocking_findings"], 2)
+            review = state.current_review or {}
+            issues = "\n".join(finding["issue"] for finding in review["blocking_findings"])
+            self.assertIn("OpenAI prompt analysis", issues)
+            self.assertIn("Python FastAPI classifier route extraction", issues)
+            self.assertNotIn("Mobile binary decompilation", issues)
+            self.assertIn("source-executable portion", review["blocking_findings"][0]["required_change"])
 
     def test_engagement_planning_runs_linking_before_planner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -780,6 +836,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
             self.assertTrue((report_dir / "engagement_template.yaml").exists())
             self.assertIsNotNone(FakeRuntimeCrewAI.critic_inputs)
+            self.assertIn("planning_context", FakeRuntimeCrewAI.critic_inputs)
+            planning_context = json.loads(FakeRuntimeCrewAI.critic_inputs["planning_context"])
+            self.assertIn("execution_capabilities", planning_context)
             critic_plan = json.loads(FakeRuntimeCrewAI.critic_inputs["security_test_plan"])
             self.assertEqual(critic_plan["test_hypotheses"][0]["id"], "API-001")
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
@@ -862,7 +921,13 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("generic security checklist", tasks)
         self.assertIn("asset_evidence.source[].discovery.source_index", tasks)
         self.assertIn("correlation.evidence_links", tasks)
+        self.assertIn("execution_capabilities", tasks)
+        self.assertIn("do not defer work solely because it requires", tasks)
+        self.assertIn("Discovery extractor gaps are not blockers", tasks)
+        self.assertIn("Planning/execution capability context JSON", tasks)
+        self.assertIn("source-executable portion", tasks)
         self.assertIn("{security_test_plan}", tasks)
+        self.assertIn("{planning_context}", tasks)
         self.assertIn("Do not review the planner's prose summary", tasks)
 
 

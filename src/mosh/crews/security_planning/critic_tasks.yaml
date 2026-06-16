@@ -14,6 +14,9 @@ critique_security_test_plan_task:
     Structured security test plan JSON submitted by the planner:
     {security_test_plan}
 
+    Planning/execution capability context JSON:
+    {planning_context}
+
     Review this JSON plan. Do not review the planner's prose summary or status
     message if it differs from the structured JSON.
 
@@ -41,6 +44,15 @@ critique_security_test_plan_task:
     only on curl, browser, or live HTTP probing instead of source inspection or
     source tooling. Reject source hypotheses when source_assessment_type is
     missing, generic, or inconsistent with the test_steps and tools_expected.
+    When source is available in the planning context, reject plans that defer
+    work whose own defer_reason, requirements_to_proceed, or suggested_next_step
+    is bounded source inspection, source_search, read_source_slice, manual grep,
+    route decorator extraction, prompt-template extraction, middleware review,
+    configuration review, dependency inspection, or a generated source harness.
+    Discovery extractor gaps are not blockers when source-testing tools can
+    resolve them. Require the planner to move the source-executable portion into
+    active test_hypotheses with execution_mode source unless the immediate
+    executable test truly requires both live and source evidence.
   expected_output: >
     Confirmation that submit_security_test_plan_critique was called with a
     structured critic decision.

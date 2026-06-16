@@ -432,6 +432,16 @@ asset-scoped discovery details, and `correlation.evidence_links`. Nested text,
 lists, and mappings must also be bounded so model-generated discovery reports
 cannot cause planning context-window failures.
 
+Planning must distinguish discovery-tool coverage gaps from execution blockers.
+When an attached source asset is available, work that can be done with bounded
+source reads, source searches, manual route extraction, prompt-template
+extraction, configuration review, dependency inspection, generated harnesses, or
+local source-runtime checks belongs in active `source` hypotheses. Only the
+portion that genuinely needs missing credentials, live authorization, mobile
+binary tooling, external accounts, deployment access, or unavailable build/run
+inputs should remain deferred. The critic must reject accepted plans that defer
+source-executable work solely because additional source inspection is needed.
+
 During the engagement migration, the compatibility commands can still plan from
 legacy URL/source discovery roots. The target architecture is one plan per
 engagement, even when specialist crews have discovered different asset types.

@@ -22,7 +22,9 @@ draft_security_test_plan_task:
     markers; do not stop there when asset_evidence is present. Deterministic
     links are stronger than model-assisted candidates, but candidate links may
     still justify combined hypotheses when the rationale is concrete and useful
-    for later verification.
+    for later verification. Also review execution_capabilities: it describes
+    what later execution crews can actually do with attached live and source
+    assets.
 
     Previous plan JSON, if any:
     {previous_plan}
@@ -77,8 +79,14 @@ draft_security_test_plan_task:
     Use execution_mode deliberately:
     - live when the test can be executed through the live URL only
     - source when source inspection or source tooling is sufficient and no live target is required
-    - combined when source evidence should guide later live verification
+    - combined when the immediate executable test must use both source evidence
+      and live verification in the same run
     - deferred when valuable testing is blocked by missing source, URL, credentials, build instructions, authorization, or tooling
+
+    If the immediate useful work is source inspection/search/harnessing and any
+    live verification is optional, credential-gated, or later, make the active
+    hypothesis execution_mode source. Put the later live portion in
+    test_steps as conditional future verification or in deferred_test_opportunities.
 
     Use source_assessment_type deliberately:
     - static-source-inspection when bounded source reads/searches are enough
@@ -98,6 +106,13 @@ draft_security_test_plan_task:
     asset_evidence.source[].discovery.source_index instead of the top-level
     source_discovery marker. If live_discovery is absent, do not invent runtime
     reachability; use source or deferred modes.
+    When source is available, do not defer work solely because it requires
+    source inspection, bounded source search, manual grep, source route
+    extraction, prompt-template extraction, middleware review, configuration
+    review, dependency inspection, or a small generated harness. These are
+    executable source tests. Discovery extractor limitations, such as an
+    unsupported FastAPI/Ktor/Swift route parser, should become source-mode
+    hypotheses when bounded source tools can resolve them.
     In source-only planning, endpoint-shaped source routes are code evidence,
     not proof that a live endpoint is reachable. Do not make curl, browser, or
     live HTTP probing an immediate test step unless live_discovery is present or
