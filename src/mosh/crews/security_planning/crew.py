@@ -275,6 +275,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                     "iteration": iteration,
                     "max_attempts": max_attempts,
                     "security_test_plan": json.dumps(state.current_plan, sort_keys=True),
+                    "planning_context": json.dumps(_planning_review_context(discovery_context), sort_keys=True),
                 }
             )
             if state.current_review is None:
@@ -585,6 +586,10 @@ def load_assessment_evidence_bundle(
         "schema": "mosh.assessment-evidence-bundle.v1",
         "live_discovery": load_discovery_context(live_discovery_dir) if live_discovery_dir else {},
         "source_discovery": load_source_discovery_context(source_discovery_dir) if source_discovery_dir else {},
+        "execution_capabilities": _planning_execution_capabilities(
+            has_live=live_discovery_dir is not None,
+            has_source=source_discovery_dir is not None,
+        ),
         "correlation": {},
         "prior_security_testing_feedback": {},
         "prior_source_testing_feedback": {},
@@ -627,7 +632,7 @@ def load_engagement_assessment_evidence_bundle(
             skipped_assets.append({"id": asset.id, "type": asset.type, "reason": "unsupported for planning"})
     if not live_discoveries and not source_discoveries:
         raise FileNotFoundError(f"No discovery output found for engagement: {engagement.id}")
-    return {
+    bundle = {
         "schema": "mosh.assessment-evidence-bundle.v1",
         "engagement": {
             "id": engagement.id,
@@ -645,6 +650,68 @@ def load_engagement_assessment_evidence_bundle(
         "prior_security_testing_feedback": {},
         "prior_source_testing_feedback": {},
     }
+    bundle["execution_capabilities"] = _planning_execution_capabilities(
+        has_live=bool(live_discoveries),
+        has_source=bool(source_discoveries),
+    )
+    return bundle
+
+
+def _planning_execution_capabilities(*, has_live: bool, has_source: bool) -> dict[str, Any]:
+    return {
+        "source": {
+            "available": has_source,
+            "tools": [
+                "read_source_slice",
+                "source_search",
+                "write_workspace_file",
+                "run_source_command",
+                "start_source_process",
+                "request_local_http",
+                "stop_source_process",
+            ]
+            if has_source
+            else [],
+            "can_execute_when_available": [
+                "bounded source file reads and cross-file searches",
+                "manual route, middleware, configuration, prompt, and authorization-flow inspection",
+                "small generated harnesses, framework-introspection scripts, and dependency checks in /work",
+                "local source-derived services and localhost-only HTTP checks when build/run instructions are available",
+            ]
+            if has_source
+            else [],
+        },
+        "live": {
+            "available": has_live,
+            "can_execute_when_available": [
+                "safe scoped HTTP checks against already discovered or explicitly mapped targets",
+                "source-guided live verification when credentials, authorization, and safe test data are satisfied",
+            ]
+            if has_live
+            else [],
+        },
+        "planning_rules": [
+            "Do not defer work solely because source inspection, source search, manual grep, route extraction, or prompt extraction is needed when source is available.",
+            "Discovery extractor limitations are not execution blockers if bounded source-testing tools can resolve the gap.",
+            "Plan the source-executable portion as an active source hypothesis; keep only the genuinely blocked live, mobile, credential, or external-service portion deferred.",
+        ],
+    }
+
+
+def _planning_review_context(assessment_context: dict[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "schema": "mosh.security-planning-review-context.v1",
+        "source_available": _assessment_has_source(assessment_context),
+        "live_available": _assessment_has_live(assessment_context),
+        "execution_capabilities": assessment_context.get("execution_capabilities", {}),
+    }
+    engagement = assessment_context.get("engagement")
+    if isinstance(engagement, dict):
+        context["engagement"] = {
+            "id": engagement.get("id"),
+            "asset_refs": engagement.get("asset_refs"),
+        }
+    return context
 
 
 def _latest_structured_report(memory: Any) -> dict[str, Any]:
@@ -1243,6 +1310,11 @@ def _build_submit_critique_tool(crewai: Any, state: SecurityTestPlanningState):
         def _run(self, review: Any) -> str:
             review_content = _coerce_mapping(review)
             review_content.setdefault("accepted", False)
+            review_content = _apply_deterministic_review_guards(
+                review_content,
+                state.current_plan or {},
+                state.discovery_context,
+            )
             state.current_review = review_content
             state.memory.add_item(
                 "security_test_plan_critique",
@@ -1269,6 +1341,113 @@ def _build_submit_critique_tool(crewai: Any, state: SecurityTestPlanningState):
             )
 
     return SubmitSecurityTestPlanCritiqueTool()
+
+
+def _apply_deterministic_review_guards(
+    review: dict[str, Any],
+    plan: dict[str, Any],
+    assessment_context: dict[str, Any],
+) -> dict[str, Any]:
+    source_deferred_findings = _source_actionable_deferred_findings(plan, assessment_context)
+    if not source_deferred_findings:
+        return review
+
+    guarded = dict(review)
+    blocking_findings = [item for item in _list(guarded.get("blocking_findings")) if isinstance(item, dict)]
+    existing_ids = {_text(item.get("id")) for item in blocking_findings}
+    for finding in source_deferred_findings:
+        if _text(finding.get("id")) not in existing_ids:
+            blocking_findings.append(finding)
+    guarded["blocking_findings"] = blocking_findings
+    guarded["accepted"] = False
+    summary = _text(guarded.get("summary"))
+    guard_summary = (
+        "Deterministic planning guard found deferred work that is executable with the attached source "
+        "and source-testing tools; the planner must move the source-executable portion into active hypotheses."
+    )
+    guarded["summary"] = f"{summary} {guard_summary}".strip() if summary else guard_summary
+    return guarded
+
+
+def _source_actionable_deferred_findings(
+    plan: dict[str, Any],
+    assessment_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not _assessment_has_source(assessment_context):
+        return []
+    findings: list[dict[str, Any]] = []
+    for index, opportunity in enumerate(_list(plan.get("deferred_test_opportunities")), start=1):
+        if not isinstance(opportunity, dict):
+            continue
+        if not _deferred_opportunity_is_source_actionable(opportunity):
+            continue
+        title = _text(opportunity.get("title")) or f"Deferred opportunity {index}"
+        findings.append(
+            {
+                "id": f"SOURCE-DEFER-{index:03d}",
+                "severity": "blocking",
+                "issue": (
+                    f"Deferred opportunity `{title}` appears executable with the attached source asset. "
+                    "Its defer reason or suggested next step asks for bounded source inspection/search/manual "
+                    "extraction, which the source testing crew can perform."
+                ),
+                "required_change": (
+                    "Move the source-executable portion into test_hypotheses with execution_mode `source` "
+                    "when the immediate work is source-only, or `combined` only when the same executable test "
+                    "must use both live and source evidence. Use source_assessment_type such as "
+                    "`static-source-inspection`, `generated-harness`, or `local-runtime-service`, populate "
+                    "affected_source, and keep only genuinely blocked live, mobile, credential, deployment, "
+                    "or external-service work in deferred_test_opportunities."
+                ),
+            }
+        )
+    return findings
+
+
+def _deferred_opportunity_is_source_actionable(opportunity: dict[str, Any]) -> bool:
+    action_text = " ".join(
+        _text(opportunity.get(key))
+        for key in ("defer_reason", "requirements_to_proceed", "suggested_next_step")
+    ).lower()
+    if not action_text:
+        return False
+    hard_blockers = (
+        "apk",
+        "ipa",
+        "app store",
+        "google play",
+        "decompil",
+        "emulator",
+        "simulator",
+        "physical device",
+        "jailbroken",
+        "mobile app security testing",
+        "api key",
+        "secret",
+        ".env",
+        "credential",
+        "production data",
+        "external account",
+    )
+    if any(blocker in action_text for blocker in hard_blockers):
+        return False
+    source_actions = (
+        "source inspection",
+        "source-inspect",
+        "source access",
+        "source analysis",
+        "manual extraction",
+        "manually extract",
+        "grep",
+        "route decorator",
+        "read source",
+        "inspect ",
+        "review ",
+        "extract ",
+    )
+    has_source_action = any(marker in action_text for marker in source_actions)
+    has_source_file = any(suffix in action_text for suffix in (".js", ".ts", ".py", ".kt", ".swift", ".java", ".go", ".rb", ".php"))
+    return has_source_action and has_source_file
 
 
 def _build_write_security_test_plan_tool(crewai: Any, state: SecurityTestPlanningState):
@@ -1479,8 +1658,8 @@ def _normalize_security_test_plan(plan: dict[str, Any], assessment_context: dict
 
 
 def _default_execution_mode(assessment_context: dict[str, Any]) -> str:
-    has_live = bool(assessment_context.get("live_discovery"))
-    has_source = bool(assessment_context.get("source_discovery"))
+    has_live = _assessment_has_live(assessment_context)
+    has_source = _assessment_has_source(assessment_context)
     if has_live and has_source:
         return "combined"
     if has_source:
@@ -1489,7 +1668,25 @@ def _default_execution_mode(assessment_context: dict[str, Any]) -> str:
 
 
 def _is_source_only_assessment(assessment_context: dict[str, Any]) -> bool:
-    return bool(assessment_context.get("source_discovery")) and not bool(assessment_context.get("live_discovery"))
+    return _assessment_has_source(assessment_context) and not _assessment_has_live(assessment_context)
+
+
+def _assessment_has_source(assessment_context: dict[str, Any]) -> bool:
+    source = assessment_context.get("source_discovery")
+    if isinstance(source, dict) and source:
+        return bool(source.get("available", True))
+    asset_evidence = assessment_context.get("asset_evidence") if isinstance(assessment_context.get("asset_evidence"), dict) else {}
+    source_assets = asset_evidence.get("source") if isinstance(asset_evidence.get("source"), list) else []
+    return any(isinstance(item, dict) and item.get("discovery") for item in source_assets)
+
+
+def _assessment_has_live(assessment_context: dict[str, Any]) -> bool:
+    live = assessment_context.get("live_discovery")
+    if isinstance(live, dict) and live:
+        return bool(live.get("available", True))
+    asset_evidence = assessment_context.get("asset_evidence") if isinstance(assessment_context.get("asset_evidence"), dict) else {}
+    live_assets = asset_evidence.get("live") if isinstance(asset_evidence.get("live"), list) else []
+    return any(isinstance(item, dict) and item.get("discovery") for item in live_assets)
 
 
 def _normalized_execution_mode(value: Any, default: str) -> str:
@@ -1506,9 +1703,9 @@ def _append_unique_list_item(target: dict[str, Any], key: str, value: str) -> No
 
 def _default_evidence_sources(assessment_context: dict[str, Any]) -> list[str]:
     sources = []
-    if assessment_context.get("live_discovery"):
+    if _assessment_has_live(assessment_context):
         sources.append("live")
-    if assessment_context.get("source_discovery"):
+    if _assessment_has_source(assessment_context):
         sources.append("source")
     return sources or ["live"]
 
