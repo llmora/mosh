@@ -479,7 +479,7 @@ rerunning and inspection.
 Planned hypotheses must include deterministic routing fields:
 `execution_mode`, `asset_refs`, `evidence_sources`, `affected_runtime`,
 `affected_source`, `verification_strategy`, and `source_assessment_type`. For
-source-routed tests, `source_assessment_type` classifies the expected execution shape as
+source-backed tests, `source_assessment_type` classifies the expected execution shape as
 `static-source-inspection`, `generated-harness`, `local-runtime-service`,
 `dependency-tool-scan`, or `deferred-live-verification`; live and combined tests
 use `live-verification` or `source-guided-live-verification`.
@@ -490,21 +490,17 @@ The security testing crew executes ready hypotheses from the security test plan.
 It runs tests sequentially so reviewer feedback for one test can inform a bounded
 rerun before the next test starts.
 
-Security testing preflight routes hypotheses by `execution_mode` before any
-executor runs:
-
-- `live` hypotheses are the only tests sent to the current live URL security
-  executor, and only when live target, authorization, credential, safe data, and
-  engagement requirements are satisfied.
-- `source` hypotheses are sent to the source security testing executor and are
-  not sent to the live URL executor. Source-only execution may use bounded
-  source inspection, source search, local tests, framework/build introspection,
-  generated harnesses, explicit environment overrides, function-level
-  experiments, or local runtime checks without requiring a deployed production
-  URL.
-- `combined` hypotheses are preserved for coordinated source inspection and
-  live verification.
-- `deferred` hypotheses are preserved with their requirements to proceed.
+Security testing preflight evaluates concrete artifact and engagement
+requirements before any executor runs. `execution_mode` remains useful planning
+metadata, but it is not a hard execution boundary. A hypothesis is executable
+when the required live targets, source assets, authorization, credentials, safe
+data, target mappings, and engagement permissions are available. Source-backed
+execution may use bounded source inspection, source search, local tests,
+framework/build introspection, generated harnesses, explicit environment
+overrides, function-level experiments, or local runtime checks. Combined
+hypotheses execute as one hypothesis with one evidence bundle and one report,
+correlating source and live evidence rather than producing separate result sets.
+Deferred hypotheses are preserved with their requirements to proceed.
 
 Security testing is engagement-wide and writes one result set under:
 
@@ -518,15 +514,24 @@ The engagement-backed command is:
 mosh test-security <engagement-id>
 ```
 
+For tester development, the temporary `--hypothesis <id>` option limits
+preflight and execution to one selected plan hypothesis. The option can be
+repeated or passed comma-separated IDs for a small targeted subset.
+
 It reads the current plan from `report/<engagement-id>/plan/` and the shared
 execution configuration from `report/<engagement-id>/engagement_template.yaml`.
 When the target is an engagement ID, testing uses attached assets only; callers
 must attach source assets instead of passing `--source`.
 
-Source, live, combined, and future mobile-specialist executors are internal
-routing choices. They must not create separate top-level testing result sets
-that need manual synchronization. During the migration, source-only compatibility
-preflight may still write `report/<source>/source-security-testing/`.
+Source, live, combined, and future mobile-specialist tools are internal
+capabilities of the testing stage. They must not create separate top-level
+testing result sets that need manual synchronization. During the migration,
+source-only compatibility preflight may still write
+`report/<source>/source-security-testing/`.
+The human `preflight.md` should present only the main test states: executable,
+deferred, and blocked. Executable test lines may include an evidence profile
+tag such as `live`, `source`, or `combined`; source-backed and combined tests
+must not be rendered as separate peer sections beside the main states.
 
 ## Engagement File
 
@@ -574,20 +579,17 @@ The security testing crew has these agents:
 - security test reviewer: critiques evidence, safety, target scope, and useful generated artifacts
 - security test reporter: writes the stable Markdown artifact for each executed test
 
-The source security testing crew follows the same executor, reviewer, and
-reporter pattern. Its executor can read bounded source slices, search
-nonignored text files, write generated harnesses or fuzz scripts under `/work`,
-run local commands with explicit environment overrides, start and stop local
-processes, and issue localhost HTTP requests to those processes. The repository
-is mounted read-only at `/source` and `/work` is the only writable workspace.
-Source execution is for source-local evidence, local tests, compilation,
-framework inspection, dependency checks, static source scanners, route-table
-inspection, function-level experiments, and localhost runtime checks; arbitrary
-external URL probing belongs to live or combined execution. The executor must
-record a dynamic tool decision for every source hypothesis, explaining which
-dynamic source-only tools were used or why static evidence was sufficient.
-Executed reports include a dedicated dynamic source evidence section whenever
-generated workspace files, local processes, or local HTTP requests were used.
+The executor can use both live and source tool surfaces for the same hypothesis.
+It can read bounded source slices, search nonignored text files, write generated
+harnesses or fuzz scripts under `/work`, run local commands with explicit
+environment overrides, start and stop local processes, issue localhost HTTP
+requests to those processes, and run bounded live target commands when the
+engagement permits them. Source repositories are mounted read-only at `/source`
+and `/work` is the only writable workspace. The executor follows the planned
+test steps and treats `execution_mode` as an evidence expectation, not a
+prohibition on relevant bounded tools. Executed reports include a dedicated
+dynamic source evidence section whenever generated workspace files, local
+processes, or local HTTP requests were used.
 The generic security tools image should include baseline HTTP utilities,
 source-search utilities, Python/Node tooling, Semgrep, Bandit, pip-audit,
 Java/OpenJDK, Maven, Corepack, and small project-inspection utilities. Large
@@ -610,6 +612,8 @@ Each executed test should preserve a structured execution bundle containing:
 - final reviewer decision
 - every executor/reviewer attempt
 - command records
+- source reads and source searches, when used
+- generated workspace files and local runtime request/process records, when used
 - useful artifacts generated during any attempt
 
 Useful artifacts include generated policies, proof-of-concept payloads, endpoint
@@ -637,7 +641,7 @@ The Markdown `Status` section should use human-readable labels such as
 `finding` should remain in embedded execution metadata.
 
 Security testing can discover additional facts that belong back in discovery,
-whether the evidence came from live execution or source-routed testing: new
+whether the evidence came from live, source-backed, or combined testing: new
 entry points, endpoints, technologies, versions, service behavior, headers,
 generated API specifications, or other app-surface information. The executor
 should submit these as
@@ -893,8 +897,10 @@ At minimum, tests should cover:
 
 * Implement security testing for source code, based on a repo URL or a local filesystem path. See `SOURCE_ASSESSMENT_PLAN.md` for the staged implementation plan.
 * If the user provides source code and a live URL for testing, use progressive combined assessment: start from whichever evidence source is available, attach the other one later if needed, and let source/live evidence links enrich planning, testing, and reporting. This needs to be more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). Do not make a standalone correlation command the required long-term workflow; the temporary `mosh link` command exists only for the engagement migration. See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
-* We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
+
 * Implement abiity to use arbitraty openai-like API backends (custom), for companies that do not have openrouter or deepseek access (maybe those using internal AI API endpoints)
+
+* We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
 * We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies

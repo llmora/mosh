@@ -40,6 +40,14 @@ review_security_test_evidence_task:
 
     Accept only when the evidence supports the result, the target and endpoints
     are in scope, and the safety notes/stopping conditions were respected.
+    Review the hypothesis test_steps, affected_source, affected_runtime, and
+    tools_expected rather than treating execution_mode as a hard boundary. Source
+    tools may validly support live tests, live checks may validly verify
+    source-guided hypotheses, and combined tests should include a clear
+    correlation between the evidence channels. If a combined hypothesis is
+    supported by only source evidence or only live evidence, accept it only as a
+    partial/inconclusive result unless the hypothesis explicitly made that
+    sufficient.
     Reject evidence as inconsistent when status is finding but the finding
     object is missing/empty, or when the summary/result says no vulnerability,
     no bypass, false positive, not applicable, model mismatch, or no remediation

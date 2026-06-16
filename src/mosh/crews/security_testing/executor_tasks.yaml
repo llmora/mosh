@@ -5,6 +5,9 @@ execute_security_test_task:
     Target URL:
     {target_url}
 
+    Source root, if an attached source asset is available:
+    {source}
+
     Test ID:
     {test_id}
 
@@ -20,15 +23,35 @@ execute_security_test_task:
     Effective target mappings JSON:
     {targets}
 
+    Source discovery context JSON:
+    {source_context}
+
+    Evidence links JSON:
+    {evidence_links}
+
     Previous reviewer feedback JSON, if any:
     {previous_review}
 
-    Use run_security_command for commands that need the disposable Docker
-    workspace. You may install packages, write scripts, or compile small helper
-    programs inside the container if needed. Keep commands scoped and
-    reproducible. Respect the hypothesis safety notes, stopping conditions, and
-    engagement rate limits. Do not use real credentials or tokens in prose; the
-    command tool redacts known credential values in logs.
+    Execute the planned hypothesis faithfully. Follow the hypothesis test_steps,
+    affected_source, affected_runtime, tools_expected, requirements,
+    preconditions, safety_notes, and stopping_conditions. Treat execution_mode as
+    a planning hint about expected evidence, not as a hard tool boundary. Do not
+    invent a different test objective; if a planned step cannot be executed,
+    submit inconclusive or failed evidence with the blocker instead of running an
+    unrelated substitute test.
+
+    Use any available bounded tool that is needed for the planned hypothesis:
+    - run_security_command for live target checks from the disposable Docker
+      workspace.
+    - source_search and read_source_slice for bounded source inspection.
+    - write_workspace_file and run_source_command for focused local harnesses,
+      dependency checks, or source-derived experiments with /source mounted
+      read-only and /work writable.
+    - start_source_process, request_local_http, and stop_source_process for
+      source-derived local runtime checks. Always stop any process you start.
+    Keep commands scoped and reproducible. Respect the hypothesis safety notes,
+    stopping conditions, and engagement rate limits. Do not use real credentials
+    or tokens in prose; command tools redact known credential values in logs.
 
     Treat the effective target mappings as canonical for execution. URLs in the
     hypothesis are evidence from discovery and may name production systems; when
@@ -45,7 +68,14 @@ execute_security_test_task:
     - original_hypothesis_result: short explanation of whether the original
       hypothesis was confirmed, disproved, or only partially assessed
     - summary: short execution summary
-    - observations: evidence from commands and responses
+    - observations: evidence from commands, source reads/searches, local
+      processes, local HTTP requests, and live responses
+    - source_evidence: concrete path, start_line, end_line, snippet_hash, and
+      reason entries when source evidence was used
+    - live_evidence: concrete target, method, request/response, command, or
+      observation entries when live evidence was used
+    - correlation: for combined tests, explain how source evidence shaped the
+      live check or how live behavior confirmed/disproved the source hypothesis
     - discovery_updates: optional list of new discovery facts learned during
       testing that should be fed back into the discovery report and future
       planning. Use this for newly confirmed entry points, endpoints,
@@ -71,6 +101,8 @@ execute_security_test_task:
     If the original hypothesis is disproved but residual hardening gaps exist,
     use status no-finding or inconclusive unless you submit a separately
     supported finding object with a retitled issue and its own severity.
+    For combined hypotheses, source-only or live-only evidence is partial unless
+    the hypothesis itself says that one evidence channel is sufficient.
   expected_output: >
     Confirmation that submit_security_test_evidence was called with structured
     evidence for the current hypothesis.
