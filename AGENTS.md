@@ -8,4 +8,4 @@ We want to maintain a small number of documents, but these need to be kept in sy
 
 * SPEC.md records the product spec, design and anything necessary to develope the product from scratch. We maintain a roadmap section with future functionalities.
 
-* README.md: user-facing document describing the product, how to use it and example usage. It also has a small section towards the end on how can developers engage and contribute to the product.
+* README.md: user-facing document describing the product, how to use it and example usage. Remember it is user-facing, anything really deep on how it operates belongs in the SPEC.md. It also has a small section towards the end on how can developers engage and contribute to the product.

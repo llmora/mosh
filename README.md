@@ -4,20 +4,20 @@
 
 # mosh: Model-driven Open Security Harness
 
-Find security vulnerabilities in your applications and resolve them, using AI to simulate the tasks a security researcher runs.
+Find security vulnerabilities in your applications and resolve them, using AI to simulate the tasks a security researcher runs - test live applications, source code or provide both to create more effective hypothesis and tests.
 
 ## Why do I need a harness?
 
-Using LLMs to test the security of an application is a lot more than just pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, the model needs tools to interact with the application under test and execution needs to be controlled, evidenced, and repeatable. `mosh` implements the harness that wraps around models to conduct a security test.
+Using LLMs to test the security of an application is a lot more than just pointing a model at it and letting it go. The application needs to be scoped, the tests need to be adapted to the application, the model needs tools to interact with the application under test and execution needs to be controlled, evidenced, and repeatable. `mosh` implements the harness that wraps around models to conduct deep security testing.
 
 `mosh` simulates the core tasks a security researcher performs when testing an application:
 
-- **Discovery:** map the application surface, routes, links, forms, JavaScript assets, third-party services, and observable technologies.
-- **Security planning:** turn discovery evidence into scoped, testable security hypotheses.
+- **Discovery:** map the application surface, routes, links, forms, JavaScript assets, third-party services, source code and observable technologies.
+- **Security planning:** turn discovery evidence into scoped, testable security hypotheses that may combine live testing and source code review.
 - **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
 - **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
 
-When more advanced LLM models are released, you do not need to modify the harness, just configure `mosh` to use the new models instead.
+When more advanced LLM models are released, you do not need to modify the harness, just configure `mosh` to use the new models instead so you can immediate benefit from new frontier model capabilities.
 
 ## Installation
 
@@ -65,7 +65,7 @@ export OPENROUTER_API_KEY="your-openrouter-api-key"
 
 ### Model Selection
 
-By default, `mosh` uses DeepSeek models to balance quality and cost. To choose different models, create `mosh.yaml` in the directory where you run the CLI:
+By default, `mosh` uses DeepSeek models to balance quality and cost. To choose different models, create `mosh.yaml` in the directory where you run the CLI and configure the models you want to run:
 
 ```yaml
 models:
@@ -123,120 +123,50 @@ models:
 
 Use OpenRouter model IDs such as `openai/gpt-5.2` or `anthropic/claude-sonnet-4.5`. DeepSeek IDs such as `deepseek/deepseek-v4-flash` use `DEEPSEEK_API_KEY` directly when it is set; otherwise they route through OpenRouter and require `OPENROUTER_API_KEY`.
 
-## Running A Security Scan
+## Running a security scan
 
-### 1. Create An Engagement And Attach Assets
+### 1. Create an engagement and attach assets
 
-An engagement is the top-level assessment container. Assets are the things under
-assessment, such as live URLs, source trees, repository URLs, and future mobile
-application references.
+An engagement is the top-level assessment container. Assets are the components that make up an assessment, such as live URLs, source trees, repository URLs, etc.
+
+You do not need to provide all of these, e.g. `mosh` works with just a single asset - but providing more assets allows better security hypotheses to be created and tested, leading to more effective vulnerability identification.
 
 ```bash
-mosh engagement create --title "Example App"
-mosh engagement attach eng_a1b2c3d4 https://app.example.com
-mosh engagement attach eng_a1b2c3d4 /path/to/repo
+$ mosh engagement create --title "Example App"
+Engagement created: eng_a1b2c3d4
+
+$ mosh engagement attach eng_a1b2c3d4 https://app.example.com
+Attached: asset_live_1 (live_url)
+
+$ mosh engagement attach eng_a1b2c3d4 /path/to/repo
+Attached: asset_source_1 (source_tree)
 ```
 
-`mosh` infers the asset type from the locator. Use `--type` when a URL is
-ambiguous, for example when a GitHub URL should be treated as a live web target
-instead of a source repository.
+`mosh` infers the asset type from the locator. Use `--type` when a URL is ambiguous, for example when a GitHub URL should be treated as a live web target instead of a source repository.
 
-Engagement setup writes:
+### 2. Run discovery
 
-```text
-report/<engagement-id>/engagement.json
-report/<engagement-id>/assets/<asset-id>/asset.json
-```
-
-`engagement.json` is a small index that stores asset IDs and creation times.
-Each `asset.json` is the source of truth for the asset type, locator, optional
-label, and non-derived asset metadata such as the last discovery timestamp.
-Discovery paths are derived from the engagement and asset IDs.
-
-### 2. Run Discovery
-
-Run discovery for every attached asset that does not already have discovery
-output:
+Run discovery for every attached asset that does not already have discovery output:
 
 ```bash
 mosh discover eng_a1b2c3d4
 ```
 
-Discover one asset:
+You can optionally specify an asset to disover, instead of running discovery on all assets:
 
 ```bash
 mosh discover eng_a1b2c3d4 --asset asset_live_1
 ```
 
-Force a rerun for the selected assets:
-
-```bash
-mosh discover eng_a1b2c3d4 --refresh
-```
-
-Discovery dispatches by asset type. A `live_url` asset uses live application
-discovery. A `source_tree` asset uses source discovery. Discovery writes:
+Discovery writes the result of the discovery of each asset in a markdown report:
 
 ```text
 report/<engagement-id>/assets/<asset-id>/discovery/report.md
 ```
 
-This first source increment builds a compact source index, including files,
-languages, manifests, lockfiles, likely entrypoints, route/API candidates,
-dependencies, and configuration/deployment files. It then uses bounded
-model-assisted steps to resolve route candidates to full paths when router
-mounts are ambiguous, summarize the application's apparent purpose, map key
-business/security components, identify sensitive data and trust boundaries, and
-record discovery gaps that need follow-up. Source evidence is stored as file
-paths, line numbers, and snippet hashes so later planning and reporting can
-refer back to code without putting an entire repository in model context.
-Deterministic discovery also tags test/example routes, records simple
-middleware chains, expands common custom route wrapper patterns, detects Python
-web services such as FastAPI, inventories environment variable references and
-Docker Compose service topology, and parses npm, Python, Gradle, CocoaPods, and
-Swift Package dependency manifests.
+### 3. Create a security test plan
 
-### 3. Link Discovery Evidence
-
-Engagement-backed planning runs evidence linking automatically as its first
-stage. You can also run the temporary diagnostic linker after live and source
-assets have discovery output:
-
-```bash
-mosh link eng_a1b2c3d4
-```
-
-The linker writes:
-
-```text
-report/<engagement-id>/plan/links.json
-```
-
-`links.json` records source-route to live-endpoint relationships with typed
-references back to source and live asset IDs. Asset details and discovery
-timestamps stay in each `asset.json`; the engagement ID is implied by the file
-path. The file includes only an opaque discovery fingerprint so the linker can
-reuse current output without duplicating asset metadata. The linker first
-computes deterministic exact and parameterized path matches, then asks the
-planning-owned `evidence_linker` model for additional candidate links using
-only existing evidence refs. The evidence linker can use narrow read-only tools
-to inspect existing refs: `load_evidence_ref`, `source_search`,
-`source_read_slice`, and `live_endpoint_metadata`. These tools are bounded to
-known source refs and already discovered live endpoint refs; they support
-linkage only and do not create new discovery facts. Candidate links are marked
-separately and are not authoritative discovery facts. Like discovery, the
-command prints an orchestrator start event immediately and runs the CrewAI
-model phase with verbose task/agent output when regeneration is needed. The
-artifact also records asset IDs skipped because they do not yet have usable
-discovery evidence. This command is temporary; `mosh plan <engagement-id>`
-calls the same linker automatically.
-
-### 4. Create A Security Test Plan
-
-Once discovery has produced evidence, ask `mosh` to turn it into testable
-hypotheses:
-
-For engagement-backed planning:
+After all the assets have been discovered, the planning phase performs the key task of understanding the application, its key business risks and then produces a list of testable hypothesis that, if confirmed, would confirm a major flaw in the application:
 
 ```bash
 mosh plan eng_a1b2c3d4
@@ -246,80 +176,11 @@ This writes the engagement security plan under:
 
 ```text
 report/<engagement-id>/plan/plan.md
-report/<engagement-id>/engagement_template.yaml
-```
-
-It also creates or refreshes:
-
-```text
-report/<engagement-id>/plan/links.json
-```
-
-If no attached asset has new discovery output since the previous engagement
-plan run, `mosh plan <engagement-id>` exits without regenerating either
-`plan/links.json` or `plan/plan.md`. If `plan.md` is missing or stale but
-`plan/links.json` already matches the current discovery fingerprint, planning
-reuses the existing links and only regenerates the plan.
-
-Planning uses a compact evidence bundle instead of passing raw discovery memory
-or orchestration logs to the model. It keeps the discovery summaries, bounded
-live routes/forms/references, source routes/dependencies/configuration, asset
-details, and source/live evidence links needed for cross-asset hypotheses.
-When source is attached, source-inspection work such as bounded reads/searches,
-manual route extraction, prompt-template review, and small harnesses should be
-planned as active source tests rather than deferred just because discovery did
-not extract them automatically.
-Planning prefers to keep in-scope tests active when credentials, safe test
-data, authorization confirmation, or another planned test are normal execution
-readiness inputs. Those appear as requirements, preconditions, or dependencies
-with `execution_readiness` set to `preflight_blocked` or `depends_on`, plus
-concrete `readiness_blockers`, and are handled by execution preflight. Deferred
-opportunities are still valid when the missing input means the live test cannot
-yet be bounded safely, such as external-service cost, production side effects,
-specialist tooling, or explicit owner authorization that must be agreed first.
-
-For legacy URL planning:
-
-```bash
-mosh plan https://app.example.com
-```
-
-To plan from source discovery only:
-
-```bash
-mosh plan --source /path/to/repo
-```
-
-To combine live and source discovery evidence:
-
-```bash
-mosh plan https://app.example.com --source /path/to/repo
-```
-
-Live-only planning reads from `report/<host>/discovery/`. Source-aware planning
-also reads from `report/<source>/source-discovery/` and asks the planner to
-route hypotheses with `execution_mode` values of `live`, `source`, `combined`,
-or `deferred`, including affected runtime and source evidence where available.
-Combined assessments are progressive: you can start with a live URL or a source
-tree, then attach the other input later by rerunning planning with both
-arguments or, preferably, by attaching both assets to an engagement and running
-`mosh plan <engagement-id>`.
-Planning writes:
-
-```text
-report/<host>/security-test-planning/security_test_plan.md
-report/<host>/security-test-planning/engagement_template.yaml
-```
-
-For source-only planning, the output is written under:
-
-```text
-report/<source>/security-test-planning/
 ```
 
 ### 5. Review The Engagement File
 
-Before running security testing, review and edit:
+Planning also identifies any pre-requisites to test the hypothesis, such as credentials, test records, etc. Before running security testing, review and edit the engagement template:
 
 ```text
 report/<engagement-id>/engagement_template.yaml
@@ -327,15 +188,16 @@ report/<engagement-id>/engagement_template.yaml
 
 This file is deliberately small. It is where you confirm:
 
-- authorization and active testing permissions
-- production target mappings
-- alternative staging or pre-production target mappings
-- escalation contact details
-- execution limits
-- credentials by role
-- safe test data
+- Authorization and active testing permissions
+- Alternative staging or pre-production target mappings (useful if you do not want to run tests agains production)
+- Execution limits
+- Credentials by role
+- Safe test data
+- ... and anything else you believe is interesting for the tests execution
 
-The security testing crew treats this file as execution configuration. If you map a production target to an alternative target, tests run against the mapped target (useful if you want to run the tests against a pre-prod environment). You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing.
+You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing (for instance if your preprod instance requires SASE credentials or headers, just drop them in the file).
+
+The security testing crew treats this file as execution configuration. 
 
 ### 6. Run Security Testing
 
@@ -345,95 +207,21 @@ When the plan and engagement file are ready, run:
 mosh test-security eng_a1b2c3d4
 ```
 
-Temporary targeted execution for testing the tester is available with a
-hypothesis ID from `plan/plan.md`:
-
-```bash
-mosh test-security eng_a1b2c3d4 --hypothesis AUTH-001
-```
-
-Repeat `--hypothesis` or pass comma-separated IDs to run a small subset.
-
-For legacy URL planning, run:
-
-```bash
-mosh test-security https://app.example.com
-```
-
-For a legacy source-only plan, run:
-
-```bash
-mosh test-security --source /path/to/repo
-```
-
-For a legacy combined live and source plan, pass both:
-
-```bash
-mosh test-security https://app.example.com --source /path/to/repo
-```
-
-If an engagement later gains another input, attach the new asset, rerun
-discovery, planning, and testing with the engagement ID. Existing evidence is
-reused, new source/live links enrich the plan, and only ready hypotheses should
-execute. The legacy compatibility path can still combine URL and source inputs
+If an engagement later gains another input, attach the new asset, re-run discovery, planning, and testing with the engagement ID. Existing evidence is reused, new mappings enrich the plan, and only ready hypotheses execute. The legacy compatibility path can still combine URL and source inputs
 with both arguments.
 
-Security testing writes:
+Security testing writes the output of the hypothesis verification to:
 
 ```text
-report/<engagement-id>/security-testing/preflight.md
-report/<engagement-id>/security-testing/executed_tests/
-report/<engagement-id>/security-testing/executed_tests/history/
+report/<engagement-id>/security-testing/executed_tests/<hypothesis>.md
 ```
-
-Legacy URL security testing writes:
-
-```text
-report/<host>/security-testing/preflight.md
-report/<host>/security-testing/executed_tests/
-report/<host>/security-testing/executed_tests/history/
-```
-
-Source-only preflight writes:
-
-```text
-report/<source>/source-security-testing/preflight.md
-report/<source>/source-security-testing/executed_tests/
-report/<source>/source-security-testing/executed_tests/history/
-```
-
-Security testing uses one executor per hypothesis. The executor can use live
-target tools, source inspection tools, source-local harnesses, or both, depending
-on the planned test steps and attached artifacts. For source-backed tests, it can
-read bounded source slices, search nonignored text files, write generated
-harnesses or fuzz scripts under `/work`, run local commands with explicit
-environment overrides, start a local process in the security tools container,
-issue localhost HTTP requests to it, and stop it after collecting evidence. The
-repository is mounted read-only at `/source` and `/work` is the only writable
-workspace.
-
-Source plans include a `source_assessment_type` for each hypothesis so the
-executor understands whether source evidence is expected to be static inspection,
-a generated harness/function experiment, a local runtime service/API experiment,
-a dependency or tool scan, or deferred live verification. `execution_mode` is a
-planning hint, not a hard executor boundary. Executed reports include a dedicated
-dynamic source evidence section when generated harnesses, local processes, or
-local HTTP requests were used.
-Reports distinguish the original hypothesis result from residual hardening
-gaps; a disproved source hypothesis is not reported as a confirmed finding
-unless a separate supported finding is submitted with its own severity and
-evidence.
 
 Every security-testing run starts with a preflight. The preflight reads the security test plan and engagement file, then separates planned tests into:
 
 - **Executable tests:** hypotheses with the required attached artifacts and engagement inputs available.
-- **Deferred tests:** useful tests blocked by missing deployment, runtime, credentials, tooling, scope, or setup.
 - **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
 
-Executable tests are tagged with their expected evidence profile: `live`,
-`source`, or `combined`.
-
-Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with deterministic engagement-file fields to update. Common blockers include missing authorization confirmation, active testing permission, state-changing test permission, role credentials, safe test data, or target mappings.
+Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with clear engagement-file fields to update. Common blockers include missing authorization confirmation, active testing permission, role credentials, safe test data, or target mappings.
 
 You can run security testing repeatedly to incrementally complete the test:
 
@@ -441,12 +229,11 @@ You can run security testing repeatedly to incrementally complete the test:
 mosh test-security eng_a1b2c3d4
 ```
 
-If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests can become ready and will be executed. Tests that already have a current, review-confirmed execution report are skipped; tests are rerun when the planned hypothesis changes, the previous report was not confirmed by review, or the previous report was created before execution metadata was available. Older reports are kept under `executed_tests/history/`.
+If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests will become ready and be executed.
 
-If executed tests discover new application surface area, `mosh` feeds those facts back into discovery memory, updates the discovery report, and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
-This feedback loop applies to live, source-backed, and combined tests, including
-new routes, API specifications, components, entry points, and configuration facts
-discovered during testing.
+If executed tests discover new application surface area, `mosh` updates the discovery report and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
+
+This self-learning feedback loop ensures that all the information discovered during testing is used during the engagement to produce better results.
 
 ### 7. Create The Final Report
 
@@ -466,21 +253,17 @@ The final report is different from the working documents used during testing. It
 
 The report is structured as a customer deliverable:
 
-- Executive Summary: security-executive prose covering application context, what was tested, overall posture, headline risks, and finding counts by severity
-- At A Glance: short prose summary of the business/application context, confirmed findings, highest qualitative severity, no-finding tests, inconclusive tests, and human-readable engagement timeline
-- Remediation Priorities: findings ordered by qualitative severity so fixes can be prioritized quickly
-- Engagement Overview: prose explanation of target, effective target mappings, lifecycle dates from discovery through final reporting, scope, limitations, and testing approach
-- Summary of Findings: findings table sorted by severity and remediation priority, severity counts, and confirmed/inconclusive/failed/no-finding breakdown
-- Key Discovery Areas: important routes, auth areas, APIs, forms, technologies, exposed surfaces, and limitations
-- Detailed Findings: confirmed findings only, with evidence, impact, technical remediation guidance, source-specific fix details or pseudo-code when available, retest guidance, and references when available
-- Tests With No Finding / Inconclusive: concise appendix for tests that are not confirmed findings
-- Appendix: methodology, tools used, evidence index, and raw report references
+- **Executive summary**: security-executive prose covering application context, what was tested, overall security posture, headline risks, and finding counts by severity
+- **At a glance**: short prose summary of the business/application context, confirmed findings, highest qualitative severity, no-finding tests, inconclusive tests, and a human-readable engagement timeline
+- **Remediation priorities**: findings ordered by qualitative severity so fixes can be prioritized quickly
+- **Engagement overview**: prose explanation of target, lifecycle dates from discovery through final reporting, scope, limitations, and testing approach
+- **Summary of findings**: findings table sorted by severity and remediation priority, severity counts, and confirmed/inconclusive/failed/no-finding breakdown
+- **Key fiscovery areas**: important routes, auth areas, APIs, forms, technologies, exposed surfaces, and limitations
+- **Detailed findings**: confirmed findings only, with evidence, impact, technical remediation guidance, source-specific fix details or pseudo-code when available, retest guidance, and references when available
+- **Tests with no findings or inconclusive**: concise appendix for hypotheses that were not confirmed
+- **Appendix**: methodology, tools used, evidence index, and raw report references
 
-CVSS is included only when it is present in the source execution evidence. Otherwise the final report marks it as `Not scored`.
-
-Qualitative severity is taken from source evidence. If a finding no longer appears in the latest security plan, `mosh` falls back to the executed test report metadata and Scope section rather than losing the severity.
-
-The Markdown report is intended to be readable as-is. Source evidence and remediation snippets are fenced when needed so malformed Markdown from an execution artifact cannot quote the rest of the report. A styled HTML/PDF export can sit on top later, but the Markdown remains the source deliverable so it is easy to review, diff, and version.
+Qualitative severity is taken from hypotheses results and put in the context of the business impact.
 
 ## End-To-End Example
 
@@ -501,16 +284,15 @@ mosh test-security eng_a1b2c3d4
 mosh report https://app.example.com
 ```
 
-## What You Get
+## What you get
 
 After a full run, you have:
 
-- a discovery report describing observed application surface area
-- `plan/links.json` with source/live evidence relationships for combined engagements
-- a security test plan grounded in discovery evidence
-- an editable engagement template for permissions, targets, credentials, limits, and safe test data
-- executed test reports, including resolution
-- a final customer-facing Markdown report
+- A discovery report describing observed application surface area
+- A security test plan grounded in discovery evidence and business risks
+- An editable engagement template for permissions, targets, credentials, limits, and safe test data
+- Executed test reports, including resolution
+- A final customer-facing report
 
 ## Resolving vulnerabilities
 
@@ -554,60 +336,37 @@ Keep the engagement file up to date as the application changes. New roles, test 
 
 ## Implementation
 
-Model-driven Open Security Harness keeps the runtime architecture simple:
+Model-driven Open Security Harness keeps the runtime architecture simple by using crews of agents for each key engagement phase organised around this pattern:
 
 ```text
 orchestrator -> agent -> tools
 ```
 
-The orchestrator coordinates the run. Agents own specialist work. Tools are invoked by agents. External scanners run inside Docker containers rather than being installed on the host.
+The orchestrator coordinates the run. Agents own specialist work. Tools are invoked by agents. Tools run inside Docker containers rather than being installed on the host.
 
 Current crews:
 
-- **Discovery crew:** crawls and summarizes the application surface.
-- **Security planning crew:** turns discovery evidence into scoped test hypotheses.
-- **Security testing crew:** checks ready hypotheses using the engagement file and disposable Docker execution.
+- **Discovery crew:** crawls and summarizes the application surface, identifies business context and correlated assets for more effective planning.
+- **Security planning crew:** turns discovery evidence and business context into testable security hypotheses.
+- **Security testing crew:** checks ready hypotheses using the engagement file and security testing tools.
 
-The discovery image includes Katana, Dirb, Extractify, a static JavaScript endpoint extractor, Node.js, npm, and system Chromium. The security image includes command-line utilities used inside disposable security-testing workspaces, plus source-assessment helpers such as Semgrep, Bandit, pip-audit, Java/OpenJDK, Maven, Corepack, and common project-inspection utilities.
-
-## Future Roadmap
-
-Planned areas of expansion include assessments of source code, deeper browser-driven SPA discovery, richer API endpoint extraction, additional Docker-backed security tools, web-based GUI and broader reporting support.
-
-## Development
-
-Install the project in editable mode:
-
-```bash
-./scripts/setup.sh
-source .venv/bin/activate
-```
-
-Run the test suite:
-
-```bash
-python -m unittest discover -v
-```
-
-Force rebuild Docker tool images when working on Docker-backed functionality:
-
-```bash
-./scripts/setup.sh --force-docker
-```
 
 ## Contributing
 
-Model-driven Open Security Harness is easy to explain, practical, and intentionally focused. Good contributions make it more useful without making it harder to understand.
+`mosh` is easy to explain, practical, and intentionally focused. Good contributions make it more useful without making it harder to understand.
+
+The `SPEC.md` file goes into the details of the implementation and includes the future roadmap of the project - if you are up for it we would love it if you contribute to the development of `mosh`.
 
 Please follow these guidelines:
 
 - Work in small, reviewable changes.
 - Add or update tests for every behavior change.
 - Keep `SPEC.md` in sync when product behavior, architecture, output format, or roadmap changes.
-- Keep this `README.md` in sync when installation, configuration, commands, examples, or user-facing behavior changes.
-- Preserve the `orchestrator -> agent -> tools` architecture.
+- Keep this `README.md` in sync when installation, configuration, commands, examples, or user-facing behavior changes. But keep it light, detailed descriptions belong in the spec file.
+- Preserve the `crew -> orchestrator -> agent -> tools` architecture.
 - Keep external security tools in Docker containers rather than requiring host installs.
 - Avoid broad refactors unless they directly support the change being made.
+- If you are using supporting code development agents please make sure they pay attention to the `AGENTS.md` file.
 
 Before opening a pull request create tests that validate your change and ensure all tests pass:
 
@@ -616,3 +375,9 @@ python -m unittest discover -v
 ```
 
 Also run the relevant CLI flow against an application you are authorized to test when your change affects runtime behavior.
+
+If you are working on docker tool image improvements, make sure you regularly rebuild the images:
+
+```bash
+./scripts/setup.sh --force-docker
+```
