@@ -349,6 +349,7 @@ def _run_one_security_test(
         state.revision = revision
         state.evidence = None
         state.review = None
+        reviewer_unavailable = False
         command_start = len(state.commands)
         read_start = len(state.source_reads)
         search_start = len(state.source_searches)
@@ -421,7 +422,9 @@ def _run_one_security_test(
                 "Reviewer crew failed; proceeding with default review to preserve partial results",
                 {"error": str(exc), "error_type": type(exc).__name__, "test_id": test_id},
             )
+            reviewer_unavailable = True
         if state.review is None:
+            reviewer_unavailable = True
             state.review = {
                 "accepted": False,
                 "summary": "Reviewer unavailable due to crew failure.",
@@ -438,7 +441,7 @@ def _run_one_security_test(
             local_request_start,
         )
         previous_review = state.review
-        if state.review.get("accepted"):
+        if state.review.get("accepted") or reviewer_unavailable:
             break
 
     _cleanup_unified_source_processes(state)
