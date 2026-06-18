@@ -220,7 +220,7 @@ def _build_live_endpoint_metadata_tool(crewai: Any, state: EvidenceLinkerState):
 
 def _build_submit_evidence_link_candidates_tool(crewai: Any, state: EvidenceLinkerState):
     class SubmitEvidenceLinkCandidatesInput(crewai.BaseModel):
-        candidates: dict[str, Any] | str = crewai.Field(
+        links: list[dict[str, Any]] | str = crewai.Field(
             ...,
             description="Candidate source/live evidence links using only source_ref_id and live_ref_id values from the input.",
         )
@@ -230,8 +230,8 @@ def _build_submit_evidence_link_candidates_tool(crewai: Any, state: EvidenceLink
         description: str = "Submit model-assisted source/live evidence link candidates."
         args_schema: type[crewai.BaseModel] = SubmitEvidenceLinkCandidatesInput
 
-        def _run(self, candidates: Any) -> str:
-            normalized = _normalize_candidate_payload(_coerce_mapping(candidates))
+        def _run(self, links: Any) -> str:
+            normalized = _normalize_candidate_payload({"links": links})
             state.candidates = normalized
             return json.dumps({"candidate_links": len(normalized.get("links") or [])}, sort_keys=True)
 
@@ -501,7 +501,7 @@ def _record_observation(state: EvidenceLinkerState, tool: str, result: dict[str,
 
 
 def _normalize_candidate_payload(value: dict[str, Any]) -> dict[str, Any]:
-    links = value.get("links") if isinstance(value.get("links"), list) else []
+    links = _candidate_link_items(value.get("links"))
     normalized_links = []
     for item in links:
         if not isinstance(item, dict):
@@ -519,6 +519,24 @@ def _normalize_candidate_payload(value: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return {"links": normalized_links[:100]}
+
+
+def _candidate_link_items(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            return _candidate_link_items(parsed.get("links"))
+    return []
 
 
 def _normalize_confidence(value: Any) -> str:

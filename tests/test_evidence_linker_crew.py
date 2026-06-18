@@ -12,6 +12,7 @@ from mosh.crews.security_planning.evidence_linker import (
     _build_planning_evidence_linker_crew,
     _build_live_endpoint_metadata_tool,
     _build_load_evidence_ref_tool,
+    _build_submit_evidence_link_candidates_tool,
     _build_source_read_slice_tool,
     _build_source_search_tool,
 )
@@ -67,6 +68,62 @@ class EvidenceLinkerCrewTests(unittest.TestCase):
                 "submit_evidence_link_candidates",
             },
         )
+
+    def test_submit_candidates_tool_schema_matches_prompt_links_argument(self) -> None:
+        crewai = _load_crewai()
+        tool = _build_submit_evidence_link_candidates_tool(crewai, EvidenceLinkerState())
+
+        schema = tool.args_schema.model_json_schema()
+
+        self.assertEqual(schema["required"], ["links"])
+        self.assertIn("links", schema["properties"])
+        self.assertNotIn("candidates", schema["properties"])
+
+    def test_submit_candidates_tool_records_links_argument(self) -> None:
+        crewai = _load_crewai()
+        state = EvidenceLinkerState()
+        tool = _build_submit_evidence_link_candidates_tool(crewai, state)
+
+        result = json.loads(
+            tool._run(
+                links=[
+                    {
+                        "source_ref_id": "src_sales",
+                        "live_ref_id": "live_sales",
+                        "confidence": "high",
+                        "reason": "Matching sales lead route.",
+                    }
+                ]
+            )
+        )
+
+        self.assertEqual(result["candidate_links"], 1)
+        self.assertEqual(state.candidates["links"][0]["source_ref_id"], "src_sales")
+        self.assertEqual(state.candidates["links"][0]["live_ref_id"], "live_sales")
+        self.assertEqual(state.candidates["links"][0]["confidence"], "high")
+
+    def test_submit_candidates_tool_accepts_json_encoded_links_argument(self) -> None:
+        crewai = _load_crewai()
+        state = EvidenceLinkerState()
+        tool = _build_submit_evidence_link_candidates_tool(crewai, state)
+
+        result = json.loads(
+            tool._run(
+                links=json.dumps(
+                    [
+                        {
+                            "source_ref_id": "src_sales",
+                            "live_ref_id": "live_sales",
+                            "confidence": "medium",
+                            "reason": "Matching route names.",
+                        }
+                    ]
+                )
+            )
+        )
+
+        self.assertEqual(result["candidate_links"], 1)
+        self.assertEqual(state.candidates["links"][0]["confidence"], "medium")
 
     def test_linkage_tools_load_search_and_read_only_existing_source_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
