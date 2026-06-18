@@ -132,6 +132,7 @@ def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str
             "activation_codes": [],
             "callback_listener_url": None,
         },
+        "known_public_endpoints": [],
     }
 
 
@@ -143,7 +144,20 @@ def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
         "limits": _simplify_mapping(template.get("limits")),
         "credentials": _simplify_credentials(template.get("credentials")),
         "safe_test_data": _simplify_safe_test_data(template.get("safe_test_data")),
+        "known_public_endpoints": _simplify_known_public_endpoints(template.get("known_public_endpoints")),
     }
+
+
+def _simplify_known_public_endpoints(value: Any) -> list[str]:
+    items = _unwrap_config_value(value)
+    if not isinstance(items, list):
+        return []
+    endpoints: list[str] = []
+    for item in items:
+        endpoint = _text(item)
+        if endpoint:
+            endpoints.append(endpoint)
+    return endpoints
 
 
 def _simplify_engagement(value: Any) -> dict[str, Any]:
@@ -260,6 +274,16 @@ def load_engagement_file(path: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError(f"{path} must contain an engagement mapping")
     return parsed
+
+
+def resolve_known_public_endpoints(engagement: dict[str, Any]) -> list[str]:
+    """Return the normalized list of endpoints intentionally exposed without auth.
+
+    Missing key or non-list values resolve to an empty list so callers
+    (e.g. the security testing preflight) can safely iterate and exclude these
+    endpoints from 'missing authentication' findings.
+    """
+    return _simplify_known_public_endpoints(engagement.get("known_public_endpoints"))
 
 
 def resolve_target_mapping(engagement: dict[str, Any]) -> dict[str, str]:
