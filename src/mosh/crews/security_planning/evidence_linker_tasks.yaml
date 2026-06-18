@@ -33,7 +33,8 @@ suggest_evidence_link_candidates_task:
       even though exact deterministic path matching did not link them.
     - Keep reasons short and evidence-based.
 
-    You must call submit_evidence_link_candidates exactly once with:
+    You must call submit_evidence_link_candidates exactly once. The tool has
+    one argument named links:
 
     {
       "links": [
