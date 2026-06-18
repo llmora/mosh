@@ -26,6 +26,7 @@ from mosh.crews.security_testing.crew import (
     _apply_review_artifact_decisions,
     _archive_latest_report,
     _coerce_mapping,
+    _coerce_execution_submission_fields,
     _execution_metadata,
     _extract_artifacts,
     _hypothesis_id,
@@ -1011,18 +1012,59 @@ def _cleanup_source_processes(state: SourceSecurityTestExecutionState) -> None:
 
 def _build_submit_source_evidence_tool(crewai: Any, state: SourceSecurityTestExecutionState):
     class SourceEvidenceInput(crewai.BaseModel):
-        evidence: dict[str, Any] | str = crewai.Field(
+        status: str = crewai.Field(
             ...,
-            description="Structured source security evidence, observations, status, and provisional result.",
+            description="Execution status: finding, no-finding, inconclusive, or failed.",
         )
+        hypothesis_validated: bool | str | None = crewai.Field(None, description="Whether the original hypothesis was validated.")
+        original_hypothesis_result: str | None = crewai.Field(None, description="Explanation of the original hypothesis result.")
+        summary: str | None = crewai.Field(None, description="Short execution summary.")
+        observations: Any = crewai.Field(None, description="Evidence observations from source tools and local runtime checks.")
+        source_evidence: Any = crewai.Field(None, description="Concrete source evidence references.")
+        discovery_updates: Any = crewai.Field(None, description="New discovery facts learned during testing.")
+        artifacts: Any = crewai.Field(None, description="Useful generated outputs.")
+        residual_findings: Any = crewai.Field(None, description="Separate adjacent findings.")
+        finding: Any = crewai.Field(None, description="Validated vulnerability finding object, if any.")
+        result: str | None = crewai.Field(None, description="Supported conclusion.")
+        safety_notes: str | None = crewai.Field(None, description="Safety limits followed.")
+        follow_up: Any = crewai.Field(None, description="Remaining work, if any.")
 
     class SubmitSourceEvidenceTool(crewai.BaseTool):
         name: str = "submit_source_security_test_evidence"
         description: str = "Submit structured evidence from source security testing."
         args_schema: type[crewai.BaseModel] = SourceEvidenceInput
 
-        def _run(self, evidence: Any) -> str:
-            content = _coerce_mapping(evidence)
+        def _run(
+            self,
+            status: str,
+            hypothesis_validated: Any = None,
+            original_hypothesis_result: str | None = None,
+            summary: str | None = None,
+            observations: Any = None,
+            source_evidence: Any = None,
+            discovery_updates: Any = None,
+            artifacts: Any = None,
+            residual_findings: Any = None,
+            finding: Any = None,
+            result: str | None = None,
+            safety_notes: str | None = None,
+            follow_up: Any = None,
+        ) -> str:
+            content = _coerce_execution_submission_fields(
+                status=status,
+                hypothesis_validated=hypothesis_validated,
+                original_hypothesis_result=original_hypothesis_result,
+                summary=summary,
+                observations=observations,
+                source_evidence=source_evidence,
+                discovery_updates=discovery_updates,
+                artifacts=artifacts,
+                residual_findings=residual_findings,
+                finding=finding,
+                result=result,
+                safety_notes=safety_notes,
+                follow_up=follow_up,
+            )
             content.setdefault("commands", state.commands)
             content.setdefault("source_reads", state.source_reads)
             content.setdefault("source_searches", state.source_searches)

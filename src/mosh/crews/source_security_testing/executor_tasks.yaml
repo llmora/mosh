@@ -60,8 +60,9 @@ execute_source_security_test_task:
     engagement targets only. Do not probe production or arbitrary external URLs
     from a source-only hypothesis.
 
-    You must call submit_source_security_test_evidence exactly once with a
-    structured object containing:
+    You must call submit_source_security_test_evidence exactly once with
+    top-level tool arguments. Do not wrap these fields inside an evidence
+    object. Submit:
     - status: finding, no-finding, inconclusive, or failed
     - hypothesis_validated: true, false, or partial for the original planned
       hypothesis, independent of adjacent hardening observations
