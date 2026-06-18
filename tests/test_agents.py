@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mosh.crews.discovery.agents import CrawlerAgent, discovery_agent_definitions
 from mosh.config import AppConfig
@@ -85,6 +86,20 @@ class FakeExtractifyTool:
 class FakeJsStaticTool(FakeExtractifyTool):
     class definition:
         name = "js_static_endpoint_discovery"
+
+
+class FakeUrlOpenResponse:
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+    def __enter__(self) -> "FakeUrlOpenResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body.encode("utf-8")
 
 
 class AgentToolBoundaryTests(unittest.TestCase):
@@ -521,6 +536,95 @@ class AgentToolBoundaryTests(unittest.TestCase):
                     for event in events
                 )
             )
+
+    def test_crawler_agent_filters_openapi_endpoints_through_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            spec_url = "https://app.example.test/openapi.json"
+            primary = StaticCrawlTool(
+                CrawlResult(
+                    start_url="https://app.example.test/",
+                    pages=[
+                        CrawledPage(
+                            url=spec_url,
+                            status=200,
+                            content_type="application/json",
+                            title="OpenAPI",
+                            headers={},
+                            links=[],
+                            references=[],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            spec = {
+                "openapi": "3.0.1",
+                "servers": [{"url": "https://thirdparty-auth.test/api"}],
+                "paths": {
+                    "/token": {
+                        "post": {"summary": "Issue a token"},
+                    }
+                },
+            }
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary)
+
+            with patch("urllib.request.urlopen", return_value=FakeUrlOpenResponse(json.dumps(spec))):
+                result = agent.discover("https://app.example.test", memory, max_pages=10, max_depth=2)
+
+            self.assertNotIn("https://thirdparty-auth.test/api/token", {page.url for page in result.pages})
+            self.assertEqual(result.out_of_scope, ["https://thirdparty-auth.test/api/token"])
+
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            parsed_event = next(event for event in events if event["action"] == "openapi_spec_parsed")
+            self.assertEqual(parsed_event["data"]["endpoints"], 1)
+            self.assertEqual(parsed_event["data"]["in_scope"], 0)
+            self.assertEqual(parsed_event["data"]["out_of_scope"], 1)
+
+    def test_crawler_agent_preserves_openapi_methods_for_same_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            spec_url = "https://app.example.test/openapi.json"
+            primary = StaticCrawlTool(
+                CrawlResult(
+                    start_url="https://app.example.test/",
+                    pages=[
+                        CrawledPage(
+                            url=spec_url,
+                            status=200,
+                            content_type="application/json",
+                            title="OpenAPI",
+                            headers={},
+                            links=[],
+                            references=[],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            spec = {
+                "openapi": "3.0.1",
+                "servers": [{"url": "https://app.example.test/api"}],
+                "paths": {
+                    "/users": {
+                        "get": {"summary": "List users"},
+                        "post": {"summary": "Create user"},
+                    }
+                },
+            }
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary)
+
+            with patch("urllib.request.urlopen", return_value=FakeUrlOpenResponse(json.dumps(spec))):
+                result = agent.discover("https://app.example.test", memory, max_pages=10, max_depth=2)
+
+            endpoint_pages = [page for page in result.pages if page.url == "https://app.example.test/api/users"]
+            self.assertEqual([page.title for page in endpoint_pages], ["GET /users", "POST /users"])
 
     def test_crawler_agent_tool_result_includes_failure_details(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
