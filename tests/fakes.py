@@ -23,6 +23,80 @@ from mosh.crews.security_testing.crew import (
 from mosh.crews.security_planning.reporting import write_security_test_plan
 
 
+class FakeRuntimeCrewAI:
+    BaseModel = object
+    BaseTool = object
+
+    class Process:
+        sequential = "sequential"
+
+    class LLM:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class Agent:
+        def __init__(self, config, llm, tools, allow_delegation) -> None:
+            self.config = config
+            self.llm = llm
+            self.tools = tools
+            self.allow_delegation = allow_delegation
+
+    class Task:
+        def __init__(self, config, agent, callback=None) -> None:
+            self.config = config
+            self.agent = agent
+            self.callback = callback
+
+    class Crew:
+        def __init__(self, agents, tasks, process, verbose, event_listeners=None) -> None:
+            self.agents = agents
+            self.tasks = tasks
+            self.process = process
+            self.verbose = verbose
+            self.event_listeners = event_listeners
+
+    @staticmethod
+    def Field(default=None, description: str = ""):
+        return default
+
+    @staticmethod
+    def CrewBase(cls):
+        if isinstance(getattr(cls, "agents_config", None), str):
+            cls.agents_config = FakeRuntimeCrewAI._load_config_blocks(cls.agents_config)
+        if isinstance(getattr(cls, "tasks_config", None), str):
+            cls.tasks_config = FakeRuntimeCrewAI._load_config_blocks(cls.tasks_config)
+        return cls
+
+    @staticmethod
+    def agent(fn):
+        return fn
+
+    @staticmethod
+    def task(fn):
+        return fn
+
+    @staticmethod
+    def crew(fn):
+        return fn
+
+    @staticmethod
+    def _load_config_blocks(path: str) -> dict[str, str]:
+        blocks: dict[str, list[str]] = {}
+        current_key: str | None = None
+        current_block: list[str] = []
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if line and not line[0].isspace() and line.rstrip().endswith(":"):
+                if current_key is not None:
+                    blocks[current_key] = current_block
+                current_key = line.rstrip()[:-1]
+                current_block = []
+            elif current_key is not None:
+                current_block.append(line)
+        if current_key is not None:
+            blocks[current_key] = current_block
+        return {key: "\n".join(value) for key, value in blocks.items()}
+
+
 class FakeCrewRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []

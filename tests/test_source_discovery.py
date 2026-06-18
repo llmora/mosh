@@ -6,11 +6,14 @@ import unittest
 from pathlib import Path
 
 from mosh.config import AppConfig
+from mosh.crews.source_discovery.agents import build_source_discovery_agents
 from mosh.crews.source_discovery.crew import (
     CrewAISourceDiscoveryCrewRunner,
     CrewAIUnavailable,
+    SourceDiscoveryCrewState,
     SourceDiscoveryOrchestrator,
     _apply_route_resolutions,
+    _build_yaml_source_discovery_crew,
     _route_id,
 )
 from mosh.crews.source_discovery.tools import (
@@ -22,7 +25,7 @@ from mosh.crews.source_discovery.tools import (
 )
 from mosh.memory import FileMemory
 from mosh.scope import source_report_dir_name
-from tests.fakes import FakeSourceDiscoveryRunner
+from tests.fakes import FakeRuntimeCrewAI, FakeSourceDiscoveryRunner
 from tests.fixtures import fixture_source_tree
 
 
@@ -178,6 +181,29 @@ class SourceDiscoveryToolTests(unittest.TestCase):
 
 
 class SourceDiscoveryCrewTests(unittest.TestCase):
+    def test_source_discovery_crewai_crew_attaches_usage_event_listener(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = AppConfig(openrouter_api_key="test-key")
+            agents = build_source_discovery_agents(config)
+            state = SourceDiscoveryCrewState(
+                source="/tmp/source",
+                report_dir=Path(directory),
+                memory=FileMemory(Path(directory)),
+            )
+            crew_def = _build_yaml_source_discovery_crew(
+                crewai=FakeRuntimeCrewAI,
+                config=config,
+                state=state,
+                intake_agent=agents.intake,
+                mapper_agent=agents.mapper,
+                dependency_config_agent=agents.dependency_config,
+                reporter_agent=agents.reporter,
+            )
+
+            crew = crew_def.crew()
+
+            self.assertEqual(len(crew.event_listeners), 1)
+
     def test_crewai_runner_requires_llm_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runner = CrewAISourceDiscoveryCrewRunner(AppConfig(openrouter_api_key=None))

@@ -1506,6 +1506,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 crew = builder(_FakeRuntimeCrewAI, config, state).crew()
                 self.assertEqual(len(crew.agents), 1)
                 self.assertEqual(len(crew.tasks), 1)
+                self.assertEqual(len(crew.event_listeners), 1)
 
             self.assertFalse((report_dir / ".crew_config").exists())
 
@@ -1532,6 +1533,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 crew = builder(_FakeRuntimeCrewAI, config, state).crew()
                 self.assertEqual(len(crew.agents), 1)
                 self.assertEqual(len(crew.tasks), 1)
+                self.assertEqual(len(crew.event_listeners), 1)
 
             self.assertFalse((report_dir / ".crew_config").exists())
 
