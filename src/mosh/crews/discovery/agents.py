@@ -7,7 +7,7 @@ from mosh.config import AppConfig
 from mosh.crews.definitions import AgentDefinition
 from mosh.memory import FileMemory
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
-from mosh.scope import normalize_url
+from mosh.scope import ScopePolicy, normalize_url
 from mosh.crews.discovery.tools import (
     CrawlApplicationTool,
     DirbDockerDiscoveryTool,
@@ -34,6 +34,10 @@ JS_SURFACE_MARKERS = (
     "angular",
     "svelte",
     "nuxt",
+)
+
+HTTP_METHOD_TITLES = tuple(
+    f"{method} " for method in ("GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS")
 )
 
 
@@ -207,7 +211,9 @@ class CrawlerAgent:
         ]
         if not json_pages:
             return None
-        all_pages: list = []
+        scope = ScopePolicy.from_url(crawl.start_url)
+        all_pages: list[CrawledPage] = []
+        out_of_scope: set[str] = set()
         for page in json_pages:
             try:
                 with urllib.request.urlopen(page.url, timeout=30) as response:
@@ -223,20 +229,31 @@ class CrawlerAgent:
                 {"url": page.url, "size": len(body)},
             )
             pages = parse_openapi_spec(page.url, body)
-            all_pages.extend(pages)
+            in_scope_pages: list[CrawledPage] = []
+            for candidate in pages:
+                if scope.in_scope(candidate.url):
+                    in_scope_pages.append(candidate)
+                else:
+                    out_of_scope.add(candidate.url)
+            all_pages.extend(in_scope_pages)
             memory.record_event(
                 self.name,
                 "openapi_spec_parsed",
                 f"Extracted {len(pages)} API endpoints from OpenAPI spec",
-                {"url": page.url, "endpoints": len(pages)},
+                {
+                    "url": page.url,
+                    "endpoints": len(pages),
+                    "in_scope": len(in_scope_pages),
+                    "out_of_scope": len(pages) - len(in_scope_pages),
+                },
             )
-        if not all_pages:
+        if not all_pages and not out_of_scope:
             return None
         from mosh.models import CrawlResult as CR
         return CR(
             start_url=crawl.start_url,
             pages=all_pages,
-            out_of_scope=[],
+            out_of_scope=sorted(out_of_scope),
             failed=[],
         )
 
@@ -342,13 +359,14 @@ class CrawlerAgent:
         )
 
     def _merge_crawls(self, primary: CrawlResult, secondary: CrawlResult) -> CrawlResult:
-        pages_by_url: dict[str, CrawledPage] = {page.url: page for page in primary.pages}
+        pages_by_key: dict[tuple[str, str], CrawledPage] = {_page_merge_key(page): page for page in primary.pages}
         for page in secondary.pages:
-            existing = pages_by_url.get(page.url)
+            page_key = _page_merge_key(page)
+            existing = pages_by_key.get(page_key)
             if not existing:
-                pages_by_url[page.url] = page
+                pages_by_key[page_key] = page
             elif existing.status == 0 and page.status != 0:
-                pages_by_url[page.url] = page
+                pages_by_key[page_key] = page
         candidates_by_key: dict[tuple[str, str], DiscoveryCandidate] = {
             (candidate.url, candidate.source_tool): candidate for candidate in primary.candidates
         }
@@ -356,7 +374,7 @@ class CrawlerAgent:
             candidates_by_key.setdefault((candidate.url, candidate.source_tool), candidate)
         return CrawlResult(
             start_url=primary.start_url,
-            pages=sorted(pages_by_url.values(), key=lambda page: page.url),
+            pages=sorted(pages_by_key.values(), key=lambda page: (page.url, page.title or "")),
             out_of_scope=sorted({*primary.out_of_scope, *secondary.out_of_scope}),
             failed=[*primary.failed, *secondary.failed],
             robots=primary.robots or secondary.robots,
@@ -461,6 +479,12 @@ def _javascript_contexts(crawl: CrawlResult) -> list[dict[str, object]]:
                 }
             )
     return contexts
+
+
+def _page_merge_key(page: CrawledPage) -> tuple[str, str]:
+    if page.status == 0 and page.references and page.title and page.title.startswith(HTTP_METHOD_TITLES):
+        return (page.url, page.title)
+    return (page.url, "")
 
 
 def _crawl_event_result_data(crawl: CrawlResult, sample_limit: int = 20) -> dict[str, object]:
