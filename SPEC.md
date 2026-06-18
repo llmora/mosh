@@ -84,6 +84,8 @@ Use CrewAI for the agent implementation.
 
 Use OpenRouter and optional direct DeepSeek API access for LLM calls.
 
+Runtime settings are read from exported environment variables and from an optional `.env` file in the directory where the CLI is run. Exported environment variables take precedence over `.env` values. The `.env` file is local-only and must not be committed. The optional `mosh.yaml` file remains the place for model selection.
+
 OpenRouter is the default and is always used for non-DeepSeek models. Its API key is provided through:
 
 ```text
