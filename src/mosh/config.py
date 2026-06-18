@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
+
+from dotenv import dotenv_values
 
 
 @dataclass(frozen=True)
@@ -75,24 +78,35 @@ class AppConfig:
     refine_engagement_template_with_llm: bool = True
 
     @classmethod
-    def from_env(cls, config_path: str | Path = "mosh.yaml") -> "AppConfig":
+    def from_env(cls, config_path: str | Path = "mosh.yaml", dotenv_path: str | Path = ".env") -> "AppConfig":
+        dotenv = _load_dotenv(Path(dotenv_path))
         models = _load_agent_model_config(Path(config_path))
         return cls(
-            openrouter_api_key=os.getenv("OPENROUTER_API_KEY"),
-            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+            openrouter_api_key=_env_value("OPENROUTER_API_KEY", dotenv),
+            deepseek_api_key=_env_value("DEEPSEEK_API_KEY", dotenv),
             models=models,
-            openrouter_base_url=os.getenv("MOSH_OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            security_tool_image=os.getenv("MOSH_SECURITY_TOOL_IMAGE", "mosh-security-tools:latest"),
-            security_command_timeout=int(os.getenv("MOSH_SECURITY_COMMAND_TIMEOUT", "300")),
-            security_execution_max_revisions=int(os.getenv("MOSH_SECURITY_EXECUTION_MAX_REVISIONS", "2")),
-            katana_crawl_duration=os.getenv("MOSH_KATANA_CRAWL_DURATION", "270s"),
-            katana_docker_timeout=int(os.getenv("MOSH_KATANA_DOCKER_TIMEOUT", "300")),
-            dirb_wordlist=os.getenv("MOSH_DIRB_WORDLIST", "/usr/share/dirb/wordlists/small.txt"),
-            dirb_docker_timeout=int(os.getenv("MOSH_DIRB_DOCKER_TIMEOUT", "300")),
-            candidate_follow_up_limit=int(os.getenv("MOSH_CANDIDATE_FOLLOW_UP_LIMIT", "5")),
-            max_depth=int(os.getenv("MOSH_MAX_DEPTH", "5")),
-            planning_max_revisions=int(os.getenv("MOSH_PLANNING_MAX_REVISIONS", "1")),
-            refine_engagement_template_with_llm=_env_bool("MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM", True),
+            openrouter_base_url=_env_value(
+                "MOSH_OPENROUTER_BASE_URL",
+                dotenv,
+                "https://openrouter.ai/api/v1",
+            ),
+            security_tool_image=_env_value("MOSH_SECURITY_TOOL_IMAGE", dotenv, "mosh-security-tools:latest"),
+            security_command_timeout=int(_env_value("MOSH_SECURITY_COMMAND_TIMEOUT", dotenv, "300")),
+            security_execution_max_revisions=int(
+                _env_value("MOSH_SECURITY_EXECUTION_MAX_REVISIONS", dotenv, "2")
+            ),
+            katana_crawl_duration=_env_value("MOSH_KATANA_CRAWL_DURATION", dotenv, "270s"),
+            katana_docker_timeout=int(_env_value("MOSH_KATANA_DOCKER_TIMEOUT", dotenv, "300")),
+            dirb_wordlist=_env_value("MOSH_DIRB_WORDLIST", dotenv, "/usr/share/dirb/wordlists/small.txt"),
+            dirb_docker_timeout=int(_env_value("MOSH_DIRB_DOCKER_TIMEOUT", dotenv, "300")),
+            candidate_follow_up_limit=int(_env_value("MOSH_CANDIDATE_FOLLOW_UP_LIMIT", dotenv, "5")),
+            max_depth=int(_env_value("MOSH_MAX_DEPTH", dotenv, "5")),
+            planning_max_revisions=int(_env_value("MOSH_PLANNING_MAX_REVISIONS", dotenv, "1")),
+            refine_engagement_template_with_llm=_env_bool(
+                "MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM",
+                True,
+                dotenv,
+            ),
         )
 
     def llm_api_key_for_model(self, model: str) -> str | None:
@@ -264,8 +278,23 @@ def _parse_yaml_scalar(value: str) -> str:
     return value
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
+def _load_dotenv(path: Path) -> dict[str, str | None]:
+    if not path.exists():
+        return {}
+    return dict(dotenv_values(path))
+
+
+def _env_value(name: str, dotenv: Mapping[str, str | None], default: str | None = None) -> str | None:
+    if name in os.environ:
+        return os.environ[name]
+    value = dotenv.get(name)
+    if value is not None:
+        return value
+    return default
+
+
+def _env_bool(name: str, default: bool, dotenv: Mapping[str, str | None]) -> bool:
+    value = _env_value(name, dotenv)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}

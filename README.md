@@ -60,7 +60,7 @@ After activation, you can omit `uv run` and use `mosh ...`.
 
 ## Configuration
 
-Set an LLM API key before running the CLI.
+Set an LLM API key before running the CLI. `mosh` reads configuration from exported environment variables and from an optional `.env` file in the directory where you run the CLI. Exported environment variables take precedence over values in `.env`, and `.env` is intended for local settings only.
 
 For the default direct DeepSeek setup, open an account at deepseek.com and generate an API key:
 
@@ -73,6 +73,18 @@ Or route through OpenRouter, open an account at openrouter.ai and generate an AP
 ```bash
 export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
+
+Instead of exporting values every time, you can create a local `.env` file:
+
+```dotenv
+DEEPSEEK_API_KEY=your-deepseek-api-key
+OPENROUTER_API_KEY=your-openrouter-api-key
+MOSH_MAX_DEPTH=5
+MOSH_SECURITY_COMMAND_TIMEOUT=300
+MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM=true
+```
+
+Do not commit `.env`; it is ignored by git.
 
 ### Model Selection
 

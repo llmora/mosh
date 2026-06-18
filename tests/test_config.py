@@ -10,15 +10,20 @@ from mosh.config import AppConfig
 
 
 class AppConfigTests(unittest.TestCase):
+    def _missing_dotenv_path(self) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name) / ".env"
+
     def test_default_max_depth_is_five(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertEqual(config.max_depth, 5)
 
     def test_max_depth_can_be_overridden_from_env(self) -> None:
         with patch.dict(os.environ, {"MOSH_MAX_DEPTH": "7"}, clear=True):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertEqual(config.max_depth, 7)
 
@@ -33,7 +38,7 @@ class AppConfigTests(unittest.TestCase):
             },
             clear=True,
         ):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertEqual(config.dirb_wordlist, "/tmp/words.txt")
         self.assertEqual(config.dirb_docker_timeout, 45)
@@ -42,10 +47,96 @@ class AppConfigTests(unittest.TestCase):
 
     def test_engagement_template_refinement_defaults_to_enabled(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertTrue(config.refine_engagement_template_with_llm)
         self.assertEqual(config.models.planning.engagement_refiner, "deepseek/deepseek-v4-flash")
+
+    def test_config_can_be_loaded_from_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dotenv_path = Path(directory) / ".env"
+            dotenv_path.write_text(
+                "\n".join(
+                    [
+                        "# local mosh settings",
+                        'DEEPSEEK_API_KEY="dotenv-deepseek-key"',
+                        "OPENROUTER_API_KEY=dotenv-openrouter-key",
+                        "MOSH_MAX_DEPTH=8",
+                        "MOSH_SECURITY_COMMAND_TIMEOUT=45",
+                        "MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM=false",
+                        "export MOSH_DIRB_WORDLIST=/tmp/dotenv-words.txt",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(
+                    config_path=Path(directory) / "missing.yaml",
+                    dotenv_path=dotenv_path,
+                )
+
+        self.assertEqual(config.deepseek_api_key, "dotenv-deepseek-key")
+        self.assertEqual(config.openrouter_api_key, "dotenv-openrouter-key")
+        self.assertEqual(config.max_depth, 8)
+        self.assertEqual(config.security_command_timeout, 45)
+        self.assertEqual(config.dirb_wordlist, "/tmp/dotenv-words.txt")
+        self.assertFalse(config.refine_engagement_template_with_llm)
+
+    def test_shell_env_overrides_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dotenv_path = Path(directory) / ".env"
+            dotenv_path.write_text(
+                "\n".join(
+                    [
+                        "DEEPSEEK_API_KEY=dotenv-deepseek-key",
+                        "OPENROUTER_API_KEY=dotenv-openrouter-key",
+                        "MOSH_MAX_DEPTH=8",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "DEEPSEEK_API_KEY": "shell-deepseek-key",
+                    "MOSH_MAX_DEPTH": "9",
+                },
+                clear=True,
+            ):
+                config = AppConfig.from_env(
+                    config_path=Path(directory) / "missing.yaml",
+                    dotenv_path=dotenv_path,
+                )
+
+        self.assertEqual(config.deepseek_api_key, "shell-deepseek-key")
+        self.assertEqual(config.openrouter_api_key, "dotenv-openrouter-key")
+        self.assertEqual(config.max_depth, 9)
+
+    def test_missing_dotenv_keeps_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(
+                    config_path=Path(directory) / "missing.yaml",
+                    dotenv_path=Path(directory) / ".env",
+                )
+
+        self.assertIsNone(config.deepseek_api_key)
+        self.assertEqual(config.max_depth, 5)
+
+    def test_default_dotenv_path_uses_current_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            previous_cwd = Path.cwd()
+            Path(directory, ".env").write_text("MOSH_MAX_DEPTH=11\n", encoding="utf-8")
+            try:
+                os.chdir(directory)
+                with patch.dict(os.environ, {}, clear=True):
+                    config = AppConfig.from_env(config_path=Path(directory) / "missing.yaml")
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(config.max_depth, 11)
 
     def test_models_can_be_loaded_from_mosh_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -74,7 +165,7 @@ class AppConfigTests(unittest.TestCase):
             )
 
             with patch.dict(os.environ, {}, clear=True):
-                config = AppConfig.from_env(config_path=config_path)
+                config = AppConfig.from_env(config_path=config_path, dotenv_path=Path(directory) / ".env")
 
         self.assertEqual(config.models.discovery.crawler, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.source_discovery.mapper, "openai/gpt-5.2-mini")
@@ -91,7 +182,10 @@ class AppConfigTests(unittest.TestCase):
     def test_missing_mosh_yaml_keeps_default_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {}, clear=True):
-                config = AppConfig.from_env(config_path=Path(directory) / "missing.yaml")
+                config = AppConfig.from_env(
+                    config_path=Path(directory) / "missing.yaml",
+                    dotenv_path=Path(directory) / ".env",
+                )
 
         self.assertEqual(config.models.discovery.crawler, "deepseek/deepseek-v4-flash")
 
@@ -101,7 +195,7 @@ class AppConfigTests(unittest.TestCase):
             config_path.write_text("models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery.crawlerr`"):
-                AppConfig.from_env(config_path=config_path)
+                AppConfig.from_env(config_path=config_path, dotenv_path=Path(directory) / ".env")
 
     def test_unknown_source_discovery_model_key_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -109,7 +203,7 @@ class AppConfigTests(unittest.TestCase):
             config_path.write_text("models:\n  source_discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "Unknown model key `models.source_discovery.crawlerr`"):
-                AppConfig.from_env(config_path=config_path)
+                AppConfig.from_env(config_path=config_path, dotenv_path=Path(directory) / ".env")
 
     def test_deepseek_models_use_direct_deepseek_when_key_is_available(self) -> None:
         config = AppConfig(deepseek_api_key="deepseek-key")
@@ -147,7 +241,7 @@ class AppConfigTests(unittest.TestCase):
             {"DEEPSEEK_API_KEY": "deepseek-key"},
             clear=True,
         ):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertEqual(config.deepseek_api_key, "deepseek-key")
 
@@ -157,7 +251,7 @@ class AppConfigTests(unittest.TestCase):
             {"MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM": "false"},
             clear=True,
         ):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertFalse(config.refine_engagement_template_with_llm)
 
@@ -171,7 +265,7 @@ class AppConfigTests(unittest.TestCase):
             },
             clear=True,
         ):
-            config = AppConfig.from_env()
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
 
         self.assertEqual(config.security_tool_image, "security-tools:test")
         self.assertEqual(config.security_command_timeout, 45)
