@@ -92,14 +92,14 @@ models:
     gap_analyst: deepseek/deepseek-v4-flash
     reporter: deepseek/deepseek-v4-flash
 
-  security_planning:
+  planning:
     planner: deepseek/deepseek-v4-flash
     evidence_linker: deepseek/deepseek-v4-flash
     reviewer: deepseek/deepseek-v4-pro
     reporter: deepseek/deepseek-v4-flash
     engagement_refiner: deepseek/deepseek-v4-flash
 
-  security_testing:
+  testing:
     executor: deepseek/deepseek-v4-flash
     reviewer: deepseek/deepseek-v4-pro
     reporter: deepseek/deepseek-v4-flash
@@ -119,11 +119,11 @@ models:
   source_discovery:
     mapper: openai/gpt-5.2-mini
 
-  security_planning:
+  planning:
     evidence_linker: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
 
-  security_testing:
+  testing:
     reviewer: openai/gpt-5.2
 
   reporting:
@@ -206,21 +206,21 @@ This file is deliberately small. It is where you confirm:
 
 You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing (for instance if your preprod instance requires SASE credentials or headers, just drop them in the file).
 
-The security testing crew treats this file as execution configuration.
+The testing crew treats this file as execution configuration.
 
 ### 6. Run Security Testing
 
 When the plan and engagement file are ready, run:
 
 ```bash
-mosh test-security eng_a1b2c3d4
+mosh test eng_a1b2c3d4
 ```
 
 Temporary targeted execution for testing the tester is available with a
 hypothesis ID from `plan/plan.md`:
 
 ```bash
-mosh test-security eng_a1b2c3d4 --hypothesis AUTH-001
+mosh test eng_a1b2c3d4 --hypothesis AUTH-001
 ```
 
 Repeat `--hypothesis` or pass comma-separated IDs to run a small subset.
@@ -256,17 +256,17 @@ Every security-testing run starts with a preflight. The preflight reads the secu
 - **Executable tests:** hypotheses with the required attached artifacts and engagement inputs available.
 - **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
 
-Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with clear engagement template fields to update. Common blockers include missing authorization confirmation, active testing permission, role credentials, safe test data, or target mappings.
+Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test` run, the CLI also prints any blocked tests that still prevent completion, with clear engagement template fields to update. Common blockers include missing authorization confirmation, active testing permission, role credentials, safe test data, or target mappings.
 
 You can run security testing repeatedly to incrementally complete the test:
 
 ```bash
-mosh test-security eng_a1b2c3d4
+mosh test eng_a1b2c3d4
 ```
 
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests will become ready and be executed.
 
-If executed tests discover new application surface area, `mosh` updates the discovery report and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test-security` again when you are ready to execute any newly ready tests.
+If executed tests discover new application surface area, `mosh` updates the discovery report and refreshes the security test plan. It does not immediately auto-run newly planned tests; run `test` again when you are ready to execute any newly ready tests.
 
 This self-learning feedback loop ensures that all the information discovered during testing is used during the engagement to produce better results.
 
@@ -311,10 +311,10 @@ mosh plan eng_a1b2c3d4
 
 # Review and edit report/eng_a1b2c3d4/engagement_template.yaml.
 
-mosh test-security eng_a1b2c3d4
+mosh test eng_a1b2c3d4
 
 # If the CLI reports blocked tests, add the missing engagement details and run it again.
-mosh test-security eng_a1b2c3d4
+mosh test eng_a1b2c3d4
 
 mosh report eng_a1b2c3d4
 ```
@@ -354,7 +354,7 @@ A practical remediation loop looks like this:
 4. Run security testing again:
 
 ```bash
-mosh test-security eng_a1b2c3d4
+mosh test eng_a1b2c3d4
 ```
 
 `mosh` compares the current plan and execution metadata with previous reports. Tests that are already current and accepted are skipped, while tests that need fresh evidence can run again. This makes repeat testing useful after a fix: you keep the historical reports, but the current run shows whether the issue still reproduces.
@@ -364,7 +364,7 @@ If a fix changes the application surface, run discovery and planning again befor
 ```bash
 mosh discover eng_a1b2c3d4 --refresh
 mosh plan eng_a1b2c3d4
-mosh test-security eng_a1b2c3d4
+mosh test eng_a1b2c3d4
 ```
 
 Keep the engagement file up to date as the application changes. New roles, test accounts, safe test data, or staging mappings can unblock additional tests and give `mosh` enough context to validate more of the application.
@@ -382,8 +382,8 @@ The orchestrator coordinates the run. Agents own specialist work. Tools are invo
 Current crews:
 
 - **Discovery crew:** crawls and summarizes the application surface, identifies business context and correlated assets for more effective planning.
-- **Security planning crew:** turns discovery evidence and business context into testable security hypotheses.
-- **Security testing crew:** checks ready hypotheses using the engagement file and security testing tools.
+- **Planning crew:** turns discovery evidence and business context into testable security hypotheses.
+- **Testing crew:** checks ready hypotheses using the engagement file and security testing tools.
 
 
 ## Contributing

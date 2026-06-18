@@ -12,7 +12,7 @@ from mosh.crews.source_discovery.agents import (
     SourceMapperAgent,
 )
 from mosh.crews.source_discovery.reporting import write_source_discovery_report
-from mosh.crews.security_testing.crew import (
+from mosh.crews.testing.crew import (
     _archive_latest_report,
     _execution_metadata,
     _with_execution_metadata_mapping,
@@ -20,7 +20,7 @@ from mosh.crews.security_testing.crew import (
     plan_revision_id,
     render_executed_test_report,
 )
-from mosh.crews.security_planning.reporting import write_security_test_plan
+from mosh.crews.planning.reporting import write_security_test_plan
 
 
 class FakeRuntimeCrewAI:

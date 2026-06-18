@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from mosh.models import CrawledPage, CrawlResult
-from mosh.crews.discovery.reporting import update_report_with_security_testing_feedback, write_reports
+from mosh.crews.discovery.reporting import update_report_with_testing_feedback, write_reports
 
 
 class ReportingTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("## Confirmed Findings", markdown)
             self.assertIn("Example finding", markdown)
 
-    def test_security_testing_feedback_section_is_replaced_in_discovery_report(self) -> None:
+    def test_testing_feedback_section_is_replaced_in_discovery_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
             (report_dir / "report.md").write_text(
@@ -78,7 +78,7 @@ class ReportingTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            markdown = update_report_with_security_testing_feedback(
+            markdown = update_report_with_testing_feedback(
                 report_dir,
                 [
                     {

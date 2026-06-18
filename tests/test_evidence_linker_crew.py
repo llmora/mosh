@@ -7,7 +7,7 @@ from pathlib import Path
 
 from mosh.config import AppConfig
 from mosh.crews.discovery.crew import _load_crewai
-from mosh.crews.security_planning.evidence_linker import (
+from mosh.crews.planning.evidence_linker import (
     EvidenceLinkerState,
     _build_planning_evidence_linker_crew,
     _build_live_endpoint_metadata_tool,

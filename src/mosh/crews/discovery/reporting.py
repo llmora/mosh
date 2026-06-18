@@ -71,7 +71,7 @@ def render_markdown_report(
     _add_items_section(lines, "Authentication Observations", report_content.get("authentication_observations"))
     _add_items_section(lines, "Confirmed Findings", report_content.get("confirmed_findings"))
     _add_items_section(lines, "Inferred Findings", report_content.get("inferred_findings"))
-    _add_items_section(lines, SECURITY_TESTING_FEEDBACK_HEADING, report_content.get("security_testing_feedback"))
+    _add_items_section(lines, SECURITY_TESTING_FEEDBACK_HEADING, report_content.get("testing_feedback"))
     _add_items_section(lines, "Discovery Limitations", report_content.get("limitations"))
     _add_actions_section(lines, report_content.get("recommended_next_steps"))
     _add_appendix(lines, report_content.get("appendix"), crawl)
@@ -79,16 +79,16 @@ def render_markdown_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def update_report_with_security_testing_feedback(report_dir: Path, updates: list[dict[str, Any]]) -> str:
+def update_report_with_testing_feedback(report_dir: Path, updates: list[dict[str, Any]]) -> str:
     report_path = report_dir / "report.md"
     existing = report_path.read_text(encoding="utf-8") if report_path.exists() else "# Application Discovery Report\n"
-    section = _render_security_testing_feedback_section(updates)
+    section = _render_testing_feedback_section(updates)
     updated = _replace_markdown_section(existing, SECURITY_TESTING_FEEDBACK_HEADING, section)
     report_path.write_text(updated, encoding="utf-8")
     return updated
 
 
-def _render_security_testing_feedback_section(updates: list[dict[str, Any]]) -> str:
+def _render_testing_feedback_section(updates: list[dict[str, Any]]) -> str:
     lines = [f"## {SECURITY_TESTING_FEEDBACK_HEADING}", ""]
     if not updates:
         lines.extend(["No security-testing feedback has been fed back into discovery.", ""])

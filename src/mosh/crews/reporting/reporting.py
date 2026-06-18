@@ -466,7 +466,7 @@ def _detailed_finding_lines(finding: dict[str, Any], report_content: dict[str, A
     retest_guidance = (
         _text(writer_detail.get("verification_guidance"))
         or _text(writer_detail.get("retest_guidance"))
-        or "Rerun `mosh test-security` for the affected test and then `mosh report` after remediation."
+        or "Rerun `mosh test` for the affected test and then `mosh report` after remediation."
     )
     references = _references(writer_detail, finding)
     cvss = _cvss_label(finding.get("cvss"))

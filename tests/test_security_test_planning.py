@@ -18,7 +18,7 @@ from mosh.engagement import (
 )
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
 from mosh.memory import FileMemory
-from mosh.crews.security_planning.crew import (
+from mosh.crews.planning.crew import (
     CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
     SecurityTestPlanningState,
@@ -35,7 +35,7 @@ from mosh.crews.security_planning.crew import (
     load_source_discovery_context,
     run_planning_evidence_linking,
 )
-from mosh.crews.security_planning.reporting import render_security_test_plan, write_security_test_plan
+from mosh.crews.planning.reporting import render_security_test_plan, write_security_test_plan
 from tests.fakes import FakeSecurityPlanningRunner
 
 
@@ -685,9 +685,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
             config = AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
 
             try:
-                with patch("mosh.crews.security_planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
+                with patch("mosh.crews.planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
                     with patch(
-                        "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                        "mosh.crews.planning.crew.build_model_assisted_linker",
                         return_value=_NoopModelAssistedLinker(),
                     ):
                         CrewAISecurityTestPlanningCrewRunner(config).run_engagement(
@@ -723,13 +723,13 @@ class SecurityTestPlanningTests(unittest.TestCase):
             memory = FileMemory(report_dir)
 
             with patch(
-                "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                "mosh.crews.planning.crew.build_model_assisted_linker",
                 return_value=_NoopModelAssistedLinker(),
             ):
                 first = run_planning_evidence_linking(AppConfig(openrouter_api_key="test-key"), output_root, engagement.id)
 
             with patch(
-                "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                "mosh.crews.planning.crew.build_model_assisted_linker",
                 side_effect=AssertionError("model linker should not be constructed for current links"),
             ):
                 second = run_planning_evidence_linking(AppConfig(), output_root, engagement.id, memory=memory)
@@ -752,7 +752,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             linker = _NoopModelAssistedLinker()
 
             with patch(
-                "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                "mosh.crews.planning.crew.build_model_assisted_linker",
                 return_value=linker,
             ) as build_linker:
                 run_planning_evidence_linking(
@@ -995,7 +995,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
                 AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
             )
 
-            with patch("mosh.crews.security_planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
+            with patch("mosh.crews.planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
                 with self.assertRaisesRegex(RuntimeError, "reporter post-processing failed"):
                     runner.run_engagement(output_root, engagement.id, report_dir, memory)
 
@@ -1015,7 +1015,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 load_discovery_context(Path(directory) / "missing")
 
-    def test_security_planning_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
+    def test_planning_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
         crewai = _load_crewai()
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory) / "plan"
@@ -1039,8 +1039,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(len(crews), 4)
             self.assertFalse((report_dir / ".crew_config").exists())
 
-    def test_security_planning_yaml_keeps_related_agents_and_tasks_together(self) -> None:
-        agents = _read_security_planning_yaml(
+    def test_planning_yaml_keeps_related_agents_and_tasks_together(self) -> None:
+        agents = _read_planning_yaml(
             [
                 "planner_agents.yaml",
                 "evidence_linker_agents.yaml",
@@ -1049,7 +1049,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
                 "engagement_refiner_agents.yaml",
             ]
         )
-        tasks = _read_security_planning_yaml(
+        tasks = _read_planning_yaml(
             [
                 "evidence_linker_tasks.yaml",
                 "planner_tasks.yaml",
@@ -1070,9 +1070,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("write_security_test_plan_task:", tasks)
         self.assertIn("refine_engagement_template_task:", tasks)
 
-    def test_security_planning_yaml_prioritizes_business_risk(self) -> None:
-        agents = _read_security_planning_yaml(["planner_agents.yaml"])
-        tasks = _read_security_planning_yaml(["planner_tasks.yaml", "critic_tasks.yaml", "reporter_tasks.yaml"])
+    def test_planning_yaml_prioritizes_business_risk(self) -> None:
+        agents = _read_planning_yaml(["planner_agents.yaml"])
+        tasks = _read_planning_yaml(["planner_tasks.yaml", "critic_tasks.yaml", "reporter_tasks.yaml"])
 
         self.assertIn("business risks", agents)
         self.assertIn("organisational_risk", tasks)
@@ -1102,9 +1102,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertIn("Do not review the planner's prose summary", tasks)
 
 
-def _read_security_planning_yaml(files: list[str]) -> str:
+def _read_planning_yaml(files: list[str]) -> str:
     return "\n".join(
-        resources.files(CREW_CONFIG_PACKAGE).joinpath(f"security_planning/{file}").read_text(encoding="utf-8")
+        resources.files(CREW_CONFIG_PACKAGE).joinpath(f"planning/{file}").read_text(encoding="utf-8")
         for file in files
     )
 
@@ -1165,7 +1165,7 @@ def _write_engagement_discovery_pair(
 
 
 class _NoopModelAssistedLinker:
-    model_metadata = {"crew": "security_planning", "agent": "evidence_linker", "model": "noop"}
+    model_metadata = {"crew": "planning", "agent": "evidence_linker", "model": "noop"}
 
     def suggest_links(self, context: dict[str, object], tool_context: object | None = None) -> dict[str, object]:
         return {"links": []}

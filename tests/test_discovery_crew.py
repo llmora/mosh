@@ -143,7 +143,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
         agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/agents.yaml")
         tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml")
         planning_yaml = [
-            resources.files(CREW_CONFIG_PACKAGE).joinpath(f"security_planning/{file}")
+            resources.files(CREW_CONFIG_PACKAGE).joinpath(f"planning/{file}")
             for file in [
                 "evidence_linker_agents.yaml",
                 "evidence_linker_tasks.yaml",

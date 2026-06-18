@@ -149,7 +149,7 @@ def build_final_report_bundle(output_root: Path, engagement_id: str) -> dict[str
     execution_bundles = _execution_bundles_by_id(testing_memory)
     executed_tests = _load_executed_tests(testing_dir, plan, execution_bundles)
     timeline = _build_engagement_timeline(primary_discovery_dir, planning_dir, testing_dir, final_report_dir, executed_tests)
-    preflight = _latest_memory_content(testing_memory, "security_testing_preflight")
+    preflight = _latest_memory_content(testing_memory, "testing_preflight")
     source_artifacts = [
         str(path)
         for path in (

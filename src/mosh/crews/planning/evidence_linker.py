@@ -32,9 +32,9 @@ class CrewAIModelAssistedEvidenceLinker:
     def __init__(self, config: AppConfig, memory: FileMemory | None = None) -> None:
         self.config = config
         self.memory = memory
-        model = config.models.security_planning.evidence_linker
+        model = config.models.planning.evidence_linker
         self.model_metadata = {
-            "crew": "security_planning",
+            "crew": "planning",
             "agent": "evidence_linker",
             "model": config.llm_model_name(model),
             "provider": config.llm_provider_for_model(model),
@@ -47,7 +47,7 @@ class CrewAIModelAssistedEvidenceLinker:
     ) -> dict[str, Any]:
         if not context.get("pairs"):
             return {"links": []}
-        model = self.config.models.security_planning.evidence_linker
+        model = self.config.models.planning.evidence_linker
         missing_keys = self.config.missing_llm_api_keys_for_models([model])
         if missing_keys:
             raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
@@ -74,8 +74,8 @@ def _build_planning_evidence_linker_crew(crewai: Any, config: AppConfig, state: 
     source_search_tool = _build_source_search_tool(crewai, state)
     source_read_slice_tool = _build_source_read_slice_tool(crewai, state)
     live_metadata_tool = _build_live_endpoint_metadata_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/evidence_linker_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/evidence_linker_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/evidence_linker_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/evidence_linker_tasks.yaml"))
 
     @crewai.CrewBase
     class EvidenceLinkerCrew:
@@ -86,7 +86,7 @@ def _build_planning_evidence_linker_crew(crewai: Any, config: AppConfig, state: 
         def evidence_linker(self):
             return crewai.Agent(
                 config=self.agents_config["evidence_linker"],
-                llm=_llm(crewai, config, config.models.security_planning.evidence_linker),
+                llm=_llm(crewai, config, config.models.planning.evidence_linker),
                 tools=[
                     load_ref_tool,
                     source_search_tool,
