@@ -86,24 +86,18 @@ class EngagementTests(unittest.TestCase):
             self.assertEqual(first.asset.id, second.asset.id)
             self.assertEqual(len(load_engagement(output_root, engagement.id).assets), 1)
 
-    def test_legacy_embedded_asset_manifest_loads_and_rewrites_as_asset_refs(self) -> None:
+    def test_embedded_asset_manifest_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
-            engagement = create_engagement(output_root, title="Legacy")
+            engagement = create_engagement(output_root, title="Duplicated")
             asset = attach_asset(output_root, engagement.id, "https://example.test").asset
             manifest_path = output_root / engagement.id / "engagement.json"
-            legacy_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-            legacy_payload["assets"] = [asset.to_dict()]
-            manifest_path.write_text(json.dumps(legacy_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            duplicated_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            duplicated_payload["assets"] = [asset.to_dict()]
+            manifest_path.write_text(json.dumps(duplicated_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-            loaded = load_engagement(output_root, engagement.id)
-            save_engagement(output_root, loaded)
-
-            self.assertEqual(load_asset(output_root, engagement.id, asset.id).locator, "https://example.test")
-            rewritten = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(rewritten["assets"], [{"id": asset.id, "created_at": asset.created_at}])
-            self.assertNotIn("type", rewritten["assets"][0])
-            self.assertNotIn("locator", rewritten["assets"][0])
+            with self.assertRaisesRegex(ValueError, "must be an asset ref"):
+                load_engagement(output_root, engagement.id)
 
     def test_record_asset_discovery_keeps_only_non_derived_discovery_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -121,7 +115,7 @@ class EngagementTests(unittest.TestCase):
             payload = json.loads((asset_dir(output_root, engagement.id, asset.id) / "asset.json").read_text(encoding="utf-8"))
             self.assertEqual(set(payload["metadata"]["discovery"]), {"last_discovered_at"})
 
-    def test_legacy_asset_discovery_paths_are_removed_when_asset_is_rewritten(self) -> None:
+    def test_derived_asset_discovery_paths_are_removed_when_asset_is_rewritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
             engagement = create_engagement(output_root)

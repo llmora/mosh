@@ -321,9 +321,13 @@ def _engagement_from_mapping(output_root: Path, value: dict[str, Any]) -> Engage
         if not isinstance(item, dict):
             continue
         asset_id = str(item.get("id") or "")
-        if "type" in item and "locator" in item:
-            assets.append(_asset_from_manifest_entry(output_root, engagement_id, item))
-        elif asset_id:
+        extra_keys = set(item) - {"id", "created_at"}
+        if extra_keys:
+            raise ValueError(
+                f"Engagement manifest asset `{asset_id}` must be an asset ref; "
+                f"move canonical asset data to assets/{asset_id}/asset.json"
+            )
+        if asset_id:
             assets.append(load_asset(output_root, engagement_id, asset_id))
     return Engagement(
         id=engagement_id,
@@ -332,15 +336,6 @@ def _engagement_from_mapping(output_root: Path, value: dict[str, Any]) -> Engage
         assets=assets,
         metadata=value.get("metadata") if isinstance(value.get("metadata"), dict) else {},
     )
-
-
-def _asset_from_manifest_entry(output_root: Path, engagement_id: str, item: dict[str, Any]) -> EngagementAsset:
-    asset_id = str(item.get("id") or "")
-    asset_path = asset_dir(output_root, engagement_id, asset_id) / "asset.json"
-    if asset_path.exists():
-        return load_asset(output_root, engagement_id, asset_id)
-    return EngagementAsset.from_dict(item)
-
 
 def _clean_asset_metadata(value: Any) -> dict[str, Any]:
     metadata = dict(value) if isinstance(value, dict) else {}

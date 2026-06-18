@@ -24,14 +24,12 @@ from mosh.engagement import load_engagement_file, resolve_target_mapping
 from mosh.engagements import (
     asset_discovery_dir,
     engagement_dir,
-    engagement_exists,
     engagement_plan_dir,
     load_engagement,
     record_asset_discovery,
 )
 from mosh.memory import FileMemory
 from mosh.models import Event, MemoryItem, utc_now
-from mosh.scope import report_dir_name, source_report_dir_name
 
 
 EXECUTION_METADATA_START = "<!-- mosh-execution"
@@ -114,54 +112,34 @@ class SecurityTestingOrchestrator:
 
     def run(
         self,
-        url: str | None = None,
-        engagement_file: Path | None = None,
+        engagement_id: str,
         *,
-        source: str | None = None,
         hypothesis_ids: list[str] | None = None,
     ) -> Path:
-        if not url and not source:
-            raise ValueError("Security testing requires a target URL, a source path, or both.")
         selected_hypothesis_ids = _normalize_hypothesis_ids(hypothesis_ids)
-        engagement_id = url if url and engagement_exists(self.output_root, url) else None
-        planning_refresh_url = url
-        planning_refresh_source = source
-        live_discovery_asset: tuple[str, str] | None = None
-        source_discovery_asset: tuple[str, str] | None = None
-        if engagement_id:
-            if source:
-                raise ValueError("Engagement testing uses attached assets; attach the source asset instead of passing --source.")
-            engagement = load_engagement(self.output_root, engagement_id)
-            live_asset = next((asset for asset in engagement.assets if asset.type == "live_url"), None)
-            source_asset = next((asset for asset in engagement.assets if asset.type == "source_tree"), None)
-            url = live_asset.locator if live_asset else None
-            source = source_asset.locator if source_asset else None
-            if not url and not source:
-                raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
-            domain_dir = engagement_dir(self.output_root, engagement.id)
-            if live_asset:
-                discovery_dir = asset_discovery_dir(self.output_root, engagement.id, live_asset.id)
-            elif source_asset:
-                discovery_dir = asset_discovery_dir(self.output_root, engagement.id, source_asset.id)
-            source_discovery_dir = (
-                asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset else None
-            )
-            planning_refresh_url = engagement.id
-            planning_refresh_source = None
-            live_discovery_asset = (engagement.id, live_asset.id) if live_asset else None
-            source_discovery_asset = (engagement.id, source_asset.id) if source_asset else None
-            planning_dir = engagement_plan_dir(self.output_root, engagement.id)
-            report_dir = domain_dir / "security-testing"
-            engagement_path = engagement_file or domain_dir / "engagement_template.yaml"
-            target = f"engagement:{engagement.id}"
+        engagement = load_engagement(self.output_root, engagement_id)
+        live_asset = next((asset for asset in engagement.assets if asset.type == "live_url"), None)
+        source_asset = next((asset for asset in engagement.assets if asset.type == "source_tree"), None)
+        url = live_asset.locator if live_asset else None
+        source = source_asset.locator if source_asset else None
+        if not url and not source:
+            raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
+        domain_dir = engagement_dir(self.output_root, engagement.id)
+        if live_asset:
+            discovery_dir = asset_discovery_dir(self.output_root, engagement.id, live_asset.id)
+        elif source_asset:
+            discovery_dir = asset_discovery_dir(self.output_root, engagement.id, source_asset.id)
         else:
-            domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
-            discovery_dir = domain_dir / ("discovery" if url else "source-discovery")
-            source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
-            planning_dir = domain_dir / "security-test-planning"
-            report_dir = domain_dir / ("security-testing" if url else "source-security-testing")
-            engagement_path = engagement_file or planning_dir / "engagement_template.yaml"
-            target = url or f"source:{source}"
+            raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
+        source_discovery_dir = (
+            asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset else None
+        )
+        live_discovery_asset = (engagement.id, live_asset.id) if live_asset else None
+        source_discovery_asset = (engagement.id, source_asset.id) if source_asset else None
+        planning_dir = engagement_plan_dir(self.output_root, engagement.id)
+        report_dir = domain_dir / "security-testing"
+        engagement_path = domain_dir / "engagement_template.yaml"
+        target = url or f"source:{source}"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         memory.record_event(
             "orchestrator",
@@ -175,11 +153,11 @@ class SecurityTestingOrchestrator:
             },
         )
         plan = load_security_test_plan(planning_dir)
-        engagement = load_engagement_file(engagement_path)
+        engagement_config = load_engagement_file(engagement_path)
         evidence_links = _load_testing_evidence_links(planning_dir)
         result = run_security_testing_preflight(
             plan,
-            engagement,
+            engagement_config,
             live_target_available=bool(url),
             source_available=bool(source),
             completed_test_ids=_current_executed_test_ids(report_dir),
@@ -220,7 +198,7 @@ class SecurityTestingOrchestrator:
                 report_dir,
                 memory,
                 plan,
-                engagement,
+                engagement_config,
                 result,
                 executable_pending,
             )
@@ -241,8 +219,7 @@ class SecurityTestingOrchestrator:
                     discovery_dir=target_discovery_dir,
                     report_dir=report_dir,
                     memory=memory,
-                    url=planning_refresh_url,
-                    source=planning_refresh_source,
+                    engagement_id=engagement.id,
                     discovery_asset=discovery_asset,
                     refresh_planning=index == len(refresh_targets) - 1,
                 )
@@ -711,7 +688,7 @@ def _archive_latest_report(report_dir: Path, test_id: str, memory: FileMemory | 
     if not report_path.exists():
         return []
     previous_metadata = _latest_execution_metadata(report_dir, test_id) or {}
-    previous_fingerprint = _text(previous_metadata.get("hypothesis_fingerprint"))[:12] or "legacy"
+    previous_fingerprint = _text(previous_metadata.get("hypothesis_fingerprint"))[:12] or "untracked"
     history_dir = report_path.parent / "history"
     history_dir.mkdir(parents=True, exist_ok=True)
     history_path = _next_history_report_path(history_dir, _safe_test_id(test_id), previous_fingerprint)
@@ -1054,8 +1031,7 @@ def _refresh_discovery_from_security_testing_feedback(
     discovery_dir: Path,
     report_dir: Path,
     memory: FileMemory,
-    url: str | None,
-    source: str | None,
+    engagement_id: str,
     discovery_asset: tuple[str, str] | None = None,
     refresh_planning: bool = True,
 ) -> None:
@@ -1066,7 +1042,7 @@ def _refresh_discovery_from_security_testing_feedback(
             discovery_dir=discovery_dir,
             testing_memory=memory,
             updates=new_feedback_updates,
-            source_report_dir=report_dir,
+            testing_report_dir=report_dir,
         )
         if discovery_asset:
             record_asset_discovery(output_root, discovery_asset[0], discovery_asset[1], discovery_dir)
@@ -1091,7 +1067,7 @@ def _refresh_discovery_from_security_testing_feedback(
             output_root=output_root,
             event_sink=event_sink,
             crew_runner=planning_crew_runner,
-        ).run(url, source=source)
+        ).run(engagement_id)
         memory.record_event(
             "orchestrator",
             "security_planning_refresh_complete",
@@ -1119,12 +1095,12 @@ def _feed_security_testing_updates_to_discovery(
     discovery_dir: Path,
     testing_memory: FileMemory,
     updates: list[dict[str, Any]],
-    source_report_dir: Path,
+    testing_report_dir: Path,
 ) -> None:
     discovery_dir.mkdir(parents=True, exist_ok=True)
     content = {
         "updates": updates,
-        "source_report_dir": str(source_report_dir),
+        "testing_report_dir": str(testing_report_dir),
     }
     _append_existing_memory_item(
         discovery_dir,
@@ -1355,7 +1331,7 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
     if _has_live_execution_target(state):
         tools.append(_build_run_security_command_tool(crewai, config, state))
     if state.source_root is not None:
-        from mosh.crews.source_security_testing.crew import (
+        from mosh.crews.security_testing.source_tools import (
             _build_read_source_slice_tool,
             _build_request_local_http_tool,
             _build_run_source_command_tool,
@@ -1828,13 +1804,13 @@ def _validated_source_root(source: str) -> Path:
 
 
 def _load_unified_source_context(source_discovery_dir: Path | None) -> dict[str, Any]:
-    from mosh.crews.source_security_testing.crew import _load_source_context
+    from mosh.crews.security_testing.source_tools import _load_source_context
 
     return _load_source_context(source_discovery_dir)
 
 
 def _compact_unified_source_context(source_context: dict[str, Any]) -> dict[str, Any]:
-    from mosh.crews.source_security_testing.crew import _compact_source_context
+    from mosh.crews.security_testing.source_tools import _compact_source_context
 
     return _compact_source_context(source_context)
 
@@ -1842,7 +1818,7 @@ def _compact_unified_source_context(source_context: dict[str, Any]) -> dict[str,
 def _cleanup_unified_source_processes(state: SecurityTestExecutionState) -> None:
     if not state.local_processes:
         return
-    from mosh.crews.source_security_testing.crew import _cleanup_source_processes
+    from mosh.crews.security_testing.source_tools import _cleanup_source_processes
 
     _cleanup_source_processes(state)
 
@@ -2668,7 +2644,7 @@ def _execution_status_for_hypothesis(report_dir: Path, hypothesis: dict[str, Any
         return "pending", "not previously executed"
     metadata = _latest_execution_metadata(report_dir, test_id)
     if metadata is None:
-        return "rerun", "previous report is legacy and has no execution metadata"
+        return "rerun", "previous report has no execution metadata"
     if _text(metadata.get("hypothesis_fingerprint")) != hypothesis_fingerprint(hypothesis):
         return "rerun", "hypothesis changed since the previous execution"
     if not bool(metadata.get("review_accepted")):

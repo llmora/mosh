@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib import resources
@@ -24,14 +23,12 @@ from mosh.engagements import (
     EngagementAsset,
     asset_discovery_dir,
     engagement_dir,
-    engagement_exists,
     engagement_plan_dir,
     load_engagement,
 )
 from mosh.evidence_links import EvidenceLinkResult, build_evidence_links, load_evidence_links_if_current
 from mosh.memory import FileMemory
 from mosh.models import Event, utc_now
-from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.evidence_linker import build_model_assisted_linker
 from mosh.crews.security_planning.reporting import write_security_test_plan
 
@@ -82,14 +79,12 @@ SOURCE_CONTEXT_MAX_EVIDENCE_REFS = 200
 
 
 class SecurityTestPlanningCrewRunner(Protocol):
-    def run(
+    def run_engagement(
         self,
-        target_url: str,
-        discovery_dir: Path,
+        output_root: Path,
+        engagement_id: str,
         report_dir: Path,
         memory: FileMemory,
-        source: str | None = None,
-        source_discovery_dir: Path | None = None,
     ) -> SecurityTestPlanningResult:
         pass
 
@@ -139,55 +134,6 @@ class CrewAISecurityTestPlanningCrewRunner:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def run(
-        self,
-        target_url: str,
-        discovery_dir: Path,
-        report_dir: Path,
-        memory: FileMemory,
-        source: str | None = None,
-        source_discovery_dir: Path | None = None,
-    ) -> SecurityTestPlanningResult:
-        missing_keys = self.config.missing_llm_api_keys_for_models(
-            [
-                self.config.models.security_planning.planner,
-                self.config.models.security_planning.reviewer,
-                self.config.models.security_planning.reporter,
-                self.config.models.security_planning.engagement_refiner,
-            ]
-        )
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
-
-        discovery_context = load_assessment_evidence_bundle(
-            live_discovery_dir=discovery_dir if target_url and not target_url.startswith("source:") else None,
-            source_discovery_dir=source_discovery_dir,
-        )
-        crewai = _load_crewai()
-        state = SecurityTestPlanningState(
-            target_url=target_url,
-            discovery_dir=discovery_dir,
-            report_dir=report_dir,
-            memory=memory,
-            discovery_context=discovery_context,
-            source=source,
-            source_discovery_dir=source_discovery_dir,
-        )
-
-        memory.record_event(
-            "orchestrator",
-            "crew_start",
-            "Starting CrewAI security test planning crew",
-            {
-                "target": target_url,
-                "source": source,
-                "discovery_dir": str(discovery_dir),
-                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
-            },
-        )
-
-        return self._run_with_state(crewai, state)
-
     def run_engagement(
         self,
         output_root: Path,
@@ -214,7 +160,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             "crew_start",
             "Starting CrewAI security test planning crew",
             {
-                "target": f"engagement:{engagement.id}",
+                "target": engagement.id,
                 "engagement": engagement.id,
                 "target_url": target_url,
                 "source": source,
@@ -387,72 +333,14 @@ class SecurityTestPlanningOrchestrator:
         self.crew_runner = crew_runner or build_security_test_planning_crew_runner(config)
         self.last_run_skipped = False
 
-    def run(self, url: str | None = None, *, source: str | None = None) -> Path:
+    def run(self, engagement_id: str) -> Path:
         self.last_run_skipped = False
-        if not url and not source:
-            raise ValueError("Security planning requires a target URL, a source path, or both.")
-        if url and engagement_exists(self.output_root, url):
-            if source:
-                raise ValueError("Engagement planning uses attached assets; attach the source asset instead of passing --source.")
-            return self._run_engagement(url)
-        domain_dir = self.output_root / (report_dir_name(url) if url else source_report_dir_name(source or "source"))
-        discovery_dir = domain_dir / "discovery"
-        source_discovery_dir = self.output_root / source_report_dir_name(source) / "source-discovery" if source else None
-        report_dir = domain_dir / "security-test-planning"
-        memory = FileMemory(report_dir, event_sink=self.event_sink)
-        target = url or f"source:{source}"
-        agent_definitions = security_test_planning_agent_definitions(self.config)
-        memory.record_event(
-            "orchestrator",
-            "start",
-            "Starting security test planning crew",
-            {
-                "target": target,
-                "source": source,
-                "discovery_dir": str(discovery_dir),
-                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
-                "agents": [agent.to_dict() for agent in agent_definitions],
-            },
-        )
-        if len(inspect.signature(self.crew_runner.run).parameters) <= 4:
-            if source or source_discovery_dir:
-                raise TypeError("Configured security planning runner does not support source-aware planning.")
-            result = self.crew_runner.run(target, discovery_dir, report_dir, memory)
-        else:
-            result = self.crew_runner.run(target, discovery_dir, report_dir, memory, source, source_discovery_dir)
-        engagement_path = report_dir / "engagement_template.yaml"
-        if not engagement_path.exists():
-            engagement_template = write_engagement_template_mapping(
-                report_dir,
-                _build_planning_engagement_template(url or "", source, result.plan),
-            )
-            memory.record_event(
-                "orchestrator",
-                "engagement_template_written",
-                "Wrote deterministic engagement template",
-                {"bytes": len(engagement_template.encode("utf-8"))},
-            )
-        memory.add_item(
-            "engagement_template",
-            {
-                "path": str(engagement_path),
-                "bytes": engagement_path.stat().st_size,
-            },
-            "orchestrator",
-        )
-        memory.record_event(
-            "orchestrator",
-            "complete",
-            "Security test planning crew completed",
-            {"report_dir": str(report_dir)},
-        )
-        return report_dir
+        return self._run_engagement(engagement_id)
 
     def _run_engagement(self, engagement_id: str) -> Path:
         engagement = load_engagement(self.output_root, engagement_id)
         report_dir = engagement_plan_dir(self.output_root, engagement.id)
         engagement_root = engagement_dir(self.output_root, engagement.id)
-        _migrate_engagement_template_to_root(report_dir, engagement_root)
         self.last_run_skipped = False
         if _engagement_plan_is_current(self.output_root, engagement, report_dir):
             self.last_run_skipped = True
@@ -465,16 +353,13 @@ class SecurityTestPlanningOrchestrator:
             "start",
             "Starting security test planning crew",
             {
-                "target": f"engagement:{engagement.id}",
+                "target": engagement.id,
                 "engagement": engagement.id,
                 "latest_discovered_at": latest_discovered_at,
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
-        run_engagement = getattr(self.crew_runner, "run_engagement", None)
-        if not callable(run_engagement):
-            raise TypeError("Configured security planning runner does not support engagement-aware planning.")
-        result = run_engagement(self.output_root, engagement.id, report_dir, memory)
+        result = self.crew_runner.run_engagement(self.output_root, engagement.id, report_dir, memory)
         engagement_path = engagement_root / "engagement_template.yaml"
         if not engagement_path.exists():
             target_url, source = _engagement_primary_targets(engagement)
@@ -573,27 +458,6 @@ def load_source_discovery_context(source_discovery_dir: Path) -> dict[str, Any]:
             "max_nested_text_chars": COMPACT_TEXT_MAX_CHARS,
             "max_nested_list_items": COMPACT_LIST_MAX_ITEMS,
         },
-    }
-
-
-def load_assessment_evidence_bundle(
-    *,
-    live_discovery_dir: Path | None = None,
-    source_discovery_dir: Path | None = None,
-) -> dict[str, Any]:
-    if not live_discovery_dir and not source_discovery_dir:
-        raise FileNotFoundError("No discovery output was provided for security planning.")
-    return {
-        "schema": "mosh.assessment-evidence-bundle.v1",
-        "live_discovery": load_discovery_context(live_discovery_dir) if live_discovery_dir else {},
-        "source_discovery": load_source_discovery_context(source_discovery_dir) if source_discovery_dir else {},
-        "execution_capabilities": _planning_execution_capabilities(
-            has_live=live_discovery_dir is not None,
-            has_source=source_discovery_dir is not None,
-        ),
-        "correlation": {},
-        "prior_security_testing_feedback": {},
-        "prior_source_testing_feedback": {},
     }
 
 
@@ -992,14 +856,6 @@ def _engagement_plan_is_current(output_root: Path, engagement: Engagement, repor
     return previous_discovered >= latest_discovered
 
 
-def _migrate_engagement_template_to_root(report_dir: Path, engagement_root: Path) -> None:
-    root_template = engagement_root / "engagement_template.yaml"
-    old_template = report_dir / "engagement_template.yaml"
-    if root_template.exists() or not old_template.exists():
-        return
-    old_template.replace(root_template)
-
-
 def _engagement_template_dir(state: SecurityTestPlanningState) -> Path:
     return state.engagement_template_dir or state.report_dir
 
@@ -1062,7 +918,7 @@ def _engagement_primary_targets(engagement: Engagement) -> tuple[str, str | None
         return live, source
     if source:
         return f"source:{source}", source
-    return f"engagement:{engagement.id}", None
+    return engagement.id, None
 
 
 def _first_asset_discovery_dir(output_root: Path, engagement: Engagement, asset_type: str) -> Path | None:

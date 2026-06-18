@@ -14,7 +14,6 @@ from mosh.docker_tools import DockerToolResult
 from mosh.engagement import write_engagement_template, write_engagement_template_mapping
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_asset
 from mosh.memory import FileMemory
-from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
@@ -38,19 +37,14 @@ from mosh.crews.security_testing.crew import (
     render_preflight_report,
     run_security_testing_preflight,
 )
-from mosh.crews.source_security_testing.crew import (
-    SourceSecurityTestExecutionState,
+from mosh.crews.security_testing.source_tools import (
     _cleanup_source_processes,
     _build_read_source_slice_tool,
     _build_request_local_http_tool,
     _build_run_source_command_tool,
     _build_start_source_process_tool,
     _build_stop_source_process_tool,
-    _build_source_executor_crew,
-    _build_source_reporter_crew,
-    _build_source_reviewer_crew,
     _build_source_search_tool,
-    _build_submit_source_evidence_tool,
     _build_write_workspace_file_tool,
     _run_bounded_source_search,
 )
@@ -136,6 +130,69 @@ def _source_engagement_template(source: str) -> dict[str, object]:
         "alternative": {"source": None},
     }
     return template
+
+
+def _write_plan_memory(planning_dir: Path, plan: dict[str, object]) -> None:
+    planning_dir.mkdir(parents=True, exist_ok=True)
+    (planning_dir / "memory.json").write_text(
+        json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
+        encoding="utf-8",
+    )
+
+
+def _write_discovery_artifacts(discovery_dir: Path, title: str = "Discovery") -> None:
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    (discovery_dir / "report.md").write_text(f"# {title}\n", encoding="utf-8")
+    (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+    (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+
+
+def _create_live_engagement(output_root: Path, target_url: str, plan: dict[str, object]):
+    engagement = create_engagement(output_root)
+    live_asset = attach_asset(output_root, engagement.id, target_url).asset
+    _write_discovery_artifacts(asset_discovery_dir(output_root, engagement.id, live_asset.id))
+    _write_plan_memory(output_root / engagement.id / "plan", plan)
+    write_engagement_template(output_root / engagement.id, target_url, plan)
+    return engagement, live_asset
+
+
+def _create_source_engagement(output_root: Path, source: str, plan: dict[str, object]):
+    engagement = create_engagement(output_root)
+    source_asset = attach_asset(output_root, engagement.id, source).asset
+    _write_discovery_artifacts(asset_discovery_dir(output_root, engagement.id, source_asset.id), title="Source Discovery")
+    _write_plan_memory(output_root / engagement.id / "plan", plan)
+    write_engagement_template_mapping(output_root / engagement.id, _source_engagement_template(source))
+    return engagement, source_asset
+
+
+def SourceModeSecurityTestExecutionState(
+    *,
+    source: str,
+    source_root: Path,
+    source_context: dict[str, object],
+    report_dir: Path,
+    workspace_dir: Path,
+    memory: FileMemory,
+    hypothesis: dict[str, object],
+    engagement: dict[str, object],
+    targets: dict[str, str],
+    executed_report_path: Path,
+    **kwargs,
+) -> SecurityTestExecutionState:
+    return SecurityTestExecutionState(
+        target_url=f"source:{source}",
+        source=source,
+        source_root=source_root,
+        source_context=source_context,
+        report_dir=report_dir,
+        workspace_dir=workspace_dir,
+        memory=memory,
+        hypothesis=hypothesis,
+        engagement=engagement,
+        targets=targets,
+        executed_report_path=executed_report_path,
+        **kwargs,
+    )
 
 
 class SecurityTestingCrewTests(unittest.TestCase):
@@ -298,9 +355,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_file.write_text("function guard(req, res, next) { return next(); }\n", encoding="utf-8")
             source = str(source_dir)
             output_root = Path(directory) / "report"
-            source_root = output_root / source_report_dir_name(source)
-            planning_dir = source_root / "security-test-planning"
-            planning_dir.mkdir(parents=True)
             plan = {
                 "title": "Source plan",
                 "test_hypotheses": [
@@ -315,24 +369,18 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     }
                 ],
             }
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
-                encoding="utf-8",
-            )
-            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
+            engagement, _source_asset = _create_source_engagement(output_root, source, plan)
             runner = FakeSecurityTestingRunner()
 
             report_dir = SecurityTestingOrchestrator(
                 AppConfig(),
                 output_root=output_root,
                 crew_runner=runner,
-            ).run(
-                source=source,
-            )
+            ).run(engagement.id)
 
-            self.assertEqual(report_dir, source_root / "source-security-testing")
+            self.assertEqual(report_dir, output_root / engagement.id / "security-testing")
             self.assertEqual(runner.calls[0]["executable_pending"], ["SRC-001"])
-            self.assertEqual(runner.calls[0]["source"], source)
+            self.assertEqual(runner.calls[0]["source"], str(source_dir.resolve()))
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
             self.assertIn("Executable tests: `1`", preflight)
             self.assertIn("evidence `source`", preflight)
@@ -351,31 +399,14 @@ class SecurityTestingCrewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            domain_dir = output_root / report_dir_name(target_url)
-            planning_dir = domain_dir / "security-test-planning"
-            planning_dir.mkdir(parents=True)
-            (planning_dir / "memory.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "kind": "security_test_plan_final",
-                            "content": {"structured": _plan()},
-                        }
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            engagement_file = Path(directory) / "engagement.yaml"
-            write_engagement_template(Path(directory), target_url, _plan())
-            template = (Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8")
+            engagement, _live_asset = _create_live_engagement(output_root, target_url, _plan())
+            template_path = output_root / engagement.id / "engagement_template.yaml"
+            template = template_path.read_text(encoding="utf-8")
             template = template.replace("api: null", 'api: "https://staging-api.example.test/api/private"', 1)
-            engagement_file.write_text(template, encoding="utf-8")
+            template_path.write_text(template, encoding="utf-8")
 
             runner = FakeSecurityTestingRunner()
-            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
-                target_url,
-                engagement_file=engagement_file,
-            )
+            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(engagement.id)
 
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
             self.assertIn("https://staging-api.example.test/api/private", preflight)
@@ -392,22 +423,9 @@ class SecurityTestingCrewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            domain_dir = output_root / report_dir_name(target_url)
-            planning_dir = domain_dir / "security-test-planning"
-            executed_dir = domain_dir / "security-testing" / "executed_tests"
-            planning_dir.mkdir(parents=True)
+            engagement, _live_asset = _create_live_engagement(output_root, target_url, _plan())
+            executed_dir = output_root / engagement.id / "security-testing" / "executed_tests"
             executed_dir.mkdir(parents=True)
-            (planning_dir / "memory.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "kind": "security_test_plan_final",
-                            "content": {"structured": _plan()},
-                        }
-                    ]
-                ),
-                encoding="utf-8",
-            )
             current_hypothesis = _plan()["test_hypotheses"][0]
             report_path = executed_dir / "API-001.md"
             metadata = _execution_metadata(
@@ -419,20 +437,14 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 report_path=str(report_path),
             )
             report_path.write_text(_with_execution_metadata_mapping("# already executed\n", metadata), encoding="utf-8")
-            engagement_file = Path(directory) / "engagement.yaml"
-            write_engagement_template(Path(directory), target_url, _plan())
-            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
             runner = FakeSecurityTestingRunner()
 
-            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
-                target_url,
-                engagement_file=engagement_file,
-            )
+            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(engagement.id)
 
             self.assertEqual(runner.calls, [])
             self.assertIn("# already executed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
 
-    def test_source_security_testing_skips_matching_accepted_execution_metadata(self) -> None:
+    def test_source_mode_security_testing_skips_matching_accepted_execution_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory) / "example-source"
             source_file = source_dir / "api" / "routes" / "auth.js"
@@ -440,11 +452,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_file.write_text("function guard() { return true; }\n", encoding="utf-8")
             source = str(source_dir)
             output_root = Path(directory) / "report"
-            source_root = output_root / source_report_dir_name(source)
-            planning_dir = source_root / "security-test-planning"
-            executed_dir = source_root / "source-security-testing" / "executed_tests"
-            planning_dir.mkdir(parents=True)
-            executed_dir.mkdir(parents=True)
             plan = {
                 "title": "Source plan",
                 "test_hypotheses": [
@@ -459,10 +466,9 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     }
                 ],
             }
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
-                encoding="utf-8",
-            )
+            engagement, _source_asset = _create_source_engagement(output_root, source, plan)
+            executed_dir = output_root / engagement.id / "security-testing" / "executed_tests"
+            executed_dir.mkdir(parents=True)
             current_hypothesis = plan["test_hypotheses"][0]
             report_path = executed_dir / "SRC-001.md"
             metadata = _execution_metadata(
@@ -475,14 +481,13 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             metadata.update({"execution_mode": "source", "evidence_type": "source", "source": source})
             report_path.write_text(_with_execution_metadata_mapping("# source already executed\n", metadata), encoding="utf-8")
-            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
             runner = FakeSecurityTestingRunner()
 
             report_dir = SecurityTestingOrchestrator(
                 AppConfig(),
                 output_root=output_root,
                 crew_runner=runner,
-            ).run(source=source)
+            ).run(engagement.id)
 
             self.assertEqual(runner.calls, [])
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
@@ -505,19 +510,13 @@ class SecurityTestingCrewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            domain_dir = output_root / report_dir_name(target_url)
-            planning_dir = domain_dir / "security-test-planning"
-            executed_dir = domain_dir / "security-testing" / "executed_tests"
-            planning_dir.mkdir(parents=True)
-            executed_dir.mkdir(parents=True)
             plan = _plan()
             changed_hypothesis = dict(plan["test_hypotheses"][0])
             changed_hypothesis["test_steps"] = ["Request endpoint without Authorization header.", "Also verify WWW-Authenticate."]
             plan["test_hypotheses"][0] = changed_hypothesis
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
-                encoding="utf-8",
-            )
+            engagement, _live_asset = _create_live_engagement(output_root, target_url, plan)
+            executed_dir = output_root / engagement.id / "security-testing" / "executed_tests"
+            executed_dir.mkdir(parents=True)
             old_report_path = executed_dir / "API-001.md"
             old_metadata = _execution_metadata(
                 test_id="API-001",
@@ -528,15 +527,9 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 report_path=str(old_report_path),
             )
             old_report_path.write_text(_with_execution_metadata_mapping("# old execution\n", old_metadata), encoding="utf-8")
-            engagement_file = Path(directory) / "engagement.yaml"
-            write_engagement_template(Path(directory), target_url, plan)
-            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
             runner = FakeSecurityTestingRunner()
 
-            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
-                target_url,
-                engagement_file=engagement_file,
-            )
+            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(engagement.id)
 
             self.assertEqual(runner.calls[0]["ready_pending"], ["API-001"])
             history_files = list((report_dir / "executed_tests" / "history").glob("API-001__old-fingerpr*__v1.md"))
@@ -544,44 +537,29 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("# old execution", history_files[0].read_text(encoding="utf-8"))
             self.assertIn("Fake execution completed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
 
-    def test_security_testing_reruns_legacy_report_without_metadata_and_preserves_it(self) -> None:
+    def test_security_testing_reruns_untracked_report_without_metadata_and_preserves_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            domain_dir = output_root / report_dir_name(target_url)
-            planning_dir = domain_dir / "security-test-planning"
-            executed_dir = domain_dir / "security-testing" / "executed_tests"
-            planning_dir.mkdir(parents=True)
+            engagement, _live_asset = _create_live_engagement(output_root, target_url, _plan())
+            executed_dir = output_root / engagement.id / "security-testing" / "executed_tests"
             executed_dir.mkdir(parents=True)
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
-                encoding="utf-8",
-            )
-            (executed_dir / "API-001.md").write_text("# legacy execution\n", encoding="utf-8")
-            engagement_file = Path(directory) / "engagement.yaml"
-            write_engagement_template(Path(directory), target_url, _plan())
-            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+            (executed_dir / "API-001.md").write_text("# untracked execution\n", encoding="utf-8")
             runner = FakeSecurityTestingRunner()
 
-            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
-                target_url,
-                engagement_file=engagement_file,
-            )
+            report_dir = SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(engagement.id)
 
             self.assertEqual(runner.calls[0]["ready_pending"], ["API-001"])
-            history_files = list((report_dir / "executed_tests" / "history").glob("API-001__legacy__v1.md"))
+            history_files = list((report_dir / "executed_tests" / "history").glob("API-001__untracked__v1.md"))
             self.assertEqual(len(history_files), 1)
-            self.assertIn("# legacy execution", history_files[0].read_text(encoding="utf-8"))
+            self.assertIn("# untracked execution", history_files[0].read_text(encoding="utf-8"))
 
     def test_security_testing_feeds_new_discovery_updates_and_refreshes_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            domain_dir = output_root / report_dir_name(target_url)
-            discovery_dir = domain_dir / "discovery"
-            planning_dir = domain_dir / "security-test-planning"
-            discovery_dir.mkdir(parents=True)
-            planning_dir.mkdir(parents=True)
+            engagement, live_asset = _create_live_engagement(output_root, target_url, _plan())
+            discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
             (discovery_dir / "report.md").write_text("# Discovery\n\n## Existing\n\nOriginal.\n", encoding="utf-8")
             (discovery_dir / "memory.json").write_text(
                 json.dumps(
@@ -606,13 +584,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
-                encoding="utf-8",
-            )
-            engagement_file = Path(directory) / "engagement.yaml"
-            write_engagement_template(Path(directory), target_url, _plan())
-            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
             planning_runner = _CountingPlanningRunner()
 
             report_dir = SecurityTestingOrchestrator(
@@ -620,7 +591,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 output_root=output_root,
                 crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
                 planning_crew_runner=planning_runner,
-            ).run(target_url, engagement_file=engagement_file)
+            ).run(engagement.id)
 
             discovery_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
             feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
@@ -638,11 +609,8 @@ class SecurityTestingCrewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            domain_dir = output_root / report_dir_name(target_url)
-            discovery_dir = domain_dir / "discovery"
-            planning_dir = domain_dir / "security-test-planning"
-            discovery_dir.mkdir(parents=True)
-            planning_dir.mkdir(parents=True)
+            engagement, live_asset = _create_live_engagement(output_root, target_url, _plan())
+            discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
             (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
             (discovery_dir / "memory.json").write_text(
                 json.dumps(
@@ -667,13 +635,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": _plan()}}]),
-                encoding="utf-8",
-            )
-            engagement_file = Path(directory) / "engagement.yaml"
-            write_engagement_template(Path(directory), target_url, _plan())
-            engagement_file.write_text((Path(directory) / "engagement_template.yaml").read_text(encoding="utf-8"), encoding="utf-8")
             planning_runner = _CountingPlanningRunner()
 
             report_dir = SecurityTestingOrchestrator(
@@ -681,26 +642,18 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 output_root=output_root,
                 crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
                 planning_crew_runner=planning_runner,
-            ).run(target_url, engagement_file=engagement_file)
+            ).run(engagement.id)
 
             self.assertEqual(planning_runner.calls, [])
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "discovery_feedback_duplicate_skipped" for event in testing_events))
 
-    def test_source_security_testing_feeds_discovery_updates_and_refreshes_planning(self) -> None:
+    def test_source_mode_security_testing_feeds_discovery_updates_and_refreshes_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory) / "example-source"
             source_dir.mkdir()
             source = str(source_dir)
             output_root = Path(directory) / "report"
-            source_root = output_root / source_report_dir_name(source)
-            source_discovery_dir = source_root / "source-discovery"
-            planning_dir = source_root / "security-test-planning"
-            source_discovery_dir.mkdir(parents=True)
-            planning_dir.mkdir(parents=True)
-            (source_discovery_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
-            (source_discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
-            (source_discovery_dir / "events.json").write_text("[]", encoding="utf-8")
             plan = {
                 "title": "Source plan",
                 "test_hypotheses": [
@@ -714,11 +667,8 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     }
                 ],
             }
-            (planning_dir / "memory.json").write_text(
-                json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
-                encoding="utf-8",
-            )
-            write_engagement_template_mapping(planning_dir, _source_engagement_template(source))
+            engagement, source_asset = _create_source_engagement(output_root, source, plan)
+            source_discovery_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
             planning_runner = _CountingPlanningRunner()
 
             report_dir = SecurityTestingOrchestrator(
@@ -726,7 +676,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 output_root=output_root,
                 crew_runner=_DiscoveryFeedbackSecurityTestingRunner(),
                 planning_crew_runner=planning_runner,
-            ).run(source=source)
+            ).run(engagement.id)
 
             discovery_memory = json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
             feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
@@ -737,7 +687,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("GET ${API_BASE}/team", discovery_report)
             self.assertIn("Cloudflare Pages", discovery_report)
             self.assertEqual(len(planning_runner.calls), 1)
-            self.assertEqual(planning_runner.calls[0]["source"], source)
+            self.assertEqual(planning_runner.calls[0]["engagement_id"], engagement.id)
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
 
@@ -772,9 +722,9 @@ class SecurityTestingCrewTests(unittest.TestCase):
             feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
             updated_asset = load_asset(output_root, engagement.id, live_asset.id)
             self.assertEqual(len(feedback_items), 1)
-            self.assertEqual(planning_runner.calls[0]["target_url"], f"engagement:{engagement.id}")
+            self.assertEqual(planning_runner.calls[0]["engagement_id"], engagement.id)
             self.assertEqual(planning_runner.calls[0]["report_dir"], str(planning_dir))
-            self.assertFalse((output_root / report_dir_name(target_url) / "security-test-planning").exists())
+            self.assertEqual({path.name for path in output_root.iterdir()}, {engagement.id})
             self.assertIn("last_discovered_at", updated_asset.metadata["discovery"])
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
@@ -841,7 +791,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(len(live_feedback), 1)
             self.assertEqual(len(source_feedback), 1)
             self.assertEqual(len(planning_runner.calls), 1)
-            self.assertEqual(planning_runner.calls[0]["target_url"], f"engagement:{engagement.id}")
+            self.assertEqual(planning_runner.calls[0]["engagement_id"], engagement.id)
 
     def test_collect_security_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -898,7 +848,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                         }
                     },
                 },
-                "source_security_test_coordinator",
+                "security_test_coordinator",
             )
 
             updates = collect_security_testing_discovery_updates(report_dir)
@@ -968,7 +918,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             outside_file = Path(directory) / "outside.js"
             outside_file.write_text("secret\n", encoding="utf-8")
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -999,7 +949,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             (source_root / ".env.example").write_text("CSRF_SECRET=example\n", encoding="utf-8")
             (source_root / "build" / "generated.js").write_text("const csrf = false;\n", encoding="utf-8")
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1026,7 +976,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1040,7 +990,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
 
-            with patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
                 blocked = json.loads(tool._run("curl https://example.test/private", "external check"))
                 result = json.loads(tool._run("curl http://127.0.0.1:8000/health", "local runtime check"))
@@ -1058,7 +1008,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1072,7 +1022,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="mode enabled\n", stderr=""))
 
-            with patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
                 result = json.loads(
                     tool._run(
@@ -1093,7 +1043,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1115,12 +1065,12 @@ class SecurityTestingCrewTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tool._run("../escape.py", "print('no')\n", "escape attempt")
 
-    def test_source_evidence_submission_normalizes_false_positive_finding_status(self) -> None:
+    def test_execution_evidence_submission_normalizes_false_positive_finding_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1132,7 +1082,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 targets={},
                 executed_report_path=report_dir / "executed_tests" / "AUTH-001.md",
             )
-            tool = _build_submit_source_evidence_tool(_FakeCrewAI, state)
+            tool = _build_submit_execution_evidence_tool(_FakeCrewAI, state)
 
             tool._run(
                 status="finding",
@@ -1143,15 +1093,15 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             self.assertEqual(state.evidence["status"], "no-finding")
             memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
-            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "source_security_test_execution_evidence")
+            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "security_test_execution_evidence")
             self.assertEqual(structured["status"], "no-finding")
 
-    def test_source_evidence_submission_normalizes_disproved_hypothesis_status(self) -> None:
+    def test_execution_evidence_submission_normalizes_disproved_hypothesis_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1163,7 +1113,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 targets={},
                 executed_report_path=report_dir / "executed_tests" / "AUTH-002.md",
             )
-            tool = _build_submit_source_evidence_tool(_FakeCrewAI, state)
+            tool = _build_submit_execution_evidence_tool(_FakeCrewAI, state)
 
             tool._run(
                 status="finding",
@@ -1179,7 +1129,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             self.assertEqual(state.evidence["status"], "no-finding")
             memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
-            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "source_security_test_execution_evidence")
+            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "security_test_execution_evidence")
             self.assertEqual(structured["status"], "no-finding")
 
     def test_start_source_process_tool_runs_detached_read_only_container(self) -> None:
@@ -1187,7 +1137,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1205,7 +1155,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 docker_calls.append(command)
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
-            with patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker):
+            with patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker):
                 tool = _build_start_source_process_tool(_FakeCrewAI, AppConfig(security_tool_image="image:test"), state)
                 result = json.loads(
                     tool._run(
@@ -1229,7 +1179,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1243,7 +1193,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="HTTP/1.1 200 OK\n\nok tok123", stderr=""))
 
-            with patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner):
                 tool = _build_request_local_http_tool(_FakeCrewAI, AppConfig(), state)
                 blocked = json.loads(tool._run("https://example.test/api", "external request"))
                 result = json.loads(
@@ -1265,7 +1215,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1286,7 +1236,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     return DockerToolResult(exit_code=0, stdout="booted tok123\n", stderr="")
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
-            with patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker):
+            with patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker):
                 tool = _build_stop_source_process_tool(_FakeCrewAI, state)
                 blocked = json.loads(tool._run("other-container", "scope guard"))
                 result = json.loads(tool._run("container-123", "cleanup"))
@@ -1309,7 +1259,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 encoding="utf-8",
             )
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1338,8 +1288,8 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
             with (
-                patch("mosh.crews.source_security_testing.crew.DockerToolRunner", return_value=fake_runner),
-                patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker),
+                patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner),
+                patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker),
             ):
                 write_tool = _build_write_workspace_file_tool(_FakeCrewAI, state)
                 command_tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
@@ -1397,7 +1347,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             source_root = Path(directory) / "source"
             source_root.mkdir()
             report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
+            state = SourceModeSecurityTestExecutionState(
                 source=str(source_root),
                 source_root=source_root,
                 source_context={},
@@ -1422,7 +1372,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     return DockerToolResult(exit_code=0, stdout="booted tok123\n", stderr="")
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
-            with patch("mosh.crews.source_security_testing.crew._run_docker_cli", side_effect=fake_docker):
+            with patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker):
                 _cleanup_source_processes(state)
 
             self.assertEqual(len(docker_calls), 2)
@@ -1595,61 +1545,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
             structured = next(item["content"]["structured"] for item in memory if item["kind"] == "security_test_execution_evidence")
             self.assertEqual(structured["finding"]["title"], "IP header trust can bypass rate limiting")
 
-    def test_source_security_testing_sub_crews_use_packaged_yaml_without_report_config_copy(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            report_dir = Path(directory) / "report"
-            source_root = Path(directory) / "source"
-            source_root.mkdir()
-            state = SourceSecurityTestExecutionState(
-                source=str(source_root),
-                source_root=source_root,
-                source_context={},
-                report_dir=report_dir,
-                workspace_dir=report_dir / "workspaces" / "SRC-001",
-                memory=FileMemory(report_dir),
-                hypothesis={"id": "SRC-001", "title": "Auth", "surface": "api", "priority": "high"},
-                engagement={"credentials": {}},
-                targets={},
-                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
-            )
-            config = AppConfig(openrouter_api_key="test-key")
-
-            for builder in (_build_source_executor_crew, _build_source_reviewer_crew, _build_source_reporter_crew):
-                crew = builder(_FakeRuntimeCrewAI, config, state).crew()
-                self.assertEqual(len(crew.agents), 1)
-                self.assertEqual(len(crew.tasks), 1)
-                self.assertEqual(len(crew.event_listeners), 1)
-
-            self.assertFalse((report_dir / ".crew_config").exists())
-
-    def test_submit_source_security_test_evidence_schema_matches_prompt_top_level_fields(self) -> None:
-        crewai = _load_crewai()
-        with tempfile.TemporaryDirectory() as directory:
-            source_root = Path(directory) / "source"
-            source_root.mkdir()
-            report_dir = Path(directory) / "report"
-            state = SourceSecurityTestExecutionState(
-                source=str(source_root),
-                source_root=source_root,
-                source_context={},
-                report_dir=report_dir,
-                workspace_dir=report_dir / "workspaces" / "SRC-001",
-                memory=FileMemory(report_dir),
-                hypothesis={"id": "SRC-001"},
-                engagement={"credentials": {}},
-                targets={},
-                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
-            )
-
-            tool = _build_submit_source_evidence_tool(crewai, state)
-            schema = tool.args_schema.model_json_schema()
-
-            self.assertEqual(schema["required"], ["status"])
-            self.assertIn("status", schema["properties"])
-            self.assertIn("source_evidence", schema["properties"])
-            self.assertIn("finding", schema["properties"])
-            self.assertNotIn("evidence", schema["properties"])
-
     def test_security_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
         crewai = _load_crewai()
         with tempfile.TemporaryDirectory() as directory:
@@ -1670,35 +1565,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 _build_executor_crew(crewai, config, state),
                 _build_reviewer_crew(crewai, config, state),
                 _build_reporter_crew(crewai, config, state),
-            ]
-
-            self.assertEqual(len(crews), 3)
-            self.assertFalse((report_dir / ".crew_config").exists())
-
-    def test_source_security_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
-        crewai = _load_crewai()
-        with tempfile.TemporaryDirectory() as directory:
-            report_dir = Path(directory) / "report"
-            source_root = Path(directory) / "source"
-            source_root.mkdir()
-            state = SourceSecurityTestExecutionState(
-                source=str(source_root),
-                source_root=source_root,
-                source_context={},
-                report_dir=report_dir,
-                workspace_dir=report_dir / "workspaces" / "SRC-001",
-                memory=FileMemory(report_dir),
-                hypothesis={"id": "SRC-001", "title": "Auth", "surface": "api", "priority": "high"},
-                engagement={"credentials": {}},
-                targets={},
-                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
-            )
-            config = AppConfig(openrouter_api_key="test-key")
-
-            crews = [
-                _build_source_executor_crew(crewai, config, state),
-                _build_source_reviewer_crew(crewai, config, state),
-                _build_source_reporter_crew(crewai, config, state),
             ]
 
             self.assertEqual(len(crews), 3)
@@ -1814,23 +1680,6 @@ class SecurityTestingCrewTests(unittest.TestCase):
             3,
         )
         self.assertIn('"execution_bundle": json.dumps(execution_bundle, sort_keys=True)', inspect.getsource(_run_one_security_test))
-
-    def test_source_security_testing_tasks_separate_original_hypothesis_from_residual_findings(self) -> None:
-        task_yaml = "\n".join(
-            [
-                Path("src/mosh/crews/source_security_testing/executor_tasks.yaml").read_text(encoding="utf-8"),
-                Path("src/mosh/crews/source_security_testing/reviewer_tasks.yaml").read_text(encoding="utf-8"),
-                Path("src/mosh/crews/source_security_testing/reporter_tasks.yaml").read_text(encoding="utf-8"),
-            ]
-        ).lower()
-        compact_task_yaml = " ".join(task_yaml.split())
-
-        self.assertIn("hypothesis_validated", task_yaml)
-        self.assertIn("original_hypothesis_result", task_yaml)
-        self.assertIn("residual_findings", task_yaml)
-        self.assertIn("planning priority is not finding severity", compact_task_yaml)
-        self.assertIn("do not reuse the planned priority as finding severity", compact_task_yaml)
-        self.assertIn("do not render it as finding confirmed", compact_task_yaml)
 
     def test_executed_test_report_includes_effective_targets(self) -> None:
         markdown = render_executed_test_report(
@@ -2266,74 +2115,13 @@ class _DiscoveryFeedbackSecurityTestingRunner:
         )
 
 
-class _DiscoveryFeedbackSourceSecurityTestingRunner:
-    def run(
-        self,
-        target_url,
-        source,
-        source_discovery_dir,
-        evidence_links,
-        report_dir,
-        memory,
-        plan,
-        engagement,
-        preflight,
-        executable_pending,
-    ) -> None:
-        memory.add_item(
-            "security_test_execution_bundle",
-            {
-                "test_id": "SRC-API-001",
-                "final_evidence": {
-                    "status": "finding",
-                    "summary": "Source execution discovered frontend API endpoints.",
-                    "discovery_updates": {
-                        "frontend_api_endpoints_inventoried": [
-                            "GET ${API_BASE}/team",
-                            "POST ${API_BASE}/team/invite",
-                        ],
-                        "deployment_config": {
-                            "platform": "Cloudflare Pages",
-                        },
-                    },
-                },
-                "final_review": {"accepted": True},
-                "attempts": [],
-                "artifacts": [],
-                "commands": [],
-            },
-            "source_security_test_coordinator",
-        )
-
-
 class _CountingPlanningRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def run(self, target_url, discovery_dir, report_dir, memory, source=None, source_discovery_dir=None):
-        self.calls.append(
-            {
-                "target_url": target_url,
-                "discovery_dir": str(discovery_dir),
-                "report_dir": str(report_dir),
-                "source": source,
-                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
-            }
-        )
-        memory.add_item(
-            "security_test_plan_final",
-            {
-                "structured": _refreshed_plan(),
-                "critic_review": {"accepted": True},
-            },
-            "reporter",
-        )
-        return _PlanningResult(_refreshed_plan(), {"accepted": True}, accepted=True, iterations=1)
-
     def run_engagement(self, output_root, engagement_id, report_dir, memory):
         self.calls.append(
             {
-                "target_url": f"engagement:{engagement_id}",
                 "output_root": str(output_root),
                 "report_dir": str(report_dir),
                 "engagement_id": engagement_id,
@@ -2349,7 +2137,7 @@ class _CountingPlanningRunner:
             },
             "reporter",
         )
-        write_security_test_plan(report_dir, f"engagement:{engagement_id}", plan, review, accepted=True, iterations=1)
+        write_security_test_plan(report_dir, engagement_id, plan, review, accepted=True, iterations=1)
         return _PlanningResult(plan, review, accepted=True, iterations=1)
 
 

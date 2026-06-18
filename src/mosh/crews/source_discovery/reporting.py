@@ -407,7 +407,7 @@ def _add_actions_section(lines: list[str], value: Any) -> None:
             [
                 "- Feed this source discovery into security planning.",
                 "- Correlate source routes with live discovery when a live URL is available.",
-                "- Run source security testing once source-backed hypotheses are produced.",
+                "- Run engagement security testing once source-backed hypotheses are produced.",
                 "",
             ]
         )

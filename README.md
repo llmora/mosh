@@ -45,7 +45,9 @@ The setup script runs `uv sync` to install dependencies in a `.venv` virtual env
 3. Use `uv run` to execute the CLI without activating the environment:
 
 ```bash
-uv run mosh discover https://app.example.com
+uv run mosh engagement create --title "Example App"
+uv run mosh engagement attach eng_a1b2c3d4 https://app.example.com
+uv run mosh discover eng_a1b2c3d4
 ```
 
 You can also activate the environment manually:
@@ -159,7 +161,7 @@ Run discovery for every attached asset that does not already have discovery outp
 mosh discover eng_a1b2c3d4
 ```
 
-You can optionally specify an asset to disover, instead of running discovery on all assets:
+You can optionally specify an asset to discover, instead of running discovery on all assets:
 
 ```bash
 mosh discover eng_a1b2c3d4 --asset asset_live_1
@@ -196,7 +198,7 @@ report/<engagement-id>/engagement_template.yaml
 This file is deliberately small. It is where you confirm:
 
 - Authorization and active testing permissions
-- Alternative staging or pre-production target mappings (useful if you do not want to run tests agains production)
+- Alternative staging or pre-production target mappings (useful if you do not want to run tests against production)
 - Execution limits
 - Credentials by role
 - Safe test data
@@ -204,7 +206,7 @@ This file is deliberately small. It is where you confirm:
 
 You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing (for instance if your preprod instance requires SASE credentials or headers, just drop them in the file).
 
-The security testing crew treats this file as execution configuration. 
+The security testing crew treats this file as execution configuration.
 
 ### 6. Run Security Testing
 
@@ -223,14 +225,7 @@ mosh test-security eng_a1b2c3d4 --hypothesis AUTH-001
 
 Repeat `--hypothesis` or pass comma-separated IDs to run a small subset.
 
-For legacy URL planning, run:
-
-```bash
-mosh test-security eng_a1b2c3d4
-```
-
-If an engagement later gains another input, attach the new asset, re-run discovery, planning, and testing with the engagement ID. Existing evidence is reused, new mappings enrich the plan, and only ready hypotheses execute. The legacy compatibility path can still combine URL and source inputs
-with both arguments.
+If an engagement later gains another input, attach the new asset, then re-run discovery, planning, and testing with the engagement ID. Existing evidence is reused, new mappings enrich the plan, and only ready hypotheses execute.
 
 Security testing writes the output of the hypothesis verification to:
 
@@ -238,12 +233,12 @@ Security testing writes the output of the hypothesis verification to:
 report/<engagement-id>/security-testing/executed_tests/<hypothesis>.md
 ```
 
-Source-only preflight writes:
+Preflight and execution history are stored in the same engagement-scoped result tree:
 
 ```text
-report/<source>/source-security-testing/preflight.md
-report/<source>/source-security-testing/executed_tests/
-report/<source>/source-security-testing/executed_tests/history/
+report/<engagement-id>/security-testing/preflight.md
+report/<engagement-id>/security-testing/executed_tests/
+report/<engagement-id>/security-testing/executed_tests/history/
 ```
 
 Security testing uses one executor per hypothesis. The executor can use live
@@ -261,7 +256,7 @@ Every security-testing run starts with a preflight. The preflight reads the secu
 - **Executable tests:** hypotheses with the required attached artifacts and engagement inputs available.
 - **Blocked tests:** required information is missing or the engagement file does not allow the test yet.
 
-Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with clear engagement-file fields to update. Common blockers include missing authorization confirmation, active testing permission, role credentials, safe test data, or target mappings.
+Open `preflight.md` after the first run. It tells you which tests were ready, which were blocked, and what information is missing. After a successful `test-security` run, the CLI also prints any blocked tests that still prevent completion, with clear engagement template fields to update. Common blockers include missing authorization confirmation, active testing permission, role credentials, safe test data, or target mappings.
 
 You can run security testing repeatedly to incrementally complete the test:
 
@@ -280,13 +275,13 @@ This self-learning feedback loop ensures that all the information discovered dur
 When security testing is complete, create the customer-facing engagement report:
 
 ```bash
-mosh report https://app.example.com
+mosh report eng_a1b2c3d4
 ```
 
 Final reporting writes:
 
 ```text
-report/<host>/final-report/report.md
+report/<engagement-id>/final-report/report.md
 ```
 
 The final report is different from the working documents used during testing. It incorporates the main discovery context, the executed test outcomes, the confirmed findings, severity, remediation guidance, and an appendix for tests that produced no finding, were inconclusive, failed, or were not confirmed by review.
@@ -298,7 +293,7 @@ The report is structured as a customer deliverable:
 - **Remediation priorities**: findings ordered by qualitative severity so fixes can be prioritized quickly
 - **Engagement overview**: prose explanation of target, lifecycle dates from discovery through final reporting, scope, limitations, and testing approach
 - **Summary of findings**: findings table sorted by severity and remediation priority, severity counts, and confirmed/inconclusive/failed/no-finding breakdown
-- **Key fiscovery areas**: important routes, auth areas, APIs, forms, technologies, exposed surfaces, and limitations
+- **Key discovery areas**: important routes, auth areas, APIs, forms, technologies, exposed surfaces, and limitations
 - **Detailed findings**: confirmed findings only, with evidence, impact, technical remediation guidance, source-specific fix details or pseudo-code when available, retest guidance, and references when available
 - **Tests with no findings or inconclusive**: concise appendix for hypotheses that were not confirmed
 - **Appendix**: methodology, tools used, evidence index, and raw report references
@@ -321,7 +316,7 @@ mosh test-security eng_a1b2c3d4
 # If the CLI reports blocked tests, add the missing engagement details and run it again.
 mosh test-security eng_a1b2c3d4
 
-mosh report https://app.example.com
+mosh report eng_a1b2c3d4
 ```
 
 ## What you get

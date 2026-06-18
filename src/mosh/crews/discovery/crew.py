@@ -18,7 +18,6 @@ from mosh.memory import FileMemory
 from mosh.models import Event
 from mosh.models import CrawlResult
 from mosh.crews.discovery.reporting import write_reports
-from mosh.scope import report_dir_name
 from mosh.scope import normalize_url
 
 
@@ -155,11 +154,10 @@ class DiscoveryOrchestrator:
         max_pages: int = 200,
         max_depth: int | None = None,
         *,
-        report_dir: Path | None = None,
+        report_dir: Path,
     ) -> Path:
         max_depth = max_depth if max_depth is not None else self.config.max_depth
         agent_definitions = discovery_agent_definitions(self.config)
-        report_dir = report_dir or self.output_root / report_dir_name(url) / "discovery"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         memory.record_event(
             "orchestrator",

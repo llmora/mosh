@@ -22,8 +22,8 @@ from mosh.crews.security_testing.crew import (
     _with_execution_metadata_mapping,
     render_executed_test_report,
 )
+from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
 from mosh.memory import FileMemory
-from mosh.scope import report_dir_name
 
 
 class FakeCrewAI:
@@ -146,7 +146,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_reporting_crew_writes_and_reviews_customer_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             report_dir = domain_dir / "final-report"
             memory = FileMemory(report_dir)
             runner = CrewAIFinalReportingCrewRunner(AppConfig(openrouter_api_key="test-key"))
@@ -209,7 +209,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_rendered_report_fences_unclosed_markdown_from_source_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             bundle["executed_tests"][0]["resolution"] = (
                 "Update the API authorization guard:\n\n"
                 "```python\n"
@@ -226,7 +226,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_findings_table_is_sorted_by_severity_and_remediation_priority(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             bundle["executed_tests"].extend(
                 [
                     {
@@ -261,7 +261,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_executive_summary_long_plain_text_is_split_into_paragraphs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
 
             markdown = render_final_report(
                 "https://example.test",
@@ -290,7 +290,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_long_source_detail_is_not_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             bundle["executed_tests"][0]["evidence_summary"] = " ".join(
                 f"Evidence sentence {index}." for index in range(300)
             )
@@ -305,7 +305,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_final_report_bundle_promotes_only_accepted_findings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
 
         executed = bundle["executed_tests"]
         findings = [item for item in executed if item["accepted_finding"]]
@@ -316,7 +316,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_final_report_bundle_uses_executed_report_priority_when_plan_no_longer_has_test(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            planning_memory = domain_dir / "security-test-planning" / "memory.json"
+            planning_memory = domain_dir / "plan" / "memory.json"
             plan_items = json.loads(planning_memory.read_text(encoding="utf-8"))
             plan_items[0]["content"]["structured"]["test_hypotheses"] = [
                 item
@@ -325,7 +325,7 @@ class FinalReportingTests(unittest.TestCase):
             ]
             planning_memory.write_text(json.dumps(plan_items), encoding="utf-8")
 
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
 
         auth = next(item for item in bundle["executed_tests"] if item["id"] == "AUTH-001")
         self.assertEqual(auth["severity"], "critical")
@@ -334,7 +334,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_writer_tool_rejects_unsupported_cvss(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             report_dir = domain_dir / "final-report"
             state = FinalReportState(
                 target_url="https://example.test",
@@ -359,7 +359,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_writer_tool_rejects_complete_markdown_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             report_dir = domain_dir / "final-report"
             state = FinalReportState(
                 target_url="https://example.test",
@@ -375,7 +375,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_rendered_report_does_not_trust_writer_headline_severity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             bundle["executed_tests"][0]["severity"] = "unknown"
 
             markdown = render_final_report(
@@ -398,7 +398,7 @@ class FinalReportingTests(unittest.TestCase):
                 "inconclusive",
                 False,
             )
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
 
             markdown = render_final_report("https://example.test", bundle, {})
 
@@ -409,7 +409,7 @@ class FinalReportingTests(unittest.TestCase):
     def test_review_tool_does_not_fail_on_unstructured_false_decision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain_dir = _write_report_inputs(Path(directory), "https://example.test")
-            bundle = build_final_report_bundle("https://example.test", domain_dir)
+            bundle = build_final_report_bundle(domain_dir.parent, domain_dir.name)
             report_dir = domain_dir / "final-report"
             state = FinalReportState(
                 target_url="https://example.test",
@@ -427,9 +427,12 @@ class FinalReportingTests(unittest.TestCase):
 
 
 def _write_report_inputs(root: Path, target_url: str) -> Path:
-    domain_dir = root / "report" / report_dir_name(target_url)
-    discovery_dir = domain_dir / "discovery"
-    planning_dir = domain_dir / "security-test-planning"
+    output_root = root / "report"
+    engagement = create_engagement(output_root)
+    live_asset = attach_asset(output_root, engagement.id, target_url).asset
+    domain_dir = output_root / engagement.id
+    discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+    planning_dir = domain_dir / "plan"
     testing_dir = domain_dir / "security-testing"
     final_report_dir = domain_dir / "final-report"
     executed_dir = testing_dir / "executed_tests"
@@ -493,7 +496,7 @@ def _write_report_inputs(root: Path, target_url: str) -> Path:
         json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]),
         encoding="utf-8",
     )
-    planning_dir.joinpath("security_test_plan.md").write_text("# Security Test Plan\n", encoding="utf-8")
+    planning_dir.joinpath("plan.md").write_text("# Security Test Plan\n", encoding="utf-8")
     planning_dir.joinpath("events.json").write_text(
         json.dumps(
             [
