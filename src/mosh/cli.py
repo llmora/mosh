@@ -18,10 +18,12 @@ from mosh.engagements import (
     create_engagement,
     engagement_exists,
     engagement_dir,
+    engagement_plan_dir,
     load_engagement,
     record_asset_discovery,
 )
 from mosh.evidence_links import build_evidence_links
+from mosh.memory import FileMemory
 from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator, run_planning_evidence_linking
 from mosh.crews.security_testing.crew import (
@@ -261,6 +263,8 @@ def _run_source_discovery(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def _run_evidence_linking(config: AppConfig, args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    memory = FileMemory(engagement_plan_dir(output_root, args.engagement_id), event_sink=_print_event)
     _print_event(
         Event(
             "orchestrator",
@@ -272,8 +276,9 @@ def _run_evidence_linking(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         result = run_planning_evidence_linking(
             config,
-            Path(args.output_root),
+            output_root,
             args.engagement_id,
+            memory=memory,
         )
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)

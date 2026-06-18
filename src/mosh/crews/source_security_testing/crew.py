@@ -19,6 +19,7 @@ from mosh.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.crews.security_testing.crew import (
     SecurityTestPreflightResult,
     _append_command_log,
@@ -452,6 +453,7 @@ def _build_source_executor_crew(crewai: Any, config: AppConfig, state: SourceSec
                 tasks=[self.execute_source_security_test_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SourceSecurityTestExecutorCrew()
@@ -494,6 +496,7 @@ def _build_source_reviewer_crew(crewai: Any, config: AppConfig, state: SourceSec
                 tasks=[self.review_source_security_test_evidence_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SourceSecurityTestReviewerCrew()
@@ -536,6 +539,7 @@ def _build_source_reporter_crew(crewai: Any, config: AppConfig, state: SourceSec
                 tasks=[self.write_source_security_test_report_task()],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SourceSecurityTestReporterCrew()

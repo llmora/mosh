@@ -14,6 +14,7 @@ from mosh.crews.discovery.crew import (
     _llm,
     _load_crewai,
 )
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.crews.source_discovery.agents import (
     DependencyConfigAgent,
     SourceDiscoveryReporterAgent,
@@ -352,6 +353,7 @@ def _build_yaml_source_discovery_crew(
                 ],
                 process=crewai.Process.sequential,
                 verbose=True,
+                event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
     return SourceDiscoveryCrew()

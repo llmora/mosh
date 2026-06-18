@@ -715,6 +715,31 @@ class SecurityTestPlanningTests(unittest.TestCase):
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertEqual(events[-1]["action"], "skipped_current")
 
+    def test_planning_evidence_linking_passes_memory_to_model_linker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_engagement_discovery_pair(output_root, engagement.id, live_asset.id, source_asset.id)
+            memory = FileMemory(output_root / engagement.id / "plan")
+            linker = _NoopModelAssistedLinker()
+
+            with patch(
+                "mosh.crews.security_planning.crew.build_model_assisted_linker",
+                return_value=linker,
+            ) as build_linker:
+                run_planning_evidence_linking(
+                    AppConfig(openrouter_api_key="test-key"),
+                    output_root,
+                    engagement.id,
+                    memory=memory,
+                )
+
+            self.assertIs(build_linker.call_args.kwargs["memory"], memory)
+
     def test_source_only_plan_normalization_defers_runtime_only_hypotheses(self) -> None:
         plan = {
             "title": "Source plan",

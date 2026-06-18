@@ -940,7 +940,7 @@ def run_planning_evidence_linking(
     result = build_evidence_links(
         output_root,
         engagement_id,
-        model_assisted_linker=build_model_assisted_linker(config),
+        model_assisted_linker=build_model_assisted_linker(config, memory=memory),
     )
     if memory is not None:
         memory.add_item(
