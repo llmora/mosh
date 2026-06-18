@@ -30,6 +30,12 @@ execute_security_test_task:
     engagement rate limits. Do not use real credentials or tokens in prose; the
     command tool redacts known credential values in logs.
 
+    If the engagement JSON contains a "known_public_endpoints" list, those
+    endpoints are intentionally public by design. Do not flag them as missing
+    authentication. Instead focus testing on whether they have appropriate
+    controls (rate limiting, input validation, abuse prevention) rather than
+    whether they require auth.
+
     Treat the effective target mappings as canonical for execution. URLs in the
     hypothesis are evidence from discovery and may name production systems; when
     an alternative target is present in the mappings, rewrite discovered paths
