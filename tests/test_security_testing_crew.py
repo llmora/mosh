@@ -24,6 +24,7 @@ from mosh.crews.security_testing.crew import (
     _build_executor_crew,
     _build_reporter_crew,
     _build_reviewer_crew,
+    _build_submit_execution_evidence_tool,
     _kickoff_capturing_tool_state,
     _build_run_security_command_tool,
     _run_one_security_test,
@@ -1134,12 +1135,10 @@ class SecurityTestingCrewTests(unittest.TestCase):
             tool = _build_submit_source_evidence_tool(_FakeCrewAI, state)
 
             tool._run(
-                {
-                    "status": "finding",
-                    "summary": "Model mismatch: customer auth is not JWT-based as hypothesized.",
-                    "result": "No authentication bypasses found. No remediation required.",
-                    "finding": None,
-                }
+                status="finding",
+                summary="Model mismatch: customer auth is not JWT-based as hypothesized.",
+                result="No authentication bypasses found. No remediation required.",
+                finding=None,
             )
 
             self.assertEqual(state.evidence["status"], "no-finding")
@@ -1167,17 +1166,15 @@ class SecurityTestingCrewTests(unittest.TestCase):
             tool = _build_submit_source_evidence_tool(_FakeCrewAI, state)
 
             tool._run(
-                {
-                    "status": "finding",
-                    "hypothesis_validated": False,
-                    "summary": "Authentication is applied to all developer routes, contrary to the hypothesis.",
-                    "result": "The original no-auth hypothesis is disproved. Residual hardening gaps remain.",
-                    "original_hypothesis_result": "All routes are behind router-level auth middleware.",
-                    "residual_findings": [
-                        {"title": "Developer role is coarse", "severity": "medium", "evidence": ["api/private/developer.js:595"]}
-                    ],
-                    "finding": None,
-                }
+                status="finding",
+                hypothesis_validated=False,
+                summary="Authentication is applied to all developer routes, contrary to the hypothesis.",
+                result="The original no-auth hypothesis is disproved. Residual hardening gaps remain.",
+                original_hypothesis_result="All routes are behind router-level auth middleware.",
+                residual_findings=[
+                    {"title": "Developer role is coarse", "severity": "medium", "evidence": ["api/private/developer.js:595"]}
+                ],
+                finding=None,
             )
 
             self.assertEqual(state.evidence["status"], "no-finding")
@@ -1510,6 +1507,94 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             self.assertFalse((report_dir / ".crew_config").exists())
 
+    def test_submit_security_test_evidence_schema_matches_prompt_top_level_fields(self) -> None:
+        crewai = _load_crewai()
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            state = SecurityTestExecutionState(
+                target_url="https://example.test",
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "API-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "API-001"},
+                engagement={"credentials": {}},
+                targets={"api": "https://api.example.test"},
+                executed_report_path=report_dir / "executed_tests" / "API-001.md",
+            )
+
+            tool = _build_submit_execution_evidence_tool(crewai, state)
+            schema = tool.args_schema.model_json_schema()
+
+            self.assertEqual(schema["required"], ["status"])
+            self.assertIn("status", schema["properties"])
+            self.assertIn("source_evidence", schema["properties"])
+            self.assertIn("live_evidence", schema["properties"])
+            self.assertIn("finding", schema["properties"])
+            self.assertNotIn("evidence", schema["properties"])
+
+    def test_submit_security_test_evidence_records_top_level_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            state = SecurityTestExecutionState(
+                target_url="https://example.test",
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "AUTH-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "AUTH-001"},
+                engagement={"credentials": {}},
+                targets={"api": "https://api.example.test"},
+                executed_report_path=report_dir / "executed_tests" / "AUTH-001.md",
+            )
+            tool = _build_submit_execution_evidence_tool(_FakeCrewAI, state)
+
+            result = json.loads(
+                tool._run(
+                    status="finding",
+                    hypothesis_validated="partial",
+                    summary="Rate limiting is enforced, but header trust leaves a bypass risk.",
+                    observations='{"rate_limit":"enforced"}',
+                    source_evidence=json.dumps(
+                        [
+                            {
+                                "path": "api/backoffice.js",
+                                "start_line": 448,
+                                "end_line": 476,
+                                "reason": "Rate limit middleware configuration.",
+                            }
+                        ]
+                    ),
+                    live_evidence=json.dumps(
+                        [
+                            {
+                                "target": "https://api.example.test/api/private/auth/login",
+                                "method": "POST",
+                                "response_status": 429,
+                            }
+                        ]
+                    ),
+                    finding=json.dumps(
+                        {
+                            "title": "IP header trust can bypass rate limiting",
+                            "severity": "high",
+                            "evidence": "api/utils/requestIp.js:14-36",
+                        }
+                    ),
+                    result="The original hypothesis was partially validated.",
+                    safety_notes="Rate limits respected.",
+                )
+            )
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(state.evidence["status"], "finding")
+            self.assertEqual(state.evidence["hypothesis_validated"], "partial")
+            self.assertEqual(state.evidence["observations"]["rate_limit"], "enforced")
+            self.assertEqual(state.evidence["source_evidence"][0]["path"], "api/backoffice.js")
+            self.assertEqual(state.evidence["live_evidence"][0]["response_status"], 429)
+            self.assertEqual(state.evidence["finding"]["severity"], "high")
+            memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+            structured = next(item["content"]["structured"] for item in memory if item["kind"] == "security_test_execution_evidence")
+            self.assertEqual(structured["finding"]["title"], "IP header trust can bypass rate limiting")
+
     def test_source_security_testing_sub_crews_use_packaged_yaml_without_report_config_copy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory) / "report"
@@ -1536,6 +1621,34 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 self.assertEqual(len(crew.event_listeners), 1)
 
             self.assertFalse((report_dir / ".crew_config").exists())
+
+    def test_submit_source_security_test_evidence_schema_matches_prompt_top_level_fields(self) -> None:
+        crewai = _load_crewai()
+        with tempfile.TemporaryDirectory() as directory:
+            source_root = Path(directory) / "source"
+            source_root.mkdir()
+            report_dir = Path(directory) / "report"
+            state = SourceSecurityTestExecutionState(
+                source=str(source_root),
+                source_root=source_root,
+                source_context={},
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspaces" / "SRC-001",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "SRC-001"},
+                engagement={"credentials": {}},
+                targets={},
+                executed_report_path=report_dir / "executed_tests" / "SRC-001.md",
+            )
+
+            tool = _build_submit_source_evidence_tool(crewai, state)
+            schema = tool.args_schema.model_json_schema()
+
+            self.assertEqual(schema["required"], ["status"])
+            self.assertIn("status", schema["properties"])
+            self.assertIn("source_evidence", schema["properties"])
+            self.assertIn("finding", schema["properties"])
+            self.assertNotIn("evidence", schema["properties"])
 
     def test_security_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
         crewai = _load_crewai()
