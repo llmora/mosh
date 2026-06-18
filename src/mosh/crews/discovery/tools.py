@@ -106,8 +106,8 @@ class DirbDockerDiscoveryTool:
         self,
         image: str,
         runner: DockerToolRunner | None = None,
-        wordlist: str = "/usr/share/dirb/wordlists/common.txt",
-        docker_timeout: int = 120,
+        wordlist: str = "/usr/share/dirb/wordlists/small.txt",
+        docker_timeout: int = 300,
     ) -> None:
         self.runner = runner or DockerToolRunner(image)
         self.wordlist = wordlist
