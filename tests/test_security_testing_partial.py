@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from mosh.memory import FileMemory
-from mosh.crews.security_testing.crew import _run_one_security_test, _safe_test_id
+from mosh.crews.testing.crew import _run_one_security_test, _safe_test_id
 
 
 class _FakeCrew:
@@ -48,15 +48,15 @@ class PartialTestResultsTest(unittest.TestCase):
             # crew raises to simulate an LLM/crew failure with no captured review.
             with (
                 patch(
-                    "mosh.crews.security_testing.crew._build_executor_crew",
+                    "mosh.crews.testing.crew._build_executor_crew",
                     return_value=_FakeCrew(),
                 ),
                 patch(
-                    "mosh.crews.security_testing.crew._build_reviewer_crew",
+                    "mosh.crews.testing.crew._build_reviewer_crew",
                     return_value=_FakeCrew(raise_on_kickoff=True),
                 ),
                 patch(
-                    "mosh.crews.security_testing.crew._build_reporter_crew",
+                    "mosh.crews.testing.crew._build_reporter_crew",
                     return_value=_FakeCrew(),
                 ),
             ):
@@ -64,6 +64,10 @@ class PartialTestResultsTest(unittest.TestCase):
                     crewai=object(),
                     config=config,
                     target_url="https://example.test",
+                    source=None,
+                    source_root=None,
+                    source_context={},
+                    evidence_links={},
                     report_dir=report_dir,
                     memory=memory,
                     hypothesis=hypothesis,
@@ -99,15 +103,15 @@ class PartialTestResultsTest(unittest.TestCase):
 
             with (
                 patch(
-                    "mosh.crews.security_testing.crew._build_executor_crew",
+                    "mosh.crews.testing.crew._build_executor_crew",
                     return_value=executor_crew,
                 ),
                 patch(
-                    "mosh.crews.security_testing.crew._build_reviewer_crew",
+                    "mosh.crews.testing.crew._build_reviewer_crew",
                     return_value=reviewer_crew,
                 ),
                 patch(
-                    "mosh.crews.security_testing.crew._build_reporter_crew",
+                    "mosh.crews.testing.crew._build_reporter_crew",
                     return_value=_FakeCrew(),
                 ),
             ):
@@ -115,6 +119,10 @@ class PartialTestResultsTest(unittest.TestCase):
                     crewai=object(),
                     config=config,
                     target_url="https://example.test",
+                    source=None,
+                    source_root=None,
+                    source_context={},
+                    evidence_links={},
                     report_dir=report_dir,
                     memory=memory,
                     hypothesis=hypothesis,
