@@ -131,6 +131,9 @@ class CrawlerAgent:
         js_static_crawl = self._run_js_static_tool(crawl, memory)
         if js_static_crawl:
             crawl = self._merge_crawls(crawl, js_static_crawl)
+        openapi_crawl = self._run_openapi_spec_parsing(crawl, memory)
+        if openapi_crawl:
+            crawl = self._merge_crawls(crawl, openapi_crawl)
         self._store_crawl(memory, crawl)
         return crawl
 
@@ -191,6 +194,50 @@ class CrawlerAgent:
             "Invoking js_static_endpoint_discovery",
             crawl,
             memory,
+        )
+
+    def _run_openapi_spec_parsing(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
+        """Detect and parse OpenAPI/Swagger specs from crawled JSON endpoints."""
+        from mosh.crews.discovery.openapi_parser import is_openapi_spec, parse_openapi_spec
+        import urllib.request
+
+        json_pages = [
+            page for page in crawl.pages
+            if page.status == 200 and "json" in page.content_type.lower()
+        ]
+        if not json_pages:
+            return None
+        all_pages: list = []
+        for page in json_pages:
+            try:
+                with urllib.request.urlopen(page.url, timeout=30) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+            except Exception:
+                continue
+            if not is_openapi_spec(page.content_type, body):
+                continue
+            memory.record_event(
+                self.name,
+                "openapi_spec_found",
+                f"Parsing OpenAPI specification from {page.url}",
+                {"url": page.url, "size": len(body)},
+            )
+            pages = parse_openapi_spec(page.url, body)
+            all_pages.extend(pages)
+            memory.record_event(
+                self.name,
+                "openapi_spec_parsed",
+                f"Extracted {len(pages)} API endpoints from OpenAPI spec",
+                {"url": page.url, "endpoints": len(pages)},
+            )
+        if not all_pages:
+            return None
+        from mosh.models import CrawlResult as CR
+        return CR(
+            start_url=crawl.start_url,
+            pages=all_pages,
+            out_of_scope=[],
+            failed=[],
         )
 
     def _run_javascript_asset_tool(
