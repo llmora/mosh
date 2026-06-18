@@ -54,8 +54,8 @@ class AppConfig:
     security_execution_max_revisions: int = 2
     katana_crawl_duration: str = "270s"
     katana_docker_timeout: int = 300
-    dirb_wordlist: str = "/usr/share/dirb/wordlists/common.txt"
-    dirb_docker_timeout: int = 120
+    dirb_wordlist: str = "/usr/share/dirb/wordlists/small.txt"
+    dirb_docker_timeout: int = 300
     candidate_follow_up_limit: int = 5
     max_depth: int = 5
     planning_max_revisions: int = 1
@@ -74,8 +74,8 @@ class AppConfig:
             security_execution_max_revisions=int(os.getenv("MOSH_SECURITY_EXECUTION_MAX_REVISIONS", "2")),
             katana_crawl_duration=os.getenv("MOSH_KATANA_CRAWL_DURATION", "270s"),
             katana_docker_timeout=int(os.getenv("MOSH_KATANA_DOCKER_TIMEOUT", "300")),
-            dirb_wordlist=os.getenv("MOSH_DIRB_WORDLIST", "/usr/share/dirb/wordlists/common.txt"),
-            dirb_docker_timeout=int(os.getenv("MOSH_DIRB_DOCKER_TIMEOUT", "120")),
+            dirb_wordlist=os.getenv("MOSH_DIRB_WORDLIST", "/usr/share/dirb/wordlists/small.txt"),
+            dirb_docker_timeout=int(os.getenv("MOSH_DIRB_DOCKER_TIMEOUT", "300")),
             candidate_follow_up_limit=int(os.getenv("MOSH_CANDIDATE_FOLLOW_UP_LIMIT", "5")),
             max_depth=int(os.getenv("MOSH_MAX_DEPTH", "5")),
             planning_max_revisions=int(os.getenv("MOSH_PLANNING_MAX_REVISIONS", "1")),
