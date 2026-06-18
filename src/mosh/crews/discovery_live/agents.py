@@ -8,7 +8,7 @@ from mosh.crews.definitions import AgentDefinition
 from mosh.memory import FileMemory
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
 from mosh.scope import ScopePolicy, normalize_url
-from mosh.crews.discovery.tools import (
+from mosh.crews.discovery_live.tools import (
     CrawlApplicationTool,
     DirbDockerDiscoveryTool,
     ExtractifyDockerTool,
@@ -41,19 +41,19 @@ HTTP_METHOD_TITLES = tuple(
 )
 
 
-def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
+def discovery_live_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
     return [
         AgentDefinition(
             name="orchestrator",
             role="Discovery crew coordinator",
             goal="Coordinate appsec discovery work and route findings between agents.",
-            model=config.models.discovery.reporter,
+            model=config.models.discovery_live.reporter,
         ),
         AgentDefinition(
             name="crawler",
             role="Application surface crawler",
             goal="Discover in-scope pages, links, URLs, paths, references, and files.",
-            model=config.models.discovery.crawler,
+            model=config.models.discovery_live.crawler,
             tools=[
                 CrawlApplicationTool.definition,
                 KatanaDockerCrawlerTool.definition,
@@ -66,22 +66,22 @@ def discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
             name="technology_mapper",
             role="Remote component inventory compiler",
             goal="Identify observable libraries, servers, frameworks, and application components.",
-            model=config.models.discovery.technology_mapper,
+            model=config.models.discovery_live.technology_mapper,
         ),
         AgentDefinition(
             name="reporter",
             role="Discovery reporter",
             goal="Summarize discovery findings into a stable Markdown report.",
-            model=config.models.discovery.reporter,
+            model=config.models.discovery_live.reporter,
         ),
     ]
 
 
 @dataclass(frozen=True)
-class DiscoveryAgents:
+class DiscoveryLiveAgents:
     crawler: "CrawlerAgent"
     technology_mapper: "TechnologyMapperAgent"
-    reporter: "DiscoveryReporterAgent"
+    reporter: "DiscoveryLiveReporterAgent"
 
 
 class CrawlerAgent:
@@ -202,7 +202,7 @@ class CrawlerAgent:
 
     def _run_openapi_spec_parsing(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
         """Detect and parse OpenAPI/Swagger specs from crawled JSON endpoints."""
-        from mosh.crews.discovery.openapi_parser import is_openapi_spec, parse_openapi_spec
+        from mosh.crews.discovery_live.openapi_parser import is_openapi_spec, parse_openapi_spec
         import urllib.request
 
         json_pages = [
@@ -529,7 +529,7 @@ class TechnologyMapperAgent:
     name = "technology_mapper"
 
 
-class DiscoveryReporterAgent:
+class DiscoveryLiveReporterAgent:
     name = "reporter"
 
     def summarize(
@@ -551,9 +551,9 @@ class DiscoveryReporterAgent:
         return summary
 
 
-def build_discovery_agents(config: AppConfig | None = None) -> DiscoveryAgents:
+def build_discovery_live_agents(config: AppConfig | None = None) -> DiscoveryLiveAgents:
     config = config or AppConfig()
-    return DiscoveryAgents(
+    return DiscoveryLiveAgents(
         crawler=CrawlerAgent(
             additional_tools=[
                 KatanaDockerCrawlerTool(
@@ -572,5 +572,5 @@ def build_discovery_agents(config: AppConfig | None = None) -> DiscoveryAgents:
             candidate_follow_up_limit=config.candidate_follow_up_limit,
         ),
         technology_mapper=TechnologyMapperAgent(),
-        reporter=DiscoveryReporterAgent(),
+        reporter=DiscoveryLiveReporterAgent(),
     )

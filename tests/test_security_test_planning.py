@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import CREW_CONFIG_PACKAGE
-from mosh.crews.discovery.crew import _load_crewai
+from mosh.crews.discovery_live.crew import CREW_CONFIG_PACKAGE
+from mosh.crews.discovery_live.crew import _load_crewai
 from mosh.engagement import (
     build_engagement_template,
     load_engagement_file,
@@ -32,7 +32,7 @@ from mosh.crews.planning.crew import (
     _normalize_security_test_plan,
     load_engagement_assessment_evidence_bundle,
     load_discovery_context,
-    load_source_discovery_context,
+    load_discovery_source_context,
     run_planning_evidence_linking,
 )
 from mosh.crews.planning.reporting import render_security_test_plan, write_security_test_plan
@@ -218,7 +218,7 @@ def _write_live_discovery(discovery_dir: Path) -> None:
     )
 
 
-def _write_source_discovery(discovery_dir: Path) -> None:
+def _write_discovery_source(discovery_dir: Path) -> None:
     discovery_dir.mkdir(parents=True, exist_ok=True)
     (discovery_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
     (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
@@ -502,7 +502,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertNotIn("x" * 1000, serialized)
             self.assertNotIn("y" * 5000, serialized)
 
-    def test_load_source_discovery_context_reads_source_index(self) -> None:
+    def test_load_discovery_source_context_reads_source_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory)
             (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
@@ -523,7 +523,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             )
             (source_dir / "events.json").write_text('[{"action":"complete"}]', encoding="utf-8")
 
-            context = load_source_discovery_context(source_dir)
+            context = load_discovery_source_context(source_dir)
 
             self.assertEqual(context["report_markdown"], "# Source Discovery\n")
             self.assertEqual(context["source_index"]["schema"], "mosh.source-index.v1")
@@ -552,9 +552,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(bundle["asset_evidence"]["live"][0]["asset_id"], live_asset.id)
             self.assertEqual(bundle["asset_evidence"]["source"][0]["asset_id"], source_asset.id)
             self.assertEqual(bundle["correlation"]["evidence_links"], evidence_links)
-            self.assertEqual(bundle["live_discovery"]["primary_asset_id"], live_asset.id)
-            self.assertEqual(bundle["source_discovery"]["primary_asset_id"], source_asset.id)
-            self.assertNotIn("report_markdown", bundle["live_discovery"])
+            self.assertEqual(bundle["discovery_live"]["primary_asset_id"], live_asset.id)
+            self.assertEqual(bundle["discovery_source"]["primary_asset_id"], source_asset.id)
+            self.assertNotIn("report_markdown", bundle["discovery_live"])
             self.assertIn("report_markdown", bundle["asset_evidence"]["live"][0]["discovery"])
             self.assertTrue(bundle["execution_capabilities"]["source"]["available"])
             self.assertTrue(bundle["execution_capabilities"]["live"]["available"])
@@ -569,7 +569,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
                 report_dir=report_dir,
                 memory=FileMemory(report_dir),
                 discovery_context={
-                    "source_discovery": {"available": True},
+                    "discovery_source": {"available": True},
                     "execution_capabilities": {
                         "source": {"available": True, "tools": ["source_search", "read_source_slice"]}
                     },
@@ -621,8 +621,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
                 report_dir=report_dir,
                 memory=FileMemory(report_dir),
                 discovery_context={
-                    "live_discovery": {"available": True},
-                    "source_discovery": {"available": True},
+                    "discovery_live": {"available": True},
+                    "discovery_source": {"available": True},
                     "execution_capabilities": {
                         "live": {"available": True},
                         "source": {"available": True},
@@ -780,8 +780,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         }
         context = {
             "schema": "mosh.assessment-evidence-bundle.v1",
-            "live_discovery": {},
-            "source_discovery": {
+            "discovery_live": {},
+            "discovery_source": {
                 "source_index": {
                     "evidence_refs": [{"path": "api/routes/auth.js", "start_line": 1, "end_line": 20}]
                 }
@@ -823,8 +823,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         }
         context = {
             "schema": "mosh.assessment-evidence-bundle.v1",
-            "live_discovery": {"available": True},
-            "source_discovery": {"available": True},
+            "discovery_live": {"available": True},
+            "discovery_source": {"available": True},
         }
 
         normalized = _normalize_security_test_plan(plan, context)
@@ -871,8 +871,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         }
         context = {
             "schema": "mosh.assessment-evidence-bundle.v1",
-            "live_discovery": {},
-            "source_discovery": {"source_index": {"evidence_refs": []}},
+            "discovery_live": {},
+            "discovery_source": {"source_index": {"evidence_refs": []}},
         }
 
         normalized = _normalize_security_test_plan(plan, context)
@@ -909,7 +909,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "start" for event in events))
 
-    def test_orchestrator_can_plan_with_source_discovery(self) -> None:
+    def test_orchestrator_can_plan_with_discovery_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             source = Path(directory) / "example-source"
@@ -919,7 +919,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             live_asset = attach_asset(output_root, engagement.id, target_url).asset
             source_asset = attach_asset(output_root, engagement.id, str(source)).asset
             _write_live_discovery(asset_discovery_dir(output_root, engagement.id, live_asset.id))
-            _write_source_discovery(asset_discovery_dir(output_root, engagement.id, source_asset.id))
+            _write_discovery_source(asset_discovery_dir(output_root, engagement.id, source_asset.id))
             runner = FakeSecurityPlanningRunner()
 
             report_dir = SecurityTestPlanningOrchestrator(
@@ -941,7 +941,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             output_root = Path(directory) / "report"
             engagement = create_engagement(output_root)
             source_asset = attach_asset(output_root, engagement.id, str(source)).asset
-            _write_source_discovery(asset_discovery_dir(output_root, engagement.id, source_asset.id))
+            _write_discovery_source(asset_discovery_dir(output_root, engagement.id, source_asset.id))
 
             report_dir = SecurityTestPlanningOrchestrator(
                 AppConfig(),
@@ -1024,7 +1024,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
                 discovery_dir=Path(directory) / "discovery",
                 report_dir=report_dir,
                 memory=FileMemory(report_dir),
-                discovery_context={"source_discovery": {"source_index": {}}},
+                discovery_context={"discovery_source": {"source_index": {}}},
                 source="/tmp/example-source",
             )
             config = AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)

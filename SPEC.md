@@ -109,12 +109,12 @@ Each agent can be configured to use a specific LLM model through an optional `mo
 
 ```yaml
 models:
-  discovery:
+  discovery_live:
     crawler: openai/gpt-5.2-mini
     technology_mapper: openai/gpt-5.2-mini
     reporter: openai/gpt-5.2-mini
 
-  source_discovery:
+  discovery_source:
     intake: openai/gpt-5.2-mini
     mapper: openai/gpt-5.2-mini
     route_resolver: openai/gpt-5.2-mini

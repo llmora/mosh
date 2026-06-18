@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mosh.crews.discovery.agents import CrawlerAgent, discovery_agent_definitions
+from mosh.crews.discovery_live.agents import CrawlerAgent, discovery_live_agent_definitions
 from mosh.config import AppConfig
 from mosh.memory import FileMemory
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
@@ -648,8 +648,8 @@ class AgentToolBoundaryTests(unittest.TestCase):
             self.assertEqual(tool_result["data"]["failed"], 1)
             self.assertEqual(tool_result["data"]["failures"][0]["error"], "tool failed")
 
-    def test_discovery_agent_definitions_include_agent_owned_tools(self) -> None:
-        definitions = {definition.name: definition for definition in discovery_agent_definitions(AppConfig())}
+    def test_discovery_live_agent_definitions_include_agent_owned_tools(self) -> None:
+        definitions = {definition.name: definition for definition in discovery_live_agent_definitions(AppConfig())}
 
         self.assertEqual(
             [tool.name for tool in definitions["crawler"].tools],

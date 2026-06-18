@@ -4,14 +4,14 @@ from pathlib import Path
 
 from mosh.memory import FileMemory
 from mosh.models import CrawlResult
-from mosh.crews.discovery.reporting import write_reports
-from mosh.crews.source_discovery.agents import (
+from mosh.crews.discovery_live.reporting import write_reports
+from mosh.crews.discovery_source.agents import (
     DependencyConfigAgent,
-    SourceDiscoveryReporterAgent,
+    DiscoverySourceReporterAgent,
     SourceIntakeAgent,
     SourceMapperAgent,
 )
-from mosh.crews.source_discovery.reporting import write_source_discovery_report
+from mosh.crews.discovery_source.reporting import write_discovery_source_report
 from mosh.crews.testing.crew import (
     _archive_latest_report,
     _execution_metadata,
@@ -117,7 +117,7 @@ class FakeCrewRunner:
                 "max_depth": max_depth,
             }
         )
-        from mosh.crews.discovery.crawler import Crawler
+        from mosh.crews.discovery_live.crawler import Crawler
 
         crawl = Crawler(timeout=3).crawl(target_url, max_pages=max_pages, max_depth=max_depth)
         memory.record_event("crawler", "task_received", "Crawl the target and discover app surface")
@@ -177,7 +177,7 @@ class FakeCrewResult:
         self.summary = summary
 
 
-class FakeSourceDiscoveryRunner:
+class FakeDiscoverySourceRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
@@ -186,7 +186,7 @@ class FakeSourceDiscoveryRunner:
         intake = SourceIntakeAgent()
         mapper = SourceMapperAgent()
         dependency_config = DependencyConfigAgent()
-        reporter = SourceDiscoveryReporterAgent()
+        reporter = DiscoverySourceReporterAgent()
         source_info = intake.validate(source, memory)
         inventory = mapper.inventory(str(source_info["path"]), memory)
         routes = mapper.routes(str(source_info["path"]), memory)
@@ -282,15 +282,15 @@ class FakeSourceDiscoveryRunner:
             },
             "reporter",
         )
-        write_source_discovery_report(
+        write_discovery_source_report(
             report_dir,
             source_index,
             {"title": "Source Discovery Report", "executive_summary": "Fake source discovery completed."},
         )
-        return FakeSourceDiscoveryResult(source_index, summary)
+        return FakeDiscoverySourceResult(source_index, summary)
 
 
-class FakeSourceDiscoveryResult:
+class FakeDiscoverySourceResult:
     def __init__(self, source_index: dict[str, object], summary: dict[str, object]) -> None:
         self.source_index = source_index
         self.summary = summary
@@ -379,7 +379,7 @@ class FakeSecurityTestingRunner:
         self,
         target_url,
         source,
-        source_discovery_dir,
+        discovery_source_dir,
         evidence_links,
         report_dir,
         memory,
@@ -392,7 +392,7 @@ class FakeSecurityTestingRunner:
             {
                 "target_url": target_url,
                 "source": source,
-                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
+                "discovery_source_dir": str(discovery_source_dir) if discovery_source_dir else None,
                 "evidence_links": bool(evidence_links),
                 "report_dir": str(report_dir),
                 "ready_pending": [item.get("id") for item in executable_pending],

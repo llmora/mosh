@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import CREW_CONFIG_PACKAGE, CrewAIUnavailable, _llm, _load_crewai
+from mosh.crews.discovery_live.crew import CREW_CONFIG_PACKAGE, CrewAIUnavailable, _llm, _load_crewai
 from mosh.crews.events import MoshCrewAIEventListener
 from mosh.evidence_links import EvidenceLinkerToolContext, LiveEndpoint, SourceRoute
 from mosh.memory import FileMemory

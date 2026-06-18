@@ -7,17 +7,17 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.agents import (
+from mosh.crews.discovery_live.agents import (
     CrawlerAgent,
-    DiscoveryReporterAgent,
-    build_discovery_agents,
-    discovery_agent_definitions,
+    DiscoveryLiveReporterAgent,
+    build_discovery_live_agents,
+    discovery_live_agent_definitions,
 )
 from mosh.crews.events import MoshCrewAIEventListener
 from mosh.memory import FileMemory
 from mosh.models import Event
 from mosh.models import CrawlResult
-from mosh.crews.discovery.reporting import write_reports
+from mosh.crews.discovery_live.reporting import write_reports
 from mosh.scope import normalize_url
 
 
@@ -25,7 +25,7 @@ CREW_CONFIG_PACKAGE = "mosh.crews"
 
 
 @dataclass
-class DiscoveryCrewState:
+class DiscoveryLiveCrewState:
     target_url: str
     report_dir: Path
     memory: FileMemory
@@ -38,13 +38,13 @@ class DiscoveryCrewState:
 
 
 @dataclass(frozen=True)
-class DiscoveryCrewResult:
+class DiscoveryLiveCrewResult:
     crawl: CrawlResult
     components: list[dict[str, str]]
     summary: dict[str, int]
 
 
-class DiscoveryCrewRunner(Protocol):
+class DiscoveryLiveCrewRunner(Protocol):
     def run(
         self,
         target_url: str,
@@ -52,7 +52,7 @@ class DiscoveryCrewRunner(Protocol):
         memory: FileMemory,
         max_pages: int,
         max_depth: int,
-    ) -> DiscoveryCrewResult:
+    ) -> DiscoveryLiveCrewResult:
         pass
 
 
@@ -60,7 +60,7 @@ class CrewAIUnavailable(RuntimeError):
     pass
 
 
-class CrewAIDiscoveryCrewRunner:
+class CrewAIDiscoveryLiveCrewRunner:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
@@ -71,19 +71,19 @@ class CrewAIDiscoveryCrewRunner:
         memory: FileMemory,
         max_pages: int,
         max_depth: int,
-    ) -> DiscoveryCrewResult:
+    ) -> DiscoveryLiveCrewResult:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.discovery.crawler,
-                self.config.models.discovery.technology_mapper,
-                self.config.models.discovery.reporter,
+                self.config.models.discovery_live.crawler,
+                self.config.models.discovery_live.technology_mapper,
+                self.config.models.discovery_live.reporter,
             ]
         )
         if missing_keys:
             raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
 
         crewai = _load_crewai()
-        state = DiscoveryCrewState(
+        state = DiscoveryLiveCrewState(
             target_url=target_url,
             report_dir=report_dir,
             memory=memory,
@@ -98,7 +98,7 @@ class CrewAIDiscoveryCrewRunner:
             {"target": target_url},
         )
 
-        discovery_agents = build_discovery_agents(self.config)
+        discovery_agents = build_discovery_live_agents(self.config)
         crawler_agent = discovery_agents.crawler
         reporter_agent = discovery_agents.reporter
 
@@ -128,25 +128,25 @@ class CrewAIDiscoveryCrewRunner:
             "CrewAI discovery crew completed",
             {"target": target_url},
         )
-        return DiscoveryCrewResult(crawl=state.crawl, components=state.components, summary=state.summary)
+        return DiscoveryLiveCrewResult(crawl=state.crawl, components=state.components, summary=state.summary)
 
 
-def build_discovery_crew_runner(config: AppConfig) -> DiscoveryCrewRunner:
-    return CrewAIDiscoveryCrewRunner(config)
+def build_discovery_live_crew_runner(config: AppConfig) -> DiscoveryLiveCrewRunner:
+    return CrewAIDiscoveryLiveCrewRunner(config)
 
 
-class DiscoveryOrchestrator:
+class DiscoveryLiveOrchestrator:
     def __init__(
         self,
         config: AppConfig,
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
-        crew_runner: DiscoveryCrewRunner | None = None,
+        crew_runner: DiscoveryLiveCrewRunner | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
-        self.crew_runner = crew_runner or build_discovery_crew_runner(config)
+        self.crew_runner = crew_runner or build_discovery_live_crew_runner(config)
 
     def run(
         self,
@@ -157,7 +157,7 @@ class DiscoveryOrchestrator:
         report_dir: Path,
     ) -> Path:
         max_depth = max_depth if max_depth is not None else self.config.max_depth
-        agent_definitions = discovery_agent_definitions(self.config)
+        agent_definitions = discovery_live_agent_definitions(self.config)
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         memory.record_event(
             "orchestrator",
@@ -226,9 +226,9 @@ def _llm(crewai: Any, config: AppConfig, model: str):
 def _build_yaml_discovery_crew(
     crewai: Any,
     config: AppConfig,
-    state: DiscoveryCrewState,
+    state: DiscoveryLiveCrewState,
     crawler_agent: CrawlerAgent,
-    reporter_agent: DiscoveryReporterAgent,
+    reporter_agent: DiscoveryLiveReporterAgent,
 ):
     crawler_tool = _build_crawler_tool(crewai, state, crawler_agent)
     report_tool = _build_report_tool(crewai, state, reporter_agent)
@@ -244,7 +244,7 @@ def _build_yaml_discovery_crew(
         def crawler(self):
             return crewai.Agent(
                 config=self.agents_config["crawler"],
-                llm=_llm(crewai, config, config.models.discovery.crawler),
+                llm=_llm(crewai, config, config.models.discovery_live.crawler),
                 tools=[crawler_tool],
                 allow_delegation=False,
             )
@@ -253,7 +253,7 @@ def _build_yaml_discovery_crew(
         def technology_mapper(self):
             return crewai.Agent(
                 config=self.agents_config["technology_mapper"],
-                llm=_llm(crewai, config, config.models.discovery.technology_mapper),
+                llm=_llm(crewai, config, config.models.discovery_live.technology_mapper),
                 tools=[],
                 allow_delegation=False,
             )
@@ -262,7 +262,7 @@ def _build_yaml_discovery_crew(
         def reporter(self):
             return crewai.Agent(
                 config=self.agents_config["reporter"],
-                llm=_llm(crewai, config, config.models.discovery.reporter),
+                llm=_llm(crewai, config, config.models.discovery_live.reporter),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -313,7 +313,7 @@ def _build_yaml_discovery_crew(
     return DiscoveryCrew()
 
 
-def _build_crawler_tool(crewai: Any, state: DiscoveryCrewState, crawler_agent: CrawlerAgent):
+def _build_crawler_tool(crewai: Any, state: DiscoveryLiveCrewState, crawler_agent: CrawlerAgent):
     class CrawlInput(crewai.BaseModel):
         target_url: str = crewai.Field(..., description="Target URL to crawl.")
 
@@ -381,7 +381,7 @@ def _build_crawler_tool(crewai: Any, state: DiscoveryCrewState, crawler_agent: C
     return DiscoveryCrawlerTool()
 
 
-def _build_report_tool(crewai: Any, state: DiscoveryCrewState, reporter_agent: DiscoveryReporterAgent):
+def _build_report_tool(crewai: Any, state: DiscoveryLiveCrewState, reporter_agent: DiscoveryLiveReporterAgent):
     class NarrativeItem(crewai.BaseModel):
         title: str = crewai.Field(..., description="Short stable item title.")
         detail: str = crewai.Field(..., description="Concise item detail.")
@@ -500,7 +500,7 @@ def _build_report_tool(crewai: Any, state: DiscoveryCrewState, reporter_agent: D
 
 def _build_task_with_output_event(
     crewai: Any,
-    state: DiscoveryCrewState,
+    state: DiscoveryLiveCrewState,
     *,
     config: dict[str, Any],
     agent: Any,
@@ -522,7 +522,7 @@ def _build_task_with_output_event(
         return crewai.Task(config=config, agent=agent)
 
 
-def _agent_output_callback(state: DiscoveryCrewState, agent_name: str, task_name: str):
+def _agent_output_callback(state: DiscoveryLiveCrewState, agent_name: str, task_name: str):
     def callback(output: Any) -> None:
         state.memory.record_event(
             agent_name,

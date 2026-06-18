@@ -18,7 +18,7 @@ from tests.fakes import (
     FakeFinalReportingRunner,
     FakeSecurityPlanningRunner,
     FakeSecurityTestingRunner,
-    FakeSourceDiscoveryRunner,
+    FakeDiscoverySourceRunner,
 )
 from tests.fixtures import fixture_server, fixture_source_tree
 
@@ -82,7 +82,7 @@ def _write_live_discovery(discovery_dir: Path) -> None:
     )
 
 
-def _write_source_discovery(discovery_dir: Path) -> None:
+def _write_discovery_source(discovery_dir: Path) -> None:
     discovery_dir.mkdir(parents=True, exist_ok=True)
     (discovery_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
     (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
@@ -114,7 +114,7 @@ class CliTests(unittest.TestCase):
     def test_cli_reports_invalid_mosh_yaml_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "mosh.yaml").write_text(
-                "models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n",
+                "models:\n  discovery_live:\n    crawlerr: openai/gpt-5.2\n",
                 encoding="utf-8",
             )
             stderr = io.StringIO()
@@ -127,7 +127,7 @@ class CliTests(unittest.TestCase):
                 os.chdir(original_cwd)
 
         self.assertEqual(exit_code, 1)
-        self.assertIn("mosh failed: Unknown model key `models.discovery.crawlerr`", stderr.getvalue())
+        self.assertIn("mosh failed: Unknown model key `models.discovery_live.crawlerr`", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_cli_rejects_url_shorthand_and_raw_url_discovery(self) -> None:
@@ -188,12 +188,12 @@ class CliTests(unittest.TestCase):
                     live_asset = attach_asset(output_root, engagement.id, url).asset
                     source_asset = attach_asset(output_root, engagement.id, str(source)).asset
                     live_runner = FakeCrewRunner()
-                    source_runner = FakeSourceDiscoveryRunner()
+                    source_runner = FakeDiscoverySourceRunner()
                     stdout = io.StringIO()
 
-                    with patch("mosh.crews.discovery.crew.build_discovery_crew_runner", return_value=live_runner):
+                    with patch("mosh.crews.discovery_live.crew.build_discovery_live_crew_runner", return_value=live_runner):
                         with patch(
-                            "mosh.crews.source_discovery.crew.build_source_discovery_crew_runner",
+                            "mosh.crews.discovery_source.crew.build_discovery_source_crew_runner",
                             return_value=source_runner,
                         ):
                             with contextlib.redirect_stdout(stdout):
@@ -233,11 +233,11 @@ class CliTests(unittest.TestCase):
                     live_asset = attach_asset(output_root, engagement.id, url).asset
                     source_asset = attach_asset(output_root, engagement.id, str(source)).asset
                     live_runner = FakeCrewRunner()
-                    source_runner = FakeSourceDiscoveryRunner()
+                    source_runner = FakeDiscoverySourceRunner()
 
-                    with patch("mosh.crews.discovery.crew.build_discovery_crew_runner", return_value=live_runner):
+                    with patch("mosh.crews.discovery_live.crew.build_discovery_live_crew_runner", return_value=live_runner):
                         with patch(
-                            "mosh.crews.source_discovery.crew.build_source_discovery_crew_runner",
+                            "mosh.crews.discovery_source.crew.build_discovery_source_crew_runner",
                             return_value=source_runner,
                         ):
                             exit_code = main(
@@ -279,7 +279,7 @@ class CliTests(unittest.TestCase):
             live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
             source_asset = attach_asset(output_root, engagement.id, str(source)).asset
             _write_live_discovery(asset_discovery_dir(output_root, engagement.id, live_asset.id))
-            _write_source_discovery(asset_discovery_dir(output_root, engagement.id, source_asset.id))
+            _write_discovery_source(asset_discovery_dir(output_root, engagement.id, source_asset.id))
             stdout = io.StringIO()
             second_stdout = io.StringIO()
             runner = FakeSecurityPlanningRunner()

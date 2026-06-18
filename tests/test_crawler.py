@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from mosh.crews.discovery.crawler import Crawler
+from mosh.crews.discovery_live.crawler import Crawler
 from tests.fixtures import fixture_server
 
 

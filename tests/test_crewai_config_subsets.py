@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from importlib import resources
 
-from mosh.crews.discovery.crew import CREW_CONFIG_PACKAGE
+from mosh.crews.discovery_live.crew import CREW_CONFIG_PACKAGE
 
 
 class CrewAIConfigSubsetTests(unittest.TestCase):

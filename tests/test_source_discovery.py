@@ -6,17 +6,17 @@ import unittest
 from pathlib import Path
 
 from mosh.config import AppConfig
-from mosh.crews.source_discovery.agents import build_source_discovery_agents
-from mosh.crews.source_discovery.crew import (
-    CrewAISourceDiscoveryCrewRunner,
+from mosh.crews.discovery_source.agents import build_discovery_source_agents
+from mosh.crews.discovery_source.crew import (
+    CrewAIDiscoverySourceCrewRunner,
     CrewAIUnavailable,
-    SourceDiscoveryCrewState,
-    SourceDiscoveryOrchestrator,
+    DiscoverySourceCrewState,
+    DiscoverySourceOrchestrator,
     _apply_route_resolutions,
-    _build_yaml_source_discovery_crew,
+    _build_yaml_discovery_source_crew,
     _route_id,
 )
-from mosh.crews.source_discovery.tools import (
+from mosh.crews.discovery_source.tools import (
     ConfigInventoryTool,
     DependencyInventoryTool,
     MAX_INDEXED_FILES,
@@ -24,11 +24,11 @@ from mosh.crews.source_discovery.tools import (
     SourceInventoryTool,
 )
 from mosh.memory import FileMemory
-from tests.fakes import FakeRuntimeCrewAI, FakeSourceDiscoveryRunner
+from tests.fakes import FakeRuntimeCrewAI, FakeDiscoverySourceRunner
 from tests.fixtures import fixture_source_tree
 
 
-class SourceDiscoveryToolTests(unittest.TestCase):
+class DiscoverySourceToolTests(unittest.TestCase):
     def test_source_inventory_indexes_security_relevant_files_and_ignores_vendor_dirs(self) -> None:
         with fixture_source_tree() as source:
             inventory = SourceInventoryTool().run(str(source))
@@ -179,17 +179,17 @@ class SourceDiscoveryToolTests(unittest.TestCase):
         self.assertEqual(updated["routes"][0]["route_resolution_evidence"], ["app/main.py:8"])
 
 
-class SourceDiscoveryCrewTests(unittest.TestCase):
-    def test_source_discovery_crewai_crew_attaches_usage_event_listener(self) -> None:
+class DiscoverySourceCrewTests(unittest.TestCase):
+    def test_discovery_source_crewai_crew_attaches_usage_event_listener(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = AppConfig(openrouter_api_key="test-key")
-            agents = build_source_discovery_agents(config)
-            state = SourceDiscoveryCrewState(
+            agents = build_discovery_source_agents(config)
+            state = DiscoverySourceCrewState(
                 source="/tmp/source",
                 report_dir=Path(directory),
                 memory=FileMemory(Path(directory)),
             )
-            crew_def = _build_yaml_source_discovery_crew(
+            crew_def = _build_yaml_discovery_source_crew(
                 crewai=FakeRuntimeCrewAI,
                 config=config,
                 state=state,
@@ -205,20 +205,20 @@ class SourceDiscoveryCrewTests(unittest.TestCase):
 
     def test_crewai_runner_requires_llm_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            runner = CrewAISourceDiscoveryCrewRunner(AppConfig(openrouter_api_key=None))
+            runner = CrewAIDiscoverySourceCrewRunner(AppConfig(openrouter_api_key=None))
             memory = FileMemory(Path(directory))
 
             with self.assertRaisesRegex(CrewAIUnavailable, "OPENROUTER_API_KEY"):
                 runner.run("/tmp/source", Path(directory), memory)
 
-    def test_source_discovery_orchestrator_writes_report_memory_and_events(self) -> None:
+    def test_discovery_source_orchestrator_writes_report_memory_and_events(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with fixture_source_tree() as source:
                 output_root = Path(directory) / "report"
-                orchestrator = SourceDiscoveryOrchestrator(
+                orchestrator = DiscoverySourceOrchestrator(
                     AppConfig(openrouter_api_key="test-key"),
                     output_root=output_root,
-                    crew_runner=FakeSourceDiscoveryRunner(),
+                    crew_runner=FakeDiscoverySourceRunner(),
                 )
 
                 expected_dir = output_root / "eng_test" / "assets" / "asset_source_1" / "discovery"
