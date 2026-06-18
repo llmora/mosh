@@ -1367,7 +1367,7 @@ def _extract_javascript_wrapper_routes(root: Path, path: Path, text: str) -> lis
     routes: list[dict[str, Any]] = []
     route_wrapper_names = set(
         re.findall(
-            r"\b(?:function|const|let|var)\s+([A-Za-z_$][\w$]*(?:Route|Endpoint)[A-Za-z_$\w]*)\b",
+            r"\b(?:function|const|let|var)\s+([A-Za-z_$][\w$]*(?:Route|Endpoint)[\w$]*)\b",
             text,
         )
     )
