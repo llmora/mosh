@@ -18,7 +18,6 @@ from mosh.engagement import (
 )
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
 from mosh.memory import FileMemory
-from mosh.scope import report_dir_name, source_report_dir_name
 from mosh.crews.security_planning.crew import (
     CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
@@ -32,7 +31,6 @@ from mosh.crews.security_planning.crew import (
     _build_write_security_test_plan_tool,
     _normalize_security_test_plan,
     load_engagement_assessment_evidence_bundle,
-    load_assessment_evidence_bundle,
     load_discovery_context,
     load_source_discovery_context,
     run_planning_evidence_linking,
@@ -195,6 +193,57 @@ def _plan() -> dict[str, object]:
         "not_in_scope": ["Credential attacks."],
         "open_questions": ["Are test credentials available?"],
     }
+
+
+def _write_live_discovery(discovery_dir: Path) -> None:
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+    (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+    (discovery_dir / "memory.json").write_text(
+        json.dumps(
+            [
+                {
+                    "kind": "crawled_page",
+                    "content": {
+                        "url": "https://app.example.test/api/status",
+                        "status": 200,
+                        "links": [],
+                        "references": [],
+                        "forms": [],
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_source_discovery(discovery_dir: Path) -> None:
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    (discovery_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
+    (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+    (discovery_dir / "memory.json").write_text(
+        json.dumps(
+            [
+                {
+                    "kind": "source_index",
+                    "content": {
+                        "inventory": {
+                            "routes": [
+                                {
+                                    "method": "GET",
+                                    "full_route": "/api/status",
+                                    "path": "api/status.py",
+                                    "line": 1,
+                                }
+                            ]
+                        }
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 class SecurityTestPlanningTests(unittest.TestCase):
@@ -482,31 +531,6 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertNotIn("events", context)
             self.assertNotIn("memory", context)
 
-    def test_assessment_evidence_bundle_can_combine_live_and_source(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            discovery_dir = root / "discovery"
-            source_dir = root / "source-discovery"
-            discovery_dir.mkdir()
-            source_dir.mkdir()
-            for path, title in ((discovery_dir, "Discovery"), (source_dir, "Source Discovery")):
-                (path / "report.md").write_text(f"# {title}\n", encoding="utf-8")
-                (path / "events.json").write_text("[]", encoding="utf-8")
-            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
-            (source_dir / "memory.json").write_text(
-                '[{"kind":"source_index","content":{"schema":"mosh.source-index.v1"}}]',
-                encoding="utf-8",
-            )
-
-            bundle = load_assessment_evidence_bundle(
-                live_discovery_dir=discovery_dir,
-                source_discovery_dir=source_dir,
-            )
-
-            self.assertEqual(bundle["schema"], "mosh.assessment-evidence-bundle.v1")
-            self.assertIn("live_discovery", bundle)
-            self.assertEqual(bundle["source_discovery"]["source_index"]["schema"], "mosh.source-index.v1")
-
     def test_engagement_evidence_bundle_includes_asset_evidence_and_links(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
@@ -540,7 +564,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory) / "plan"
             state = SecurityTestPlanningState(
-                target_url="engagement:eng_test",
+                target_url="eng_test",
                 discovery_dir=Path(directory) / "discovery",
                 report_dir=report_dir,
                 memory=FileMemory(report_dir),
@@ -592,7 +616,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory) / "plan"
             state = SecurityTestPlanningState(
-                target_url="engagement:eng_test",
+                target_url="eng_test",
                 discovery_dir=Path(directory) / "discovery",
                 report_dir=report_dir,
                 memory=FileMemory(report_dir),
@@ -865,108 +889,88 @@ class SecurityTestPlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
-            discovery_dir = output_root / report_dir_name(target_url) / "discovery"
-            discovery_dir.mkdir(parents=True)
-            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
-            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
-            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, target_url).asset
+            discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            _write_live_discovery(discovery_dir)
             runner = FakeSecurityPlanningRunner()
 
             report_dir = SecurityTestPlanningOrchestrator(
                 AppConfig(),
                 output_root=output_root,
                 crew_runner=runner,
-            ).run(target_url)
+            ).run(engagement.id)
 
-            self.assertEqual(report_dir.name, "security-test-planning")
-            self.assertTrue((report_dir / "security_test_plan.md").exists())
-            self.assertTrue((report_dir / "engagement_template.yaml").exists())
-            self.assertEqual(runner.calls[0]["discovery_dir"], str(discovery_dir))
+            self.assertEqual(report_dir, output_root / engagement.id / "plan")
+            self.assertTrue((report_dir / "plan.md").exists())
+            self.assertTrue((output_root / engagement.id / "engagement_template.yaml").exists())
+            self.assertFalse((report_dir / "engagement_template.yaml").exists())
+            self.assertEqual(runner.calls[0]["engagement_id"], engagement.id)
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "start" for event in events))
 
     def test_orchestrator_can_plan_with_source_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
-            source = "/tmp/example-source"
+            source = Path(directory) / "example-source"
+            source.mkdir()
             output_root = Path(directory) / "report"
-            discovery_dir = output_root / report_dir_name(target_url) / "discovery"
-            source_dir = output_root / source_report_dir_name(source) / "source-discovery"
-            discovery_dir.mkdir(parents=True)
-            source_dir.mkdir(parents=True)
-            for path in (discovery_dir, source_dir):
-                (path / "report.md").write_text("# Discovery\n", encoding="utf-8")
-                (path / "memory.json").write_text("[]", encoding="utf-8")
-                (path / "events.json").write_text("[]", encoding="utf-8")
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, target_url).asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_live_discovery(asset_discovery_dir(output_root, engagement.id, live_asset.id))
+            _write_source_discovery(asset_discovery_dir(output_root, engagement.id, source_asset.id))
             runner = FakeSecurityPlanningRunner()
 
             report_dir = SecurityTestPlanningOrchestrator(
                 AppConfig(),
                 output_root=output_root,
                 crew_runner=runner,
-            ).run(target_url, source=source)
+            ).run(engagement.id)
 
-            self.assertEqual(report_dir, output_root / report_dir_name(target_url) / "security-test-planning")
-            self.assertEqual(runner.calls[0]["source"], source)
-            self.assertEqual(runner.calls[0]["source_discovery_dir"], str(source_dir))
-            markdown = (report_dir / "security_test_plan.md").read_text(encoding="utf-8")
+            self.assertEqual(report_dir, output_root / engagement.id / "plan")
+            self.assertEqual(runner.calls[0]["engagement_id"], engagement.id)
+            markdown = (report_dir / "plan.md").read_text(encoding="utf-8")
             self.assertIn("Execution mode: `combined`", markdown)
             self.assertIn("#### Affected Source", markdown)
 
     def test_orchestrator_can_plan_source_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            source = "/tmp/example-source"
+            source = Path(directory) / "example-source"
+            source.mkdir()
             output_root = Path(directory) / "report"
-            source_root = output_root / source_report_dir_name(source)
-            source_dir = source_root / "source-discovery"
-            source_dir.mkdir(parents=True)
-            (source_dir / "report.md").write_text("# Source Discovery\n", encoding="utf-8")
-            (source_dir / "memory.json").write_text("[]", encoding="utf-8")
-            (source_dir / "events.json").write_text("[]", encoding="utf-8")
+            engagement = create_engagement(output_root)
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_source_discovery(asset_discovery_dir(output_root, engagement.id, source_asset.id))
 
             report_dir = SecurityTestPlanningOrchestrator(
                 AppConfig(),
                 output_root=output_root,
                 crew_runner=FakeSecurityPlanningRunner(),
-            ).run(source=source)
+            ).run(engagement.id)
 
-            self.assertEqual(report_dir, source_root / "security-test-planning")
-            template = load_engagement_file(report_dir / "engagement_template.yaml")
-            self.assertEqual(template["targets"]["production"]["source"], source)
+            self.assertEqual(report_dir, output_root / engagement.id / "plan")
+            template = load_engagement_file(output_root / engagement.id / "engagement_template.yaml")
+            self.assertEqual(template["targets"]["production"]["source"], str(source.resolve()))
             self.assertFalse(template["engagement"]["active_testing_allowed"])
 
     def test_engagement_template_contains_alternative_target_overrides_and_credential_placeholders(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            target_url = "https://example.test"
-            output_root = Path(directory) / "report"
-            discovery_dir = output_root / report_dir_name(target_url) / "discovery"
-            discovery_dir.mkdir(parents=True)
-            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
-            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
-            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+        template = build_engagement_template("https://example.test", _plan())
+        self.assertIn("alternative", template["targets"])
+        self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
+        self.assertIsNone(template["targets"]["alternative"]["website"])
+        self.assertIn("authenticated_user", template["credentials"])
+        self.assertNotIn("required_answers", template)
+        for credential in template["credentials"].values():
+            self.assertNotIn("status", credential)
+            self.assertNotIn("needed_for", credential)
+            self.assertNotIn("notes", credential)
+        self.assertTrue(template["engagement"]["authorization_confirmed"])
 
-            report_dir = SecurityTestPlanningOrchestrator(
-                AppConfig(),
-                output_root=output_root,
-                crew_runner=FakeSecurityPlanningRunner(),
-            ).run(target_url)
-
-            template = load_engagement_file(report_dir / "engagement_template.yaml")
-            self.assertIn("alternative", template["targets"])
-            self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
-            self.assertIsNone(template["targets"]["alternative"]["website"])
-            self.assertIn("authenticated_user", template["credentials"])
-            self.assertNotIn("required_answers", template)
-            for credential in template["credentials"].values():
-                self.assertNotIn("status", credential)
-                self.assertNotIn("needed_for", credential)
-                self.assertNotIn("notes", credential)
-            self.assertTrue(template["engagement"]["authorization_confirmed"])
-
-            template["targets"]["alternative"]["api"] = "https://staging-api.example.test/api/private"
-            resolved = resolve_target_mapping(template)
-            self.assertEqual(resolved["api"], "https://staging-api.example.test/api/private")
-            self.assertEqual(resolved["website"], "https://example.test")
+        template["targets"]["alternative"]["api"] = "https://staging-api.example.test/api/private"
+        resolved = resolve_target_mapping(template)
+        self.assertEqual(resolved["api"], "https://staging-api.example.test/api/private")
+        self.assertEqual(resolved["website"], "https://example.test")
 
     def test_engagement_template_ignores_regex_strings_that_look_like_urls(self) -> None:
         plan = json.loads(json.dumps(_plan()))
@@ -981,12 +985,11 @@ class SecurityTestPlanningTests(unittest.TestCase):
     def test_crewai_runner_writes_engagement_template_before_reporter_returns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             FakeRuntimeCrewAI.critic_inputs = None
-            report_dir = Path(directory) / "security-test-planning"
-            discovery_dir = Path(directory) / "discovery"
-            discovery_dir.mkdir()
-            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
-            (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
-            (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://example.test").asset
+            _write_live_discovery(asset_discovery_dir(output_root, engagement.id, live_asset.id))
+            report_dir = output_root / engagement.id / "plan"
             memory = FileMemory(report_dir)
             runner = CrewAISecurityTestPlanningCrewRunner(
                 AppConfig(openrouter_api_key="test-key", refine_engagement_template_with_llm=False)
@@ -994,9 +997,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
             with patch("mosh.crews.security_planning.crew._load_crewai", return_value=FakeRuntimeCrewAI):
                 with self.assertRaisesRegex(RuntimeError, "reporter post-processing failed"):
-                    runner.run("https://example.test", discovery_dir, report_dir, memory)
+                    runner.run_engagement(output_root, engagement.id, report_dir, memory)
 
-            self.assertTrue((report_dir / "engagement_template.yaml").exists())
+            self.assertTrue((output_root / engagement.id / "engagement_template.yaml").exists())
             self.assertIsNotNone(FakeRuntimeCrewAI.critic_inputs)
             self.assertIn("planning_context", FakeRuntimeCrewAI.critic_inputs)
             planning_context = json.loads(FakeRuntimeCrewAI.critic_inputs["planning_context"])
@@ -1015,7 +1018,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
     def test_security_planning_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
         crewai = _load_crewai()
         with tempfile.TemporaryDirectory() as directory:
-            report_dir = Path(directory) / "security-test-planning"
+            report_dir = Path(directory) / "plan"
             state = SecurityTestPlanningState(
                 target_url="source:/tmp/example-source",
                 discovery_dir=Path(directory) / "discovery",

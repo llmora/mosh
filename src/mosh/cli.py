@@ -18,14 +18,10 @@ from mosh.engagements import (
     create_engagement,
     engagement_exists,
     engagement_dir,
-    engagement_plan_dir,
     load_engagement,
     record_asset_discovery,
 )
-from mosh.evidence_links import build_evidence_links
-from mosh.memory import FileMemory
-from mosh.scope import report_dir_name, source_report_dir_name
-from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator, run_planning_evidence_linking
+from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.security_testing.crew import (
     SecurityTestPreflightResult,
     SecurityTestingOrchestrator,
@@ -34,7 +30,6 @@ from mosh.crews.security_testing.crew import (
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = _normalize_url_shorthand(argv)
     try:
         config = AppConfig.from_env()
     except Exception as exc:
@@ -56,30 +51,19 @@ def main(argv: list[str] | None = None) -> int:
     engagement_attach_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     discover_parser = subcommands.add_parser("discover", help="Run the discovery crew")
-    discover_parser.add_argument("target", help="Engagement ID to discover, or a legacy target application URL")
+    discover_parser.add_argument("engagement_id", help="Engagement ID to discover")
     discover_parser.add_argument("--asset", action="append", default=[], help="Only discover the selected asset ID; can be repeated")
     discover_parser.add_argument("--refresh", action="store_true", help="Rerun discovery even when an asset already has discovery output")
     discover_parser.add_argument("--max-pages", type=int, default=200, help=argparse.SUPPRESS)
     discover_parser.add_argument("--max-depth", type=int, default=config.max_depth, help=argparse.SUPPRESS)
     discover_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
-    discover_source_parser = subcommands.add_parser("discover-source", help="Run the source discovery crew")
-    discover_source_parser.add_argument("source", help="Local source tree path to discover")
-    discover_source_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
-
-    link_parser = subcommands.add_parser("link", help="Link live and source discovery evidence for an engagement")
-    link_parser.add_argument("engagement_id", help="Engagement ID")
-    link_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
-
     plan_parser = subcommands.add_parser("plan", help="Create a security test plan from discovery output")
-    plan_parser.add_argument("target", nargs="?", help="Engagement ID or target application URL to plan from")
-    plan_parser.add_argument("--source", help="Local source tree path to include in planning")
+    plan_parser.add_argument("engagement_id", help="Engagement ID to plan from")
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     test_parser = subcommands.add_parser("test-security", help="Run security testing preflight from a security plan")
-    test_parser.add_argument("url", nargs="?", help="Target application URL to test")
-    test_parser.add_argument("--source", help="Local source tree path to test or include in routing")
-    test_parser.add_argument("--engagement-file", help="Path to the engagement YAML file")
+    test_parser.add_argument("engagement_id", help="Engagement ID to test")
     test_parser.add_argument(
         "--hypothesis",
         "--hypothesis-id",
@@ -91,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     test_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     report_parser = subcommands.add_parser("report", help="Create the final customer-facing report")
-    report_parser.add_argument("url", help="Target application URL to report on")
+    report_parser.add_argument("engagement_id", help="Engagement ID to report on")
     report_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     args = parser.parse_args(argv)
@@ -104,10 +88,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"Unsupported engagement command: {args.engagement_command}")
     if args.command == "discover":
         return _run_discovery(config, args)
-    if args.command == "discover-source":
-        return _run_source_discovery(config, args)
-    if args.command == "link":
-        return _run_evidence_linking(config, args)
     if args.command == "plan":
         return _run_security_test_planning(config, args)
     if args.command == "test-security":
@@ -120,26 +100,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     output_root = Path(args.output_root)
-    if engagement_exists(output_root, args.target):
+    if engagement_exists(output_root, args.engagement_id):
         return _run_engagement_discovery(config, args)
-    if args.target.startswith("eng_"):
-        print(f"mosh failed: engagement not found: {args.target}", file=sys.stderr)
-        return 1
-    if args.asset or args.refresh:
-        print("mosh failed: --asset and --refresh require an engagement ID.", file=sys.stderr)
-        return 1
-    orchestrator = DiscoveryOrchestrator(
-        config,
-        output_root=output_root,
-        event_sink=_print_event,
-    )
-    try:
-        report_dir = orchestrator.run(args.target, max_pages=args.max_pages, max_depth=args.max_depth)
-    except Exception as exc:
-        print(f"mosh failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Report written to {report_dir}")
-    return 0
+    print(f"mosh failed: engagement not found: {args.engagement_id}", file=sys.stderr)
+    return 1
 
 
 def _run_engagement_create(args: argparse.Namespace) -> int:
@@ -174,7 +138,7 @@ def _run_engagement_attach(args: argparse.Namespace) -> int:
 def _run_engagement_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     output_root = Path(args.output_root)
     try:
-        engagement = load_engagement(output_root, args.target)
+        engagement = load_engagement(output_root, args.engagement_id)
         selected_assets = _selected_discovery_assets(engagement, args.asset)
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
@@ -247,47 +211,6 @@ def _run_asset_discovery(
     raise ValueError(f"Discovery is not implemented for {asset.type} assets yet.")
 
 
-def _run_source_discovery(config: AppConfig, args: argparse.Namespace) -> int:
-    orchestrator = SourceDiscoveryOrchestrator(
-        config,
-        output_root=Path(args.output_root),
-        event_sink=_print_event,
-    )
-    try:
-        report_dir = orchestrator.run(args.source)
-    except Exception as exc:
-        print(f"mosh failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Source discovery report written to {report_dir}")
-    return 0
-
-
-def _run_evidence_linking(config: AppConfig, args: argparse.Namespace) -> int:
-    output_root = Path(args.output_root)
-    memory = FileMemory(engagement_plan_dir(output_root, args.engagement_id), event_sink=_print_event)
-    _print_event(
-        Event(
-            "orchestrator",
-            "start",
-            "Starting evidence linking crew",
-            {"engagement": args.engagement_id},
-        )
-    )
-    try:
-        result = run_planning_evidence_linking(
-            config,
-            output_root,
-            args.engagement_id,
-            memory=memory,
-        )
-    except Exception as exc:
-        print(f"mosh failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Evidence links written to {result.links_path}")
-    print(f"Links: {len(result.payload.get('links') or [])}")
-    return 0
-
-
 def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> int:
     orchestrator = SecurityTestPlanningOrchestrator(
         config,
@@ -295,7 +218,7 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
         event_sink=_print_event,
     )
     try:
-        report_dir = orchestrator.run(args.target, source=args.source)
+        report_dir = orchestrator.run(args.engagement_id)
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
@@ -308,15 +231,7 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
 
 def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     output_root = Path(args.output_root)
-    if not args.url and not args.source:
-        print("mosh failed: test-security requires a target URL, --source, or both.", file=sys.stderr)
-        return 1
-    default_engagement_file = _default_security_testing_engagement_file(output_root, args.url, args.source)
-    engagement_file = (
-        Path(args.engagement_file)
-        if args.engagement_file
-        else default_engagement_file
-    )
+    engagement_file = engagement_dir(output_root, args.engagement_id) / "engagement_template.yaml"
     orchestrator = SecurityTestingOrchestrator(
         config,
         output_root=output_root,
@@ -324,9 +239,7 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     )
     try:
         report_dir = orchestrator.run(
-            args.url,
-            engagement_file=engagement_file,
-            source=args.source,
+            args.engagement_id,
             hypothesis_ids=args.hypotheses,
         )
     except Exception as exc:
@@ -340,17 +253,6 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     if summary:
         print(summary)
     return 0
-
-
-def _default_security_testing_engagement_file(output_root: Path, target_url: str | None, source: str | None) -> Path:
-    if target_url and engagement_exists(output_root, target_url):
-        return engagement_dir(output_root, target_url) / "engagement_template.yaml"
-    default_engagement_dir = (
-        output_root / report_dir_name(target_url) / "security-test-planning"
-        if target_url
-        else output_root / source_report_dir_name(source) / "security-test-planning"
-    )
-    return default_engagement_dir / "engagement_template.yaml"
 
 
 def _security_testing_blocked_summary(report_dir: Path, engagement_file: Path) -> str:
@@ -391,22 +293,12 @@ def _run_final_reporting(config: AppConfig, args: argparse.Namespace) -> int:
         event_sink=_print_event,
     )
     try:
-        report_dir = orchestrator.run(args.url)
+        report_dir = orchestrator.run(args.engagement_id)
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Final report written to {report_dir / 'report.md'}")
     return 0
-
-
-def _normalize_url_shorthand(argv: list[str] | None) -> list[str]:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if not args:
-        return args
-    commands = {"engagement", "discover", "discover-source", "link", "plan", "test-security", "report"}
-    if args[0] in commands or args[0].startswith("-"):
-        return args
-    return ["discover", *args]
 
 
 def _print_event(event: Event) -> None:

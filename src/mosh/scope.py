@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import ipaddress
-import re
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import ParseResult, urldefrag, urlparse, urlunparse
 
 
@@ -41,32 +38,6 @@ def strip_fragment(url: str) -> str:
     return urldefrag(url)[0]
 
 
-def report_dir_name(url: str) -> str:
-    parsed = urlparse(normalize_url(url))
-    host = parsed.hostname or "unknown"
-    name = host.lower()
-    if parsed.port:
-        name = f"{name}_{parsed.port}"
-    return re.sub(r"[^a-zA-Z0-9_.-]", "_", name)
-
-
-def source_report_dir_name(source: str | Path) -> str:
-    source_text = str(source).strip()
-    if not source_text:
-        source_text = "source"
-    parsed = urlparse(source_text)
-    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.netloc:
-        repo_name = Path(parsed.path.rstrip("/")).name.removesuffix(".git") or parsed.netloc
-        readable = f"source-{parsed.netloc}-{repo_name}"
-        identity = source_text
-    else:
-        source_path = Path(source_text).expanduser()
-        readable = f"source-{source_path.name or 'source'}"
-        identity = str(source_path.resolve(strict=False))
-    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:8]
-    return f"{_safe_dir_name(readable)}-{digest}"
-
-
 @dataclass(frozen=True)
 class ScopePolicy:
     start_url: str
@@ -96,11 +67,6 @@ def _normalized_netloc(parsed: ParseResult) -> str:
     if parsed.port:
         return f"{host}:{parsed.port}"
     return host
-
-
-def _safe_dir_name(value: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip().lower()).strip("._-")
-    return safe or "source"
 
 
 def _scope_root(host: str) -> str:

@@ -27,7 +27,6 @@ from mosh.crews.source_discovery.reporting import write_source_discovery_report
 from mosh.crews.source_discovery.tools import build_source_index
 from mosh.memory import FileMemory
 from mosh.models import Event
-from mosh.scope import source_report_dir_name
 
 
 @dataclass
@@ -129,8 +128,7 @@ class SourceDiscoveryOrchestrator:
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_source_discovery_crew_runner(config)
 
-    def run(self, source: str, *, report_dir: Path | None = None) -> Path:
-        report_dir = report_dir or self.output_root / source_report_dir_name(source) / "source-discovery"
+    def run(self, source: str, *, report_dir: Path) -> Path:
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         agent_definitions = source_discovery_agent_definitions(self.config)
         memory.record_event(

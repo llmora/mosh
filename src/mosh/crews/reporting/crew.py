@@ -21,9 +21,9 @@ from mosh.crews.reporting.reporting import (
     validate_final_report_content,
     validate_rendered_report,
 )
+from mosh.engagements import Engagement, asset_discovery_dir, engagement_dir, load_engagement
 from mosh.memory import FileMemory
 from mosh.models import Event
-from mosh.scope import report_dir_name
 
 
 EXECUTION_METADATA_STARTS = ("<!-- mosh-execution",)
@@ -60,13 +60,20 @@ class FinalReportingOrchestrator:
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_final_reporting_crew_runner(config)
 
-    def run(self, url: str) -> Path:
-        domain_dir = self.output_root / report_dir_name(url)
-        report_dir = domain_dir / "final-report"
+    def run(self, engagement_id: str) -> Path:
+        engagement = load_engagement(self.output_root, engagement_id)
+        engagement_root = engagement_dir(self.output_root, engagement.id)
+        report_dir = engagement_root / "final-report"
         memory = FileMemory(report_dir, event_sink=self.event_sink)
-        memory.record_event("orchestrator", "start", "Starting final report generation", {"target": url})
-        bundle = build_final_report_bundle(url, domain_dir)
-        report_path = self.crew_runner.run(url, report_dir, memory, bundle)
+        target = _engagement_report_target(engagement)
+        memory.record_event(
+            "orchestrator",
+            "start",
+            "Starting final report generation",
+            {"target": target, "engagement": engagement.id},
+        )
+        bundle = build_final_report_bundle(self.output_root, engagement.id)
+        report_path = self.crew_runner.run(target, report_dir, memory, bundle)
         memory.record_event(
             "orchestrator",
             "complete",
@@ -127,42 +134,59 @@ class CrewAIFinalReportingCrewRunner:
         return state.report_path
 
 
-def build_final_report_bundle(target_url: str, domain_dir: Path) -> dict[str, Any]:
-    discovery_dir = domain_dir / "discovery"
-    planning_dir = domain_dir / "security-test-planning"
-    testing_dir = domain_dir / "security-testing"
-    final_report_dir = domain_dir / "final-report"
+def build_final_report_bundle(output_root: Path, engagement_id: str) -> dict[str, Any]:
+    engagement = load_engagement(output_root, engagement_id)
+    engagement_root = engagement_dir(output_root, engagement.id)
+    discovery_dirs = _engagement_discovery_dirs(output_root, engagement)
+    primary_discovery_dir = discovery_dirs[0] if discovery_dirs else engagement_root / "assets"
+    planning_dir = engagement_root / "plan"
+    testing_dir = engagement_root / "security-testing"
+    final_report_dir = engagement_root / "final-report"
+    target_url = _engagement_report_target(engagement)
     plan = _load_structured_security_plan(planning_dir)
-    discovery = _load_discovery_summary(discovery_dir)
+    discovery = _load_engagement_discovery_summary(discovery_dirs)
     testing_memory = _read_json_list(testing_dir / "memory.json")
     execution_bundles = _execution_bundles_by_id(testing_memory)
     executed_tests = _load_executed_tests(testing_dir, plan, execution_bundles)
-    timeline = _build_engagement_timeline(discovery_dir, planning_dir, testing_dir, final_report_dir, executed_tests)
+    timeline = _build_engagement_timeline(primary_discovery_dir, planning_dir, testing_dir, final_report_dir, executed_tests)
     preflight = _latest_memory_content(testing_memory, "security_testing_preflight")
     source_artifacts = [
         str(path)
-        for path in [
-            discovery_dir / "report.md",
-            discovery_dir / "memory.json",
-            planning_dir / "security_test_plan.md",
-            planning_dir / "memory.json",
-            testing_dir / "preflight.md",
-            testing_dir / "memory.json",
-        ]
+        for path in (
+            [artifact for discovery_dir in discovery_dirs for artifact in (discovery_dir / "report.md", discovery_dir / "memory.json")]
+            + [
+                planning_dir / "plan.md",
+                planning_dir / "memory.json",
+                testing_dir / "preflight.md",
+                testing_dir / "memory.json",
+            ]
+        )
         if path.exists()
     ]
     return {
         "schema": "mosh.final-report-bundle.v1",
+        "engagement": {
+            "id": engagement.id,
+            "title": engagement.title,
+            "asset_refs": [{"id": asset.id, "type": asset.type} for asset in engagement.assets],
+            "targets": preflight.get("targets", {}) if isinstance(preflight, dict) else {},
+        },
         "target_url": target_url,
         "discovery": discovery,
+        "asset_discovery": [
+            {
+                "asset_id": asset.id,
+                "asset_type": asset.type,
+                "summary": _load_discovery_summary(asset_discovery_dir(output_root, engagement.id, asset.id)),
+            }
+            for asset in engagement.assets
+            if asset_discovery_dir(output_root, engagement.id, asset.id).exists()
+        ],
         "security_plan": {
             "title": _text(plan.get("title")) or "Security Test Plan",
             "scope_summary": _text(plan.get("scope_summary")),
         },
         "planned_tests": _hypotheses(plan),
-        "engagement": {
-            "targets": preflight.get("targets", {}) if isinstance(preflight, dict) else {},
-        },
         "blocked_tests": preflight.get("blocked", []) if isinstance(preflight, dict) else [],
         "executed_tests": executed_tests,
         "timeline": timeline,
@@ -333,11 +357,45 @@ def _build_submit_final_report_review_tool(crewai: Any, state: FinalReportState)
     return SubmitFinalReportReviewTool()
 
 
+def _engagement_report_target(engagement: Engagement) -> str:
+    live = next((asset.locator for asset in engagement.assets if asset.type == "live_url"), "")
+    if live:
+        return live
+    source = next((asset.locator for asset in engagement.assets if asset.type == "source_tree"), "")
+    if source:
+        return f"source:{source}"
+    return engagement.id
+
+
+def _engagement_discovery_dirs(output_root: Path, engagement: Engagement) -> list[Path]:
+    dirs = [asset_discovery_dir(output_root, engagement.id, asset.id) for asset in engagement.assets]
+    return [path for path in dirs if path.exists()]
+
+
+def _load_engagement_discovery_summary(discovery_dirs: list[Path]) -> dict[str, Any]:
+    summaries = [_load_discovery_summary(discovery_dir) for discovery_dir in discovery_dirs]
+    primary = next((summary for summary in summaries if summary.get("executive_summary") or summary.get("key_areas")), {})
+    if not primary and summaries:
+        primary = summaries[0]
+    return {
+        **primary,
+        "asset_reports": summaries,
+    }
+
+
 def _load_discovery_summary(discovery_dir: Path) -> dict[str, Any]:
     memory = _read_json_list(discovery_dir / "memory.json")
     structured = _latest_memory_content(memory, "llm_report").get("structured", {})
     if not isinstance(structured, dict):
         structured = {}
+    if not structured:
+        source_index = _latest_memory_content(memory, "source_index")
+        summary = source_index.get("summary") if isinstance(source_index.get("summary"), dict) else {}
+        structured = {
+            "executive_summary": _text(summary.get("description") or summary.get("overview")),
+            "application_description": _text(summary.get("application") or summary.get("purpose")),
+            "key_discovered_areas": _list(summary.get("key_components")),
+        }
     key_areas: list[Any] = []
     for key in [
         "key_discovered_areas",

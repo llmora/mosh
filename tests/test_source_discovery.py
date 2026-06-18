@@ -24,7 +24,6 @@ from mosh.crews.source_discovery.tools import (
     SourceInventoryTool,
 )
 from mosh.memory import FileMemory
-from mosh.scope import source_report_dir_name
 from tests.fakes import FakeRuntimeCrewAI, FakeSourceDiscoveryRunner
 from tests.fixtures import fixture_source_tree
 
@@ -222,9 +221,9 @@ class SourceDiscoveryCrewTests(unittest.TestCase):
                     crew_runner=FakeSourceDiscoveryRunner(),
                 )
 
-                report_dir = orchestrator.run(str(source))
+                expected_dir = output_root / "eng_test" / "assets" / "asset_source_1" / "discovery"
+                report_dir = orchestrator.run(str(source), report_dir=expected_dir)
 
-                expected_dir = output_root / source_report_dir_name(source) / "source-discovery"
                 self.assertEqual(report_dir, expected_dir)
                 self.assertTrue((report_dir / "report.md").exists())
                 self.assertTrue((report_dir / "memory.json").exists())

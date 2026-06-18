@@ -335,8 +335,8 @@ The security testing crew has these agents:
 - security test reviewer: critiques evidence, safety, target scope, and useful generated artifacts
 - security test reporter: writes the stable Markdown artifact for each executed test
 
-The source security testing crew follows the same executor, reviewer, and
-reporter pattern. Its executor can read bounded source slices, search
+For source-mode tests, the unified security testing crew follows the same
+executor, reviewer, and reporter pattern. Its executor can read bounded source slices, search
 nonignored text files, write generated harnesses or fuzz scripts under `/work`,
 run local commands with explicit environment overrides, start and stop local
 processes, and issue localhost HTTP requests to those processes. The repository
@@ -371,7 +371,7 @@ Each executed test report should include a `Resolution` section aimed at develop
 
 Security testing can discover additional facts that belong back in discovery, whether the evidence came from live, source-backed, or combined testing: new entry points, endpoints, technologies, versions, service behavior, headers, generated API specifications, or other app-surface information. The executor should submit these as structured `discovery_updates` in its evidence. After ready tests finish, the security-testing orchestrator feeds those updates into the discovery crew's file-backed memory, updates the discovery report with a deterministic `Security Testing Feedback` section, and then asks the security planning crew to refresh the test plan. The system does not immediately auto-run new tests from that refreshed plan; additional execution happens on the next security-testing run only if the refreshed plan contains ready, unexecuted hypotheses.
 
-After a successful `test-security` run, the CLI must print a deterministic human-readable summary of any blocked tests that still prevent completion. The summary should list each blocked test ID, title, priority, and concrete engagement-file fields or values needed to unblock it. This mirrors the preflight data without requiring the user to open `preflight.md` for the next action.
+After a successful `test-security` run, the CLI must print a deterministic human-readable summary of any blocked tests that still prevent completion. The summary should list each blocked test ID, title, priority, and concrete engagement template fields or values needed to unblock it. This mirrors the preflight data without requiring the user to open `preflight.md` for the next action.
 
 Security test completion is determined from metadata embedded in the latest executed Markdown report, not from a separate execution index. Each `executed_tests/<test_id>.md` report should include machine-readable execution metadata containing at least the test ID, plan revision ID, hypothesis fingerprint, status, reviewer acceptance, and execution time. A ready hypothesis is skipped only when the latest report has matching accepted metadata for the same hypothesis fingerprint. If the hypothesis changes after discovery-driven replanning, or the previous execution was not accepted, the test is queued for rerun.
 
@@ -391,13 +391,13 @@ discover -> plan -> test-security -> report
 The CLI command is:
 
 ```bash
-mosh report https://app.example.com
+mosh report <engagement-id>
 ```
 
 The output path is:
 
 ```text
-report/<host>/final-report/report.md
+report/<engagement-id>/final-report/report.md
 ```
 
 The final report should include:
@@ -527,8 +527,7 @@ At minimum, tests should cover:
 
 # Roadmap
 
-* Implement security testing for source code, based on a repo URL or a local filesystem path. See `SOURCE_ASSESSMENT_PLAN.md` for the staged implementation plan.
-* If the user provides source code and a live URL for testing, use progressive combined assessment: start from whichever evidence source is available, attach the other one later if needed, and let source/live evidence links enrich planning, testing, and reporting. This needs to be more than the sum of the parts, for instance (but not limited to): source code allows for better discovery of vulnerabilities, live URL allows findings on deployment that is not included in code, live URL allows for testing and verification of flaws detected in source code, fixes in the report can now be linked to source code (e.g. more specific). Do not make a standalone correlation command the required long-term workflow; the temporary `mosh link` command exists only for the engagement migration. See `SOURCE_ASSESSMENT_PLAN.md` for the combined source/live design.
+* Continue improving engagement-scoped source, live, and combined assessment. Source and live assets should be attached to the same engagement, evidence links should enrich planning, testing, and reporting automatically, and final reports should correlate source-specific fixes with live verification where available.
 
 * Implement abiity to use arbitraty openai-like API backends (custom), for companies that do not have openrouter or deepseek access (maybe those using internal AI API endpoints)
 
@@ -546,3 +545,11 @@ At minimum, tests should cover:
 * As targets grow, we will run out of context very quickly during planning phase - check if planning can be done per asset + links, and what is the difference in output.
 * Incorporate OWASP testing guide
 * External OSINT services (crt.sh, Shodan, Censys, SecurityTrails) were blocked by security container restrictions and could not be queried directly — this limitation is documented.
+* CLOUDFLARE BLOG: Adversarial validation tries to disprove each finding
+* CLOUDFLARE BLOG: A fresh agent validates the list of findings against fresh code - can't find their own issues
+* CLOUDFLARE BLOG: Wishlist - our tool improver
+* CLOUDFLARE BLOG: Feedback
+* CLOUDFLARE: Gapfill - matrix of coverage
+* CLOUDFLARE: Built-in attack classes + planning invents its own
+* Threat model
+* Require for each finding a working test + a functional git diff - that get executed deterministically
