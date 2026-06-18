@@ -45,7 +45,7 @@ class AppConfigTests(unittest.TestCase):
             config = AppConfig.from_env()
 
         self.assertTrue(config.refine_engagement_template_with_llm)
-        self.assertEqual(config.models.security_planning.engagement_refiner, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.planning.engagement_refiner, "deepseek/deepseek-v4-flash")
 
     def test_models_can_be_loaded_from_mosh_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -61,10 +61,10 @@ class AppConfigTests(unittest.TestCase):
                         "    route_resolver: openai/gpt-5.2-mini",
                         "    component_mapper: openai/gpt-5.2",
                         "    gap_analyst: openai/gpt-5.2-mini",
-                        "  security_planning:",
+                        "  planning:",
                         "    evidence_linker: openai/gpt-5.2-mini",
                         "    reviewer: openai/gpt-5.2",
-                        "  security_testing:",
+                        "  testing:",
                         "    reviewer: 'anthropic/claude-sonnet-4.5'",
                         "  reporting:",
                         "    writer: openai/gpt-5.2-mini",
@@ -81,9 +81,9 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.models.source_discovery.route_resolver, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.source_discovery.component_mapper, "openai/gpt-5.2")
         self.assertEqual(config.models.source_discovery.gap_analyst, "openai/gpt-5.2-mini")
-        self.assertEqual(config.models.security_planning.evidence_linker, "openai/gpt-5.2-mini")
-        self.assertEqual(config.models.security_planning.reviewer, "openai/gpt-5.2")
-        self.assertEqual(config.models.security_testing.reviewer, "anthropic/claude-sonnet-4.5")
+        self.assertEqual(config.models.planning.evidence_linker, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.planning.reviewer, "openai/gpt-5.2")
+        self.assertEqual(config.models.testing.reviewer, "anthropic/claude-sonnet-4.5")
         self.assertEqual(config.models.reporting.writer, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.discovery.reporter, "deepseek/deepseek-v4-flash")
         self.assertEqual(config.models.source_discovery.reporter, "deepseek/deepseek-v4-flash")
@@ -161,7 +161,7 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertFalse(config.refine_engagement_template_with_llm)
 
-    def test_security_testing_settings_can_be_overridden_from_env(self) -> None:
+    def test_testing_settings_can_be_overridden_from_env(self) -> None:
         with patch.dict(
             os.environ,
             {

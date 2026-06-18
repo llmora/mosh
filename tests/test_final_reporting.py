@@ -18,7 +18,7 @@ from mosh.crews.reporting.crew import (
     build_final_report_bundle,
 )
 from mosh.crews.reporting.reporting import render_final_report, validate_rendered_report
-from mosh.crews.security_testing.crew import (
+from mosh.crews.testing.crew import (
     _with_execution_metadata_mapping,
     render_executed_test_report,
 )
@@ -519,7 +519,7 @@ def _write_report_inputs(root: Path, target_url: str) -> Path:
         json.dumps(
             [
                 {
-                    "kind": "security_testing_preflight",
+                    "kind": "testing_preflight",
                     "content": {"ready": [{"id": "AUTH-001"}, {"id": "HDR-001"}], "blocked": [], "targets": {}},
                 },
                 {

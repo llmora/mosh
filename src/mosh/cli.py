@@ -21,8 +21,8 @@ from mosh.engagements import (
     load_engagement,
     record_asset_discovery,
 )
-from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
-from mosh.crews.security_testing.crew import (
+from mosh.crews.planning.crew import SecurityTestPlanningOrchestrator
+from mosh.crews.testing.crew import (
     SecurityTestPreflightResult,
     SecurityTestingOrchestrator,
     render_blocked_tests_cli_summary,
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("engagement_id", help="Engagement ID to plan from")
     plan_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
-    test_parser = subcommands.add_parser("test-security", help="Run security testing preflight from a security plan")
+    test_parser = subcommands.add_parser("test", help="Run security testing preflight from a security plan")
     test_parser.add_argument("engagement_id", help="Engagement ID to test")
     test_parser.add_argument(
         "--hypothesis",
@@ -90,8 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_discovery(config, args)
     if args.command == "plan":
         return _run_security_test_planning(config, args)
-    if args.command == "test-security":
-        return _run_security_testing(config, args)
+    if args.command == "test":
+        return _run_testing(config, args)
     if args.command == "report":
         return _run_final_reporting(config, args)
     parser.error(f"Unsupported command: {args.command}")
@@ -229,7 +229,7 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
     return 0
 
 
-def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
+def _run_testing(config: AppConfig, args: argparse.Namespace) -> int:
     output_root = Path(args.output_root)
     engagement_file = engagement_dir(output_root, args.engagement_id) / "engagement_template.yaml"
     orchestrator = SecurityTestingOrchestrator(
@@ -249,13 +249,13 @@ def _run_security_testing(config: AppConfig, args: argparse.Namespace) -> int:
     skipped_ids = getattr(orchestrator, "_skipped_test_ids", [])
     if skipped_ids:
         print(f"Skipped {len(skipped_ids)} already-executed tests: {', '.join(skipped_ids)}")
-    summary = _security_testing_blocked_summary(report_dir, engagement_file)
+    summary = _testing_blocked_summary(report_dir, engagement_file)
     if summary:
         print(summary)
     return 0
 
 
-def _security_testing_blocked_summary(report_dir: Path, engagement_file: Path) -> str:
+def _testing_blocked_summary(report_dir: Path, engagement_file: Path) -> str:
     memory_path = report_dir / "memory.json"
     try:
         memory = json.loads(memory_path.read_text(encoding="utf-8"))
@@ -267,7 +267,7 @@ def _security_testing_blocked_summary(report_dir: Path, engagement_file: Path) -
         (
             item.get("content")
             for item in reversed(memory)
-            if isinstance(item, dict) and item.get("kind") == "security_testing_preflight"
+            if isinstance(item, dict) and item.get("kind") == "testing_preflight"
         ),
         None,
     )

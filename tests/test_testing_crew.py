@@ -9,15 +9,15 @@ from unittest.mock import patch
 
 from mosh.config import AppConfig
 from mosh.crews.discovery.crew import _load_crewai
-from mosh.crews.security_planning.reporting import write_security_test_plan
+from mosh.crews.planning.reporting import write_security_test_plan
 from mosh.docker_tools import DockerToolResult
 from mosh.engagement import write_engagement_template, write_engagement_template_mapping
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_asset
 from mosh.memory import FileMemory
-from mosh.crews.security_testing.crew import (
+from mosh.crews.testing.crew import (
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
-    collect_security_testing_discovery_updates,
+    collect_testing_discovery_updates,
     _execution_metadata,
     _fallback_executor_evidence,
     _build_executor_crew,
@@ -35,9 +35,9 @@ from mosh.crews.security_testing.crew import (
     load_security_test_plan,
     render_executed_test_report,
     render_preflight_report,
-    run_security_testing_preflight,
+    run_testing_preflight,
 )
-from mosh.crews.security_testing.source_tools import (
+from mosh.crews.testing.source_tools import (
     _cleanup_source_processes,
     _build_read_source_slice_tool,
     _build_request_local_http_tool,
@@ -215,7 +215,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             self.assertEqual(plan["test_hypotheses"][0]["id"], "API-001")
 
-    def test_security_testing_preflight_routes_by_execution_mode(self) -> None:
+    def test_testing_preflight_routes_by_execution_mode(self) -> None:
         plan = {
             "title": "Mixed plan",
             "test_hypotheses": [
@@ -258,7 +258,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
         }
         engagement = _engagement_template(target="https://example.test")
 
-        result = run_security_testing_preflight(plan, engagement, live_target_available=True, source_available=True)
+        result = run_testing_preflight(plan, engagement, live_target_available=True, source_available=True)
 
         self.assertEqual([item["id"] for item in result.ready], ["LIVE-001", "SRC-001", "COMBO-001"])
         self.assertEqual([item["id"] for item in result.source_ready], ["SRC-001"])
@@ -266,7 +266,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in result.deferred], ["DEF-001"])
         self.assertEqual(result.blocked, [])
 
-    def test_security_testing_preflight_can_target_selected_hypothesis(self) -> None:
+    def test_testing_preflight_can_target_selected_hypothesis(self) -> None:
         plan = {
             "title": "Mixed plan",
             "test_hypotheses": [
@@ -292,7 +292,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
         }
         engagement = _engagement_template(target="https://example.test")
 
-        result = run_security_testing_preflight(
+        result = run_testing_preflight(
             plan,
             engagement,
             live_target_available=True,
@@ -308,7 +308,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("evidence `combined`", rendered)
         self.assertNotIn("## Combined-Evidence Tests", rendered)
 
-    def test_security_testing_preflight_blocks_unmet_dependencies(self) -> None:
+    def test_testing_preflight_blocks_unmet_dependencies(self) -> None:
         plan = {
             "title": "Dependent plan",
             "test_hypotheses": [
@@ -334,8 +334,8 @@ class SecurityTestingCrewTests(unittest.TestCase):
         }
         engagement = _engagement_template(target="https://example.test")
 
-        blocked_result = run_security_testing_preflight(plan, engagement, live_target_available=True)
-        ready_result = run_security_testing_preflight(
+        blocked_result = run_testing_preflight(plan, engagement, live_target_available=True)
+        ready_result = run_testing_preflight(
             plan,
             engagement,
             live_target_available=True,
@@ -347,7 +347,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("dependency `AUTH-BASE`", blocked_result.blocked[0]["blockers"][0])
         self.assertEqual([item["id"] for item in ready_result.ready], ["AUTH-BASE", "AUTH-FOLLOWUP"])
 
-    def test_source_only_security_testing_executes_through_unified_runner(self) -> None:
+    def test_source_only_testing_executes_through_unified_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory) / "example-source"
             source_file = source_dir / "api" / "routes" / "auth.js"
@@ -390,12 +390,12 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertNotIn("## Combined-Evidence Tests", preflight)
             self.assertTrue((report_dir / "executed_tests" / "SRC-001.md").exists())
             memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
-            preflight_memory = next(item["content"] for item in memory if item["kind"] == "security_testing_preflight")
+            preflight_memory = next(item["content"] for item in memory if item["kind"] == "testing_preflight")
             self.assertEqual([item["id"] for item in preflight_memory["source_ready"]], ["SRC-001"])
             self.assertEqual(preflight_memory["ready_pending"], ["SRC-001"])
             self.assertEqual(preflight_memory["executable_pending"], ["SRC-001"])
 
-    def test_security_testing_preflight_uses_alternative_targets_and_blocks_missing_inputs(self) -> None:
+    def test_testing_preflight_uses_alternative_targets_and_blocks_missing_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -419,7 +419,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertTrue((report_dir / "executed_tests" / "API-001.md").exists())
             self.assertFalse((report_dir / "executed_tests" / "API-002.md").exists())
 
-    def test_security_testing_skips_matching_accepted_execution_metadata(self) -> None:
+    def test_testing_skips_matching_accepted_execution_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -444,7 +444,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(runner.calls, [])
             self.assertIn("# already executed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
 
-    def test_source_mode_security_testing_skips_matching_accepted_execution_metadata(self) -> None:
+    def test_source_mode_testing_skips_matching_accepted_execution_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory) / "example-source"
             source_file = source_dir / "api" / "routes" / "auth.js"
@@ -506,7 +506,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
         self.assertEqual(metadata["status"], "finding")
 
-    def test_security_testing_reruns_changed_hypothesis_and_archives_previous_report(self) -> None:
+    def test_testing_reruns_changed_hypothesis_and_archives_previous_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -537,7 +537,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("# old execution", history_files[0].read_text(encoding="utf-8"))
             self.assertIn("Fake execution completed", (report_dir / "executed_tests" / "API-001.md").read_text(encoding="utf-8"))
 
-    def test_security_testing_reruns_untracked_report_without_metadata_and_preserves_it(self) -> None:
+    def test_testing_reruns_untracked_report_without_metadata_and_preserves_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -554,7 +554,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(len(history_files), 1)
             self.assertIn("# untracked execution", history_files[0].read_text(encoding="utf-8"))
 
-    def test_security_testing_feeds_new_discovery_updates_and_refreshes_planning(self) -> None:
+    def test_testing_feeds_new_discovery_updates_and_refreshes_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -565,7 +565,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 json.dumps(
                     [
                         {
-                            "kind": "security_testing_discovery_feedback",
+                            "kind": "testing_discovery_feedback",
                             "content": {
                                 "updates": [
                                     {
@@ -577,7 +577,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                                     }
                                 ]
                             },
-                            "source": "security_testing_orchestrator",
+                            "source": "testing_orchestrator",
                         }
                     ]
                 ),
@@ -594,7 +594,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             ).run(engagement.id)
 
             discovery_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
-            feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
+            feedback_items = [item for item in discovery_memory if item["kind"] == "testing_discovery_feedback"]
             self.assertEqual(len(feedback_items), 2)
             self.assertIn("Express 4.18.2", json.dumps(feedback_items))
             discovery_report = (discovery_dir / "report.md").read_text(encoding="utf-8")
@@ -603,7 +603,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertIn("https://api.example.test/api/private/old", discovery_report)
             self.assertEqual(len(planning_runner.calls), 1)
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
-            self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+            self.assertTrue(any(event["action"] == "planning_refresh_complete" for event in testing_events))
 
     def test_duplicate_discovery_feedback_does_not_refresh_planning_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -616,7 +616,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 json.dumps(
                     [
                         {
-                            "kind": "security_testing_discovery_feedback",
+                            "kind": "testing_discovery_feedback",
                             "content": {
                                 "updates": [
                                     {
@@ -628,7 +628,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                                     }
                                 ]
                             },
-                            "source": "security_testing_orchestrator",
+                            "source": "testing_orchestrator",
                         }
                     ]
                 ),
@@ -648,7 +648,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "discovery_feedback_duplicate_skipped" for event in testing_events))
 
-    def test_source_mode_security_testing_feeds_discovery_updates_and_refreshes_planning(self) -> None:
+    def test_source_mode_testing_feeds_discovery_updates_and_refreshes_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_dir = Path(directory) / "example-source"
             source_dir.mkdir()
@@ -679,7 +679,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             ).run(engagement.id)
 
             discovery_memory = json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
-            feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
+            feedback_items = [item for item in discovery_memory if item["kind"] == "testing_discovery_feedback"]
             self.assertEqual(len(feedback_items), 1)
             self.assertIn("GET ${API_BASE}/team", json.dumps(feedback_items))
             discovery_report = (source_discovery_dir / "report.md").read_text(encoding="utf-8")
@@ -689,9 +689,9 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(len(planning_runner.calls), 1)
             self.assertEqual(planning_runner.calls[0]["engagement_id"], engagement.id)
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
-            self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+            self.assertTrue(any(event["action"] == "planning_refresh_complete" for event in testing_events))
 
-    def test_engagement_security_testing_feedback_refreshes_engagement_plan(self) -> None:
+    def test_engagement_testing_feedback_refreshes_engagement_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             output_root = Path(directory) / "report"
@@ -719,7 +719,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             ).run(engagement.id)
 
             discovery_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
-            feedback_items = [item for item in discovery_memory if item["kind"] == "security_testing_discovery_feedback"]
+            feedback_items = [item for item in discovery_memory if item["kind"] == "testing_discovery_feedback"]
             updated_asset = load_asset(output_root, engagement.id, live_asset.id)
             self.assertEqual(len(feedback_items), 1)
             self.assertEqual(planning_runner.calls[0]["engagement_id"], engagement.id)
@@ -727,7 +727,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual({path.name for path in output_root.iterdir()}, {engagement.id})
             self.assertIn("last_discovered_at", updated_asset.metadata["discovery"])
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
-            self.assertTrue(any(event["action"] == "security_planning_refresh_complete" for event in testing_events))
+            self.assertTrue(any(event["action"] == "planning_refresh_complete" for event in testing_events))
 
     def test_engagement_combined_testing_feedback_updates_live_and_source_discovery_before_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -781,19 +781,19 @@ class SecurityTestingCrewTests(unittest.TestCase):
             live_feedback = [
                 item
                 for item in json.loads((live_discovery_dir / "memory.json").read_text(encoding="utf-8"))
-                if item["kind"] == "security_testing_discovery_feedback"
+                if item["kind"] == "testing_discovery_feedback"
             ]
             source_feedback = [
                 item
                 for item in json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
-                if item["kind"] == "security_testing_discovery_feedback"
+                if item["kind"] == "testing_discovery_feedback"
             ]
             self.assertEqual(len(live_feedback), 1)
             self.assertEqual(len(source_feedback), 1)
             self.assertEqual(len(planning_runner.calls), 1)
             self.assertEqual(planning_runner.calls[0]["engagement_id"], engagement.id)
 
-    def test_collect_security_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
+    def test_collect_testing_discovery_updates_deduplicates_explicit_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
             memory = FileMemory(report_dir)
@@ -821,13 +821,13 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 "security_test_coordinator",
             )
 
-            updates = collect_security_testing_discovery_updates(report_dir)
+            updates = collect_testing_discovery_updates(report_dir)
 
             self.assertEqual(len(updates), 1)
             self.assertEqual(updates[0]["test_id"], "API-001")
             self.assertEqual(updates[0]["type"], "endpoint")
 
-    def test_collect_security_testing_discovery_updates_accepts_grouped_dict_evidence(self) -> None:
+    def test_collect_testing_discovery_updates_accepts_grouped_dict_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
             memory = FileMemory(report_dir)
@@ -851,7 +851,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 "security_test_coordinator",
             )
 
-            updates = collect_security_testing_discovery_updates(report_dir)
+            updates = collect_testing_discovery_updates(report_dir)
 
             self.assertEqual(
                 {(update["type"], update["detail"]) for update in updates},
@@ -900,7 +900,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
 
-            with patch("mosh.crews.security_testing.crew.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.testing.crew.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_security_command_tool(_FakeCrewAI, AppConfig(), state)
                 result = json.loads(tool._run("curl https://api.example.test/api/private/auth/me", "auth check"))
 
@@ -990,7 +990,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="token tok123\n", stderr=""))
 
-            with patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.testing.source_tools.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
                 blocked = json.loads(tool._run("curl https://example.test/private", "external check"))
                 result = json.loads(tool._run("curl http://127.0.0.1:8000/health", "local runtime check"))
@@ -1022,7 +1022,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="mode enabled\n", stderr=""))
 
-            with patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.testing.source_tools.DockerToolRunner", return_value=fake_runner):
                 tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
                 result = json.loads(
                     tool._run(
@@ -1155,7 +1155,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 docker_calls.append(command)
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
-            with patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker):
+            with patch("mosh.crews.testing.source_tools._run_docker_cli", side_effect=fake_docker):
                 tool = _build_start_source_process_tool(_FakeCrewAI, AppConfig(security_tool_image="image:test"), state)
                 result = json.loads(
                     tool._run(
@@ -1193,7 +1193,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             )
             fake_runner = _FakeDockerRunner(DockerToolResult(exit_code=0, stdout="HTTP/1.1 200 OK\n\nok tok123", stderr=""))
 
-            with patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner):
+            with patch("mosh.crews.testing.source_tools.DockerToolRunner", return_value=fake_runner):
                 tool = _build_request_local_http_tool(_FakeCrewAI, AppConfig(), state)
                 blocked = json.loads(tool._run("https://example.test/api", "external request"))
                 result = json.loads(
@@ -1236,7 +1236,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     return DockerToolResult(exit_code=0, stdout="booted tok123\n", stderr="")
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
-            with patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker):
+            with patch("mosh.crews.testing.source_tools._run_docker_cli", side_effect=fake_docker):
                 tool = _build_stop_source_process_tool(_FakeCrewAI, state)
                 blocked = json.loads(tool._run("other-container", "scope guard"))
                 result = json.loads(tool._run("container-123", "cleanup"))
@@ -1288,8 +1288,8 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
             with (
-                patch("mosh.crews.security_testing.source_tools.DockerToolRunner", return_value=fake_runner),
-                patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker),
+                patch("mosh.crews.testing.source_tools.DockerToolRunner", return_value=fake_runner),
+                patch("mosh.crews.testing.source_tools._run_docker_cli", side_effect=fake_docker),
             ):
                 write_tool = _build_write_workspace_file_tool(_FakeCrewAI, state)
                 command_tool = _build_run_source_command_tool(_FakeCrewAI, AppConfig(), state)
@@ -1372,7 +1372,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     return DockerToolResult(exit_code=0, stdout="booted tok123\n", stderr="")
                 return DockerToolResult(exit_code=0, stdout="container-123\n", stderr="")
 
-            with patch("mosh.crews.security_testing.source_tools._run_docker_cli", side_effect=fake_docker):
+            with patch("mosh.crews.testing.source_tools._run_docker_cli", side_effect=fake_docker):
                 _cleanup_source_processes(state)
 
             self.assertEqual(len(docker_calls), 2)
@@ -1434,7 +1434,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             "Authorization: Bearer [REDACTED]",
         )
 
-    def test_security_testing_sub_crews_use_packaged_yaml_without_report_config_copy(self) -> None:
+    def test_testing_sub_crews_use_packaged_yaml_without_report_config_copy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
             state = SecurityTestExecutionState(
@@ -1545,7 +1545,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             structured = next(item["content"]["structured"] for item in memory if item["kind"] == "security_test_execution_evidence")
             self.assertEqual(structured["finding"]["title"], "IP header trust can bypass rate limiting")
 
-    def test_security_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
+    def test_testing_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
         crewai = _load_crewai()
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
@@ -1650,9 +1650,9 @@ class SecurityTestingCrewTests(unittest.TestCase):
                     inputs={"target_url": "https://example.test"},
                 )
 
-    def test_security_testing_tasks_treat_effective_targets_as_canonical(self) -> None:
+    def test_testing_tasks_treat_effective_targets_as_canonical(self) -> None:
         task_yaml = "\n".join(
-            Path(f"src/mosh/crews/security_testing/{file}").read_text(encoding="utf-8")
+            Path(f"src/mosh/crews/testing/{file}").read_text(encoding="utf-8")
             for file in ["executor_tasks.yaml", "reviewer_tasks.yaml", "reporter_tasks.yaml"]
         ).lower()
         compact_task_yaml = " ".join(task_yaml.split())
@@ -1821,7 +1821,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
         self.assertIn("## Status\n\nFinding Confirmed\n", markdown)
 
-    def test_status_labels_cover_security_testing_states(self) -> None:
+    def test_status_labels_cover_testing_states(self) -> None:
         self.assertEqual(_status_label("needs-review"), "Needs Review")
         self.assertEqual(_status_label("needs-rerun"), "Needs Re-Run")
         self.assertEqual(_status_label("rerun-requested"), "Re-Run Requested")

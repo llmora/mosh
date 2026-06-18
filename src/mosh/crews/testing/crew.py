@@ -10,7 +10,7 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.reporting import update_report_with_security_testing_feedback
+from mosh.crews.discovery.reporting import update_report_with_testing_feedback
 from mosh.crews.discovery.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
@@ -107,7 +107,7 @@ class SecurityTestingOrchestrator:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
-        self.crew_runner = crew_runner or build_security_testing_crew_runner(config)
+        self.crew_runner = crew_runner or build_testing_crew_runner(config)
         self.planning_crew_runner = planning_crew_runner
 
     def run(
@@ -155,7 +155,7 @@ class SecurityTestingOrchestrator:
         plan = load_security_test_plan(planning_dir)
         engagement_config = load_engagement_file(engagement_path)
         evidence_links = _load_testing_evidence_links(planning_dir)
-        result = run_security_testing_preflight(
+        result = run_testing_preflight(
             plan,
             engagement_config,
             live_target_available=bool(url),
@@ -167,7 +167,7 @@ class SecurityTestingOrchestrator:
         markdown = render_preflight_report(target, engagement_path, result)
         (report_dir / "preflight.md").write_text(markdown, encoding="utf-8")
         memory.add_item(
-            "security_testing_preflight",
+            "testing_preflight",
             {
                 "ready": result.ready,
                 "blocked": result.blocked,
@@ -211,7 +211,7 @@ class SecurityTestingOrchestrator:
             if not refresh_targets:
                 refresh_targets.append((discovery_dir, live_discovery_asset or source_discovery_asset))
             for index, (target_discovery_dir, discovery_asset) in enumerate(refresh_targets):
-                _refresh_discovery_from_security_testing_feedback(
+                _refresh_discovery_from_testing_feedback(
                     config=self.config,
                     output_root=self.output_root,
                     event_sink=self.event_sink,
@@ -253,7 +253,7 @@ class SecurityTestingOrchestrator:
         return report_dir
 
 
-def build_security_testing_crew_runner(config: AppConfig) -> SecurityTestingCrewRunner:
+def build_testing_crew_runner(config: AppConfig) -> SecurityTestingCrewRunner:
     return CrewAISecurityTestingCrewRunner(config)
 
 
@@ -276,9 +276,9 @@ class CrewAISecurityTestingCrewRunner:
     ) -> None:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.security_testing.executor,
-                self.config.models.security_testing.reviewer,
-                self.config.models.security_testing.reporter,
+                self.config.models.testing.executor,
+                self.config.models.testing.reviewer,
+                self.config.models.testing.reporter,
             ]
         )
         if missing_keys:
@@ -870,7 +870,7 @@ def _strip_execution_metadata(markdown: str) -> str:
     return markdown[end + len(EXECUTION_METADATA_END) :]
 
 
-def collect_security_testing_discovery_updates(report_dir: Path) -> list[dict[str, Any]]:
+def collect_testing_discovery_updates(report_dir: Path) -> list[dict[str, Any]]:
     updates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in _read_json_list(report_dir / "memory.json"):
@@ -1003,7 +1003,7 @@ def _discovery_update_fingerprint(update: dict[str, Any]) -> str:
     )
 
 
-def _refresh_discovery_from_security_testing_feedback(
+def _refresh_discovery_from_testing_feedback(
     *,
     config: AppConfig,
     output_root: Path,
@@ -1016,10 +1016,10 @@ def _refresh_discovery_from_security_testing_feedback(
     discovery_asset: tuple[str, str] | None = None,
     refresh_planning: bool = True,
 ) -> None:
-    feedback_updates = collect_security_testing_discovery_updates(report_dir)
+    feedback_updates = collect_testing_discovery_updates(report_dir)
     new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
     if new_feedback_updates:
-        _feed_security_testing_updates_to_discovery(
+        _feed_testing_updates_to_discovery(
             discovery_dir=discovery_dir,
             testing_memory=memory,
             updates=new_feedback_updates,
@@ -1030,18 +1030,18 @@ def _refresh_discovery_from_security_testing_feedback(
         if not refresh_planning:
             memory.record_event(
                 "orchestrator",
-                "security_planning_refresh_deferred",
+                "planning_refresh_deferred",
                 "Security test planning refresh deferred until all discovery feedback targets are updated",
                 {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
             )
             return
         memory.record_event(
             "orchestrator",
-            "security_planning_refresh_start",
+            "planning_refresh_start",
             "Starting security test planning refresh from security-testing discovery feedback",
             {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
         )
-        from mosh.crews.security_planning.crew import SecurityTestPlanningOrchestrator
+        from mosh.crews.planning.crew import SecurityTestPlanningOrchestrator
 
         SecurityTestPlanningOrchestrator(
             config,
@@ -1051,7 +1051,7 @@ def _refresh_discovery_from_security_testing_feedback(
         ).run(engagement_id)
         memory.record_event(
             "orchestrator",
-            "security_planning_refresh_complete",
+            "planning_refresh_complete",
             "Security test planning refresh completed from security-testing discovery feedback",
             {"updates": len(new_feedback_updates)},
         )
@@ -1071,7 +1071,7 @@ def _refresh_discovery_from_security_testing_feedback(
         )
 
 
-def _feed_security_testing_updates_to_discovery(
+def _feed_testing_updates_to_discovery(
     *,
     discovery_dir: Path,
     testing_memory: FileMemory,
@@ -1086,39 +1086,39 @@ def _feed_security_testing_updates_to_discovery(
     _append_existing_memory_item(
         discovery_dir,
         MemoryItem(
-            kind="security_testing_discovery_feedback",
+            kind="testing_discovery_feedback",
             content=content,
-            source="security_testing_orchestrator",
+            source="testing_orchestrator",
         ),
     )
     report_updates = _all_discovery_feedback_updates(discovery_dir)
-    update_report_with_security_testing_feedback(discovery_dir, report_updates)
+    update_report_with_testing_feedback(discovery_dir, report_updates)
     _append_existing_event(
         discovery_dir,
         Event(
-            agent="security_testing_orchestrator",
+            agent="testing_orchestrator",
             action="memory_write",
             message="Added security-testing discovery feedback to shared discovery memory",
-            data={"kind": "security_testing_discovery_feedback", "content": content},
+            data={"kind": "testing_discovery_feedback", "content": content},
         ),
     )
     _append_existing_event(
         discovery_dir,
         Event(
-            agent="security_testing_orchestrator",
+            agent="testing_orchestrator",
             action="report_updated",
             message="Updated discovery report with security-testing feedback",
             data={"updates": len(report_updates), "new_updates": len(updates), "report": str(discovery_dir / "report.md")},
         ),
     )
     testing_memory.add_item(
-        "security_testing_discovery_feedback",
+        "testing_discovery_feedback",
         {
             "updates": updates,
             "discovery_dir": str(discovery_dir),
             "discovery_report": str(discovery_dir / "report.md"),
         },
-        "security_testing_orchestrator",
+        "testing_orchestrator",
     )
 
 
@@ -1126,7 +1126,7 @@ def _all_discovery_feedback_updates(discovery_dir: Path) -> list[dict[str, Any]]
     updates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in _read_json_list(discovery_dir / "memory.json"):
-        if item.get("kind") != "security_testing_discovery_feedback":
+        if item.get("kind") != "testing_discovery_feedback":
             continue
         content = item.get("content") if isinstance(item.get("content"), dict) else {}
         for update in _list(content.get("updates")):
@@ -1312,7 +1312,7 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
     if _has_live_execution_target(state):
         tools.append(_build_run_security_command_tool(crewai, config, state))
     if state.source_root is not None:
-        from mosh.crews.security_testing.source_tools import (
+        from mosh.crews.testing.source_tools import (
             _build_read_source_slice_tool,
             _build_request_local_http_tool,
             _build_run_source_command_tool,
@@ -1335,8 +1335,8 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
         )
     evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
     tools.append(evidence_tool)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/executor_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/executor_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/executor_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/executor_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestExecutorCrew:
@@ -1347,7 +1347,7 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
         def executor(self):
             return crewai.Agent(
                 config=self.agents_config["executor"],
-                llm=_llm(crewai, config, config.models.security_testing.executor),
+                llm=_llm(crewai, config, config.models.testing.executor),
                 tools=tools,
                 allow_delegation=False,
             )
@@ -1387,8 +1387,8 @@ def _has_live_execution_target(state: SecurityTestExecutionState) -> bool:
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     review_tool = _build_submit_execution_review_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reviewer_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reviewer_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reviewer_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reviewer_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestReviewerCrew:
@@ -1399,7 +1399,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
         def reviewer(self):
             return crewai.Agent(
                 config=self.agents_config["reviewer"],
-                llm=_llm(crewai, config, config.models.security_testing.reviewer),
+                llm=_llm(crewai, config, config.models.testing.reviewer),
                 tools=[review_tool],
                 allow_delegation=False,
             )
@@ -1430,8 +1430,8 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
 
 def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     report_tool = _build_write_executed_test_report_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reporter_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_testing/reporter_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reporter_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reporter_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestReporterCrew:
@@ -1442,7 +1442,7 @@ def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
         def reporter(self):
             return crewai.Agent(
                 config=self.agents_config["reporter"],
-                llm=_llm(crewai, config, config.models.security_testing.reporter),
+                llm=_llm(crewai, config, config.models.testing.reporter),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -1785,13 +1785,13 @@ def _validated_source_root(source: str) -> Path:
 
 
 def _load_unified_source_context(source_discovery_dir: Path | None) -> dict[str, Any]:
-    from mosh.crews.security_testing.source_tools import _load_source_context
+    from mosh.crews.testing.source_tools import _load_source_context
 
     return _load_source_context(source_discovery_dir)
 
 
 def _compact_unified_source_context(source_context: dict[str, Any]) -> dict[str, Any]:
-    from mosh.crews.security_testing.source_tools import _compact_source_context
+    from mosh.crews.testing.source_tools import _compact_source_context
 
     return _compact_source_context(source_context)
 
@@ -1799,12 +1799,12 @@ def _compact_unified_source_context(source_context: dict[str, Any]) -> dict[str,
 def _cleanup_unified_source_processes(state: SecurityTestExecutionState) -> None:
     if not state.local_processes:
         return
-    from mosh.crews.security_testing.source_tools import _cleanup_source_processes
+    from mosh.crews.testing.source_tools import _cleanup_source_processes
 
     _cleanup_source_processes(state)
 
 
-def run_security_testing_preflight(
+def run_testing_preflight(
     plan: dict[str, Any],
     engagement: dict[str, Any],
     *,

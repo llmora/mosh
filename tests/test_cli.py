@@ -285,7 +285,7 @@ class CliTests(unittest.TestCase):
             runner = FakeSecurityPlanningRunner()
 
             with patch(
-                "mosh.crews.security_planning.crew.build_security_test_planning_crew_runner",
+                "mosh.crews.planning.crew.build_security_test_planning_crew_runner",
                 return_value=runner,
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -321,11 +321,11 @@ class CliTests(unittest.TestCase):
             stdout = io.StringIO()
 
             with patch(
-                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                "mosh.crews.testing.crew.build_testing_crew_runner",
                 return_value=runner,
             ):
                 with contextlib.redirect_stdout(stdout):
-                    exit_code = main(["test-security", engagement.id, "--output-root", str(output_root)])
+                    exit_code = main(["test", engagement.id, "--output-root", str(output_root)])
 
             report_dir = output_root / engagement.id / "security-testing"
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
@@ -369,12 +369,12 @@ class CliTests(unittest.TestCase):
             runner = FakeSecurityTestingRunner()
 
             with patch(
-                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                "mosh.crews.testing.crew.build_testing_crew_runner",
                 return_value=runner,
             ):
                 exit_code = main(
                     [
-                        "test-security",
+                        "test",
                         engagement.id,
                         "--hypothesis",
                         "AUTH-001",
@@ -405,13 +405,13 @@ class CliTests(unittest.TestCase):
             stderr = io.StringIO()
 
             with patch(
-                "mosh.crews.security_testing.crew.build_security_testing_crew_runner",
+                "mosh.crews.testing.crew.build_testing_crew_runner",
                 return_value=runner,
             ):
                 with contextlib.redirect_stderr(stderr):
                     exit_code = main(
                         [
-                            "test-security",
+                            "test",
                             engagement.id,
                             "--hypothesis",
                             "MISSING-001",

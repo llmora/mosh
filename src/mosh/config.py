@@ -49,8 +49,8 @@ class ReportingModelConfig:
 @dataclass(frozen=True)
 class AgentModelConfig:
     discovery: DiscoveryModelConfig = field(default_factory=DiscoveryModelConfig)
-    security_planning: SecurityPlanningModelConfig = field(default_factory=SecurityPlanningModelConfig)
-    security_testing: SecurityTestingModelConfig = field(default_factory=SecurityTestingModelConfig)
+    planning: SecurityPlanningModelConfig = field(default_factory=SecurityPlanningModelConfig)
+    testing: SecurityTestingModelConfig = field(default_factory=SecurityTestingModelConfig)
     source_discovery: SourceDiscoveryModelConfig = field(default_factory=SourceDiscoveryModelConfig)
     reporting: ReportingModelConfig = field(default_factory=ReportingModelConfig)
 
@@ -169,8 +169,8 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
     crew_configs = {
         "discovery": defaults.discovery,
         "reporting": defaults.reporting,
-        "security_planning": defaults.security_planning,
-        "security_testing": defaults.security_testing,
+        "planning": defaults.planning,
+        "testing": defaults.testing,
         "source_discovery": defaults.source_discovery,
     }
     overrides: dict[str, object] = {}

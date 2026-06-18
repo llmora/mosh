@@ -29,8 +29,8 @@ from mosh.engagements import (
 from mosh.evidence_links import EvidenceLinkResult, build_evidence_links, load_evidence_links_if_current
 from mosh.memory import FileMemory
 from mosh.models import Event, utc_now
-from mosh.crews.security_planning.evidence_linker import build_model_assisted_linker
-from mosh.crews.security_planning.reporting import write_security_test_plan
+from mosh.crews.planning.evidence_linker import build_model_assisted_linker
+from mosh.crews.planning.reporting import write_security_test_plan
 
 
 @dataclass
@@ -95,37 +95,37 @@ def security_test_planning_agent_definitions(config: AppConfig) -> list[AgentDef
             name="orchestrator",
             role="Security test planning coordinator",
             goal="Coordinate security test planning work and persist planner/reviewer/reporter outputs.",
-            model=config.models.security_planning.reporter,
+            model=config.models.planning.reporter,
         ),
         AgentDefinition(
             name="evidence_linker",
             role="Source and live evidence link candidate analyst",
             goal="Link source and live discovery evidence before planning hypotheses.",
-            model=config.models.security_planning.evidence_linker,
+            model=config.models.planning.evidence_linker,
         ),
         AgentDefinition(
             name="planner",
             role="Security test hypothesis planner",
             goal="Turn discovery findings into detailed, evidence-backed security test hypotheses.",
-            model=config.models.security_planning.planner,
+            model=config.models.planning.planner,
         ),
         AgentDefinition(
             name="reviewer",
             role="Security test plan reviewer",
             goal="Review test hypotheses for clarity, evidence, scope, safety, and missing requirements.",
-            model=config.models.security_planning.reviewer,
+            model=config.models.planning.reviewer,
         ),
         AgentDefinition(
             name="reporter",
             role="Security test plan reporter",
             goal="Persist the agreed planning output as a stable Markdown security test plan.",
-            model=config.models.security_planning.reporter,
+            model=config.models.planning.reporter,
         ),
         AgentDefinition(
             name="engagement_refiner",
             role="Engagement template refiner",
             goal="Refine the generated engagement template for security test execution.",
-            model=config.models.security_planning.engagement_refiner,
+            model=config.models.planning.engagement_refiner,
         ),
     ]
 
@@ -143,10 +143,10 @@ class CrewAISecurityTestPlanningCrewRunner:
     ) -> SecurityTestPlanningResult:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.security_planning.planner,
-                self.config.models.security_planning.reviewer,
-                self.config.models.security_planning.reporter,
-                self.config.models.security_planning.engagement_refiner,
+                self.config.models.planning.planner,
+                self.config.models.planning.reviewer,
+                self.config.models.planning.reporter,
+                self.config.models.planning.engagement_refiner,
             ]
         )
         if missing_keys:
@@ -512,7 +512,7 @@ def load_engagement_assessment_evidence_bundle(
             "skipped": skipped_assets,
         },
         "correlation": {"evidence_links": evidence_links or {}},
-        "prior_security_testing_feedback": {},
+        "prior_testing_feedback": {},
         "prior_source_testing_feedback": {},
     }
     bundle["execution_capabilities"] = _planning_execution_capabilities(
@@ -966,8 +966,8 @@ def _build_planning_engagement_template(target_url: str, source: str | None, pla
 
 def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     plan_tool = _build_submit_plan_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/planner_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/planner_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/planner_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/planner_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningPlannerCrew:
@@ -978,7 +978,7 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
         def planner(self):
             return crewai.Agent(
                 config=self.agents_config["planner"],
-                llm=_llm(crewai, config, config.models.security_planning.planner),
+                llm=_llm(crewai, config, config.models.planning.planner),
                 tools=[plan_tool],
                 allow_delegation=False,
             )
@@ -1009,8 +1009,8 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
 
 def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     critique_tool = _build_submit_critique_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/critic_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/critic_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/critic_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/critic_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningCriticCrew:
@@ -1021,7 +1021,7 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
         def reviewer(self):
             return crewai.Agent(
                 config=self.agents_config["reviewer"],
-                llm=_llm(crewai, config, config.models.security_planning.reviewer),
+                llm=_llm(crewai, config, config.models.planning.reviewer),
                 tools=[critique_tool],
                 allow_delegation=False,
             )
@@ -1052,8 +1052,8 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
 
 def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     write_tool = _build_write_security_test_plan_tool(crewai, state)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/reporter_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/reporter_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/reporter_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/reporter_tasks.yaml"))
 
     @crewai.CrewBase
     class SecurityTestPlanningReporterCrew:
@@ -1064,7 +1064,7 @@ def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: Securit
         def reporter(self):
             return crewai.Agent(
                 config=self.agents_config["reporter"],
-                llm=_llm(crewai, config, config.models.security_planning.reporter),
+                llm=_llm(crewai, config, config.models.planning.reporter),
                 tools=[write_tool],
                 allow_delegation=False,
             )
@@ -1100,8 +1100,8 @@ def _build_engagement_template_refinement_crew(
     deterministic_template: dict[str, Any],
 ):
     write_tool = _build_write_refined_engagement_template_tool(crewai, state, deterministic_template)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/engagement_refiner_agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("security_planning/engagement_refiner_tasks.yaml"))
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/engagement_refiner_agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/engagement_refiner_tasks.yaml"))
 
     @crewai.CrewBase
     class EngagementTemplateRefinementCrew:
@@ -1112,7 +1112,7 @@ def _build_engagement_template_refinement_crew(
         def engagement_refiner(self):
             return crewai.Agent(
                 config=self.agents_config["engagement_refiner"],
-                llm=_llm(crewai, config, config.models.security_planning.engagement_refiner),
+                llm=_llm(crewai, config, config.models.planning.engagement_refiner),
                 tools=[write_tool],
                 allow_delegation=False,
             )

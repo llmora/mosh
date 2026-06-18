@@ -317,7 +317,7 @@ def _write_memory(report_dir: Path, items: list[dict[str, object]]) -> None:
 
 
 class FakeModelAssistedLinker:
-    model_metadata = {"crew": "security_planning", "agent": "evidence_linker", "model": "fake-linker"}
+    model_metadata = {"crew": "planning", "agent": "evidence_linker", "model": "fake-linker"}
 
     def __init__(self) -> None:
         self.contexts: list[dict[str, object]] = []

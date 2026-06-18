@@ -121,14 +121,14 @@ models:
     gap_analyst: openai/gpt-5.2-mini
     reporter: openai/gpt-5.2-mini
 
-  security_planning:
+  planning:
     planner: openai/gpt-5.2-mini
     evidence_linker: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
     reporter: openai/gpt-5.2-mini
     engagement_refiner: openai/gpt-5.2-mini
 
-  security_testing:
+  testing:
     executor: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
     reporter: openai/gpt-5.2-mini
@@ -277,9 +277,9 @@ extraction, configuration review, dependency inspection, generated harnesses, or
 mobile binary tooling, external accounts, deployment access, or unavailable build/run inputs should remain deferred. The critic must reject accepted plans that defer source-executable work solely because additional source inspection is
 needed.
 
-## Security Testing Crew
+## Testing Crew
 
-The security testing crew executes ready hypotheses from the security test plan.
+The testing crew executes ready hypotheses from the security test plan.
 It runs tests sequentially so reviewer feedback for one test can inform a bounded rerun before the next test starts.
 
 Security testing preflight evaluates concrete artifact and engagement requirements before any executor runs.
@@ -298,7 +298,7 @@ report/<engagement-id>/security-testing/
 The engagement-backed command is:
 
 ```bash
-mosh test-security <engagement-id>
+mosh test <engagement-id>
 ```
 
 It reads the current plan from `report/<engagement-id>/plan/` and the shared execution configuration from `report/<engagement-id>/engagement_template.yaml`.
@@ -324,18 +324,18 @@ The engagement file should stay small and directly editable. It should include:
 
 It should not include explanatory readiness metadata such as `status`, `needed_for`, `required_answers`, or long generated notes. Missing inputs, blocked tests, and questions belong in `plan.md`, `security_test_plan.md`, `preflight.md`, `events.json`, or `memory.json`.
 
-Repeated security-planning runs must not overwrite non-empty values that the user has already added to `engagement_template.yaml`. Generated or refined templates should merge into the existing file, preserving filled credentials, tokens, alternative targets, safe test data, contact details, limits, and notes unless the user explicitly changes them. The LLM refiner must not invent secret values; if it proposes credentials or tokens, the generated candidate is rejected
+Repeated planning runs must not overwrite non-empty values that the user has already added to `engagement_template.yaml`. Generated or refined templates should merge into the existing file, preserving filled credentials, tokens, alternative targets, safe test data, contact details, limits, and notes unless the user explicitly changes them. The LLM refiner must not invent secret values; if it proposes credentials or tokens, the generated candidate is rejected
 and the preserved existing configuration remains in place.
 
 Before an existing `engagement_template.yaml` is rewritten, the previous file must be copied into `engagement_template.backups/` with a timestamped filename. This keeps a recoverable copy even when regeneration or refinement simplifies the template shape.
 
-The security testing crew has these agents:
+The testing crew has these agents:
 
 - security test executor: runs scoped commands through the security tools Docker container
 - security test reviewer: critiques evidence, safety, target scope, and useful generated artifacts
 - security test reporter: writes the stable Markdown artifact for each executed test
 
-For source-mode tests, the unified security testing crew follows the same
+For source-mode tests, the unified testing crew follows the same
 executor, reviewer, and reporter pattern. Its executor can read bounded source slices, search
 nonignored text files, write generated harnesses or fuzz scripts under `/work`,
 run local commands with explicit environment overrides, start and stop local
@@ -369,23 +369,23 @@ Useful artifacts include generated policies, proof-of-concept payloads, endpoint
 
 Each executed test report should include a `Resolution` section aimed at developers and application owners. This section should explain how to remediate an identified issue using concrete configuration, code, header, control, or process changes where evidence supports them. If no issue is identified, the section should state that no remediation is required for that hypothesis.
 
-Security testing can discover additional facts that belong back in discovery, whether the evidence came from live, source-backed, or combined testing: new entry points, endpoints, technologies, versions, service behavior, headers, generated API specifications, or other app-surface information. The executor should submit these as structured `discovery_updates` in its evidence. After ready tests finish, the security-testing orchestrator feeds those updates into the discovery crew's file-backed memory, updates the discovery report with a deterministic `Security Testing Feedback` section, and then asks the security planning crew to refresh the test plan. The system does not immediately auto-run new tests from that refreshed plan; additional execution happens on the next security-testing run only if the refreshed plan contains ready, unexecuted hypotheses.
+Security testing can discover additional facts that belong back in discovery, whether the evidence came from live, source-backed, or combined testing: new entry points, endpoints, technologies, versions, service behavior, headers, generated API specifications, or other app-surface information. The executor should submit these as structured `discovery_updates` in its evidence. After ready tests finish, the testing orchestrator feeds those updates into the discovery crew's file-backed memory, updates the discovery report with a deterministic `Security Testing Feedback` section, and then asks the planning crew to refresh the test plan. The system does not immediately auto-run new tests from that refreshed plan; additional execution happens on the next security-testing run only if the refreshed plan contains ready, unexecuted hypotheses.
 
-After a successful `test-security` run, the CLI must print a deterministic human-readable summary of any blocked tests that still prevent completion. The summary should list each blocked test ID, title, priority, and concrete engagement template fields or values needed to unblock it. This mirrors the preflight data without requiring the user to open `preflight.md` for the next action.
+After a successful `test` run, the CLI must print a deterministic human-readable summary of any blocked tests that still prevent completion. The summary should list each blocked test ID, title, priority, and concrete engagement template fields or values needed to unblock it. This mirrors the preflight data without requiring the user to open `preflight.md` for the next action.
 
 Security test completion is determined from metadata embedded in the latest executed Markdown report, not from a separate execution index. Each `executed_tests/<test_id>.md` report should include machine-readable execution metadata containing at least the test ID, plan revision ID, hypothesis fingerprint, status, reviewer acceptance, and execution time. A ready hypothesis is skipped only when the latest report has matching accepted metadata for the same hypothesis fingerprint. If the hypothesis changes after discovery-driven replanning, or the previous execution was not accepted, the test is queued for rerun.
 
 Before a rerun overwrites `executed_tests/<test_id>.md`, the previous report must be preserved under `executed_tests/history/` as a reference. This keeps older security test output available while making the latest report the current
 version.
 
-To avoid runaway loops, duplicate security-testing discovery feedback must not trigger another discovery update or security-planning refresh. Only feedback facts not already present in discovery memory should cause the discovery report to update and the security planning crew to refresh.
+To avoid runaway loops, duplicate security-testing discovery feedback must not trigger another discovery update or planning refresh. Only feedback facts not already present in discovery memory should cause the discovery report to update and the planning crew to refresh.
 
 ## Final Reporting Crew
 
 The final reporting crew produces the customer-facing deliverable for a security testing engagement. It runs after discovery, security planning, and security testing:
 
 ```text
-discover -> plan -> test-security -> report
+discover -> plan -> test -> report
 ```
 
 The CLI command is:
@@ -551,5 +551,7 @@ At minimum, tests should cover:
 * CLOUDFLARE BLOG: Feedback
 * CLOUDFLARE: Gapfill - matrix of coverage
 * CLOUDFLARE: Built-in attack classes + planning invents its own
-* Threat model
-* Require for each finding a working test + a functional git diff - that get executed deterministically
+* CLOUDFLARE BLOG: Threat model
+* CLOUDFLARE BLOG: Require for each finding a working test + a functional git diff - that get executed deterministically
+* CLOUDFLARE BLOG: Fixer? Submit MRs
+* CLOUDFLARE BLOG: Measure success 

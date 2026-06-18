@@ -17,7 +17,7 @@ from mosh.crews.source_discovery.tools import (
     _relative_path,
     _snippet_hash,
 )
-from mosh.crews.security_testing.crew import (
+from mosh.crews.testing.crew import (
     _append_command_log,
     _hypothesis_id,
     _redact_result,

@@ -7,50 +7,50 @@ from mosh.crews.discovery.crew import CREW_CONFIG_PACKAGE
 
 
 class CrewAIConfigSubsetTests(unittest.TestCase):
-    def test_security_planning_subcrew_configs_are_canonical(self) -> None:
-        self._assert_yaml_blocks_exactly("security_planning", "evidence_linker_agents.yaml", ["evidence_linker"])
+    def test_planning_subcrew_configs_are_canonical(self) -> None:
+        self._assert_yaml_blocks_exactly("planning", "evidence_linker_agents.yaml", ["evidence_linker"])
         self._assert_yaml_blocks_exactly(
-            "security_planning",
+            "planning",
             "evidence_linker_tasks.yaml",
             ["suggest_evidence_link_candidates_task"],
         )
-        self._assert_yaml_blocks_exactly("security_planning", "planner_agents.yaml", ["planner"])
-        self._assert_yaml_blocks_exactly("security_planning", "planner_tasks.yaml", ["draft_security_test_plan_task"])
-        self._assert_yaml_blocks_exactly("security_planning", "critic_agents.yaml", ["reviewer"])
+        self._assert_yaml_blocks_exactly("planning", "planner_agents.yaml", ["planner"])
+        self._assert_yaml_blocks_exactly("planning", "planner_tasks.yaml", ["draft_security_test_plan_task"])
+        self._assert_yaml_blocks_exactly("planning", "critic_agents.yaml", ["reviewer"])
         self._assert_yaml_blocks_exactly(
-            "security_planning",
+            "planning",
             "critic_tasks.yaml",
             ["critique_security_test_plan_task"],
         )
-        self._assert_yaml_blocks_exactly("security_planning", "reporter_agents.yaml", ["reporter"])
+        self._assert_yaml_blocks_exactly("planning", "reporter_agents.yaml", ["reporter"])
         self._assert_yaml_blocks_exactly(
-            "security_planning",
+            "planning",
             "reporter_tasks.yaml",
             ["write_security_test_plan_task"],
         )
         self._assert_yaml_blocks_exactly(
-            "security_planning",
+            "planning",
             "engagement_refiner_agents.yaml",
             ["engagement_refiner"],
         )
         self._assert_yaml_blocks_exactly(
-            "security_planning",
+            "planning",
             "engagement_refiner_tasks.yaml",
             ["refine_engagement_template_task"],
         )
 
-    def test_security_testing_subcrew_configs_are_canonical(self) -> None:
-        self._assert_yaml_blocks_exactly("security_testing", "executor_agents.yaml", ["executor"])
-        self._assert_yaml_blocks_exactly("security_testing", "executor_tasks.yaml", ["execute_security_test_task"])
-        self._assert_yaml_blocks_exactly("security_testing", "reviewer_agents.yaml", ["reviewer"])
+    def test_testing_subcrew_configs_are_canonical(self) -> None:
+        self._assert_yaml_blocks_exactly("testing", "executor_agents.yaml", ["executor"])
+        self._assert_yaml_blocks_exactly("testing", "executor_tasks.yaml", ["execute_security_test_task"])
+        self._assert_yaml_blocks_exactly("testing", "reviewer_agents.yaml", ["reviewer"])
         self._assert_yaml_blocks_exactly(
-            "security_testing",
+            "testing",
             "reviewer_tasks.yaml",
             ["review_security_test_evidence_task"],
         )
-        self._assert_yaml_blocks_exactly("security_testing", "reporter_agents.yaml", ["reporter"])
+        self._assert_yaml_blocks_exactly("testing", "reporter_agents.yaml", ["reporter"])
         self._assert_yaml_blocks_exactly(
-            "security_testing",
+            "testing",
             "reporter_tasks.yaml",
             ["write_executed_security_test_report_task"],
         )
