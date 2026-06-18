@@ -82,7 +82,7 @@ class KatanaDockerCrawlerTool:
                 "-silent",
             ],
             timeout=self.docker_timeout,
-            tty=True,
+            tty=False,
         )
         crawl = parse_katana_output(start_url, result.stdout)
         if result.exit_code != 0:

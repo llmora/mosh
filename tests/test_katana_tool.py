@@ -60,8 +60,16 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
         self.assertIn("-aff", args)
         self.assertEqual(args[args.index("-headless-options") + 1], "--disable-dev-shm-usage,--disable-gpu")
         self.assertEqual(runner.calls[0]["timeout"], 300)
-        self.assertTrue(runner.calls[0]["tty"])
+        self.assertFalse(runner.calls[0]["tty"])
         self.assertEqual(result.pages[0].url, "https://example.test/app")
+
+    def test_runs_katana_without_tty(self) -> None:
+        runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="", stderr=""))
+        tool = KatanaDockerCrawlerTool("discovery-tools:test", runner=runner)
+
+        tool.run("https://example.test", max_pages=5, max_depth=2)
+
+        self.assertIs(runner.calls[0]["tty"], False)
 
     def test_requested_depth_reaches_katana_command(self) -> None:
         runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="", stderr=""))
