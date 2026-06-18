@@ -206,6 +206,12 @@ Private chain-of-thought is not required. For now, use observable agent activity
 
 All observable activity must also be stored in JSON format as part of the output.
 
+CrewAI-backed stages must also persist LLM token usage to a stage-local
+`usage.json` when usage events are emitted. Asset discovery writes usage under
+the asset's discovery directory; evidence linking and planning write under the
+engagement `plan` directory; execution writes under `security-testing`; final
+reporting writes under the final reporting directory.
+
 ## Output
 
 Discovery output should be written under the asset selected for discovery:
@@ -219,6 +225,7 @@ Required outputs:
 - Markdown final report
 - JSON event log
 - JSON shared memory
+- JSON LLM usage, when CrewAI reports token usage
 
 The final report should summarize the discovery activities and findings.
 

@@ -17,6 +17,8 @@ from mosh.crews.security_planning.evidence_linker import (
 )
 from mosh.engagements import EngagementAsset
 from mosh.evidence_links import EvidenceLinkerToolContext, LiveEndpoint, SourceRoute
+from mosh.memory import FileMemory
+from tests.fakes import FakeRuntimeCrewAI
 
 
 class EvidenceLinkerCrewTests(unittest.TestCase):
@@ -31,6 +33,18 @@ class EvidenceLinkerCrewTests(unittest.TestCase):
         crew = crew_def.crew()
 
         self.assertTrue(crew.verbose)
+
+    def test_evidence_linker_crew_attaches_usage_event_listener_when_memory_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            crew_def = _build_planning_evidence_linker_crew(
+                FakeRuntimeCrewAI,
+                AppConfig(openrouter_api_key="test-key"),
+                EvidenceLinkerState(memory=FileMemory(Path(directory))),
+            )
+
+            crew = crew_def.crew()
+
+            self.assertEqual(len(crew.event_listeners), 1)
 
     def test_evidence_linker_agent_has_bounded_linkage_tools(self) -> None:
         crewai = _load_crewai()

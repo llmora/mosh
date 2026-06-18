@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 
 from mosh.config import AppConfig
 from mosh.crews.discovery.crew import CREW_CONFIG_PACKAGE, CrewAIUnavailable, _llm, _load_crewai
+from mosh.crews.events import MoshCrewAIEventListener
 from mosh.evidence_links import EvidenceLinkerToolContext, LiveEndpoint, SourceRoute
+from mosh.memory import FileMemory
 from mosh.scope import ScopePolicy
 
 
@@ -21,13 +23,15 @@ from mosh.scope import ScopePolicy
 class EvidenceLinkerState:
     context: dict[str, Any] = field(default_factory=dict)
     tool_context: EvidenceLinkerToolContext | None = None
+    memory: FileMemory | None = None
     candidates: dict[str, Any] | None = None
     observations: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CrewAIModelAssistedEvidenceLinker:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, memory: FileMemory | None = None) -> None:
         self.config = config
+        self.memory = memory
         model = config.models.security_planning.evidence_linker
         self.model_metadata = {
             "crew": "security_planning",
@@ -49,7 +53,7 @@ class CrewAIModelAssistedEvidenceLinker:
             raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
 
         crewai = _load_crewai()
-        state = EvidenceLinkerState(context=context, tool_context=tool_context)
+        state = EvidenceLinkerState(context=context, tool_context=tool_context, memory=self.memory)
         crew = _build_planning_evidence_linker_crew(crewai, self.config, state)
         crew.crew().kickoff(inputs={"link_context": json.dumps(context, sort_keys=True)})
         if state.candidates is None:
@@ -57,8 +61,11 @@ class CrewAIModelAssistedEvidenceLinker:
         return state.candidates
 
 
-def build_model_assisted_linker(config: AppConfig) -> CrewAIModelAssistedEvidenceLinker:
-    return CrewAIModelAssistedEvidenceLinker(config)
+def build_model_assisted_linker(
+    config: AppConfig,
+    memory: FileMemory | None = None,
+) -> CrewAIModelAssistedEvidenceLinker:
+    return CrewAIModelAssistedEvidenceLinker(config, memory=memory)
 
 
 def _build_planning_evidence_linker_crew(crewai: Any, config: AppConfig, state: EvidenceLinkerState):
@@ -99,12 +106,15 @@ def _build_planning_evidence_linker_crew(crewai: Any, config: AppConfig, state: 
 
         @crewai.crew
         def crew(self):
-            return crewai.Crew(
-                agents=[self.evidence_linker()],
-                tasks=[self.suggest_evidence_link_candidates_task()],
-                process=crewai.Process.sequential,
-                verbose=True,
-            )
+            kwargs = {
+                "agents": [self.evidence_linker()],
+                "tasks": [self.suggest_evidence_link_candidates_task()],
+                "process": crewai.Process.sequential,
+                "verbose": True,
+            }
+            if state.memory is not None:
+                kwargs["event_listeners"] = [MoshCrewAIEventListener(state.memory)]
+            return crewai.Crew(**kwargs)
 
     return EvidenceLinkerCrew()
 
