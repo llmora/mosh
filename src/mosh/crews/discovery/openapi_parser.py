@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+from urllib.parse import urljoin, urlparse
+
 from mosh.models import CrawledPage
 
 
@@ -63,9 +65,11 @@ def _extract_base_url(spec: dict, spec_url: str) -> str:
     if isinstance(servers, list) and servers:
         first = servers[0]
         if isinstance(first, dict) and first.get('url'):
-            url = first['url']
-            if url.startswith('http'):
+            url = str(first['url']).strip()
+            if url.startswith(('http://', 'https://')):
                 return url
+            if url:
+                return urljoin(spec_url, url)
     # Swagger 2.x
     host = spec.get('host', '')
     if host:
@@ -76,6 +80,5 @@ def _extract_base_url(spec: dict, spec_url: str) -> str:
         base_path = spec.get('basePath', '')
         return f"{scheme}://{host}{base_path}"
     # Fallback: derive from spec URL
-    from urllib.parse import urlparse
     parsed = urlparse(spec_url)
     return f"{parsed.scheme}://{parsed.netloc}"

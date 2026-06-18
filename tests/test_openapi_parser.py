@@ -72,6 +72,23 @@ class ParseOpenApiSpecTests(unittest.TestCase):
         self.assertIn("PUT /orders", titles)
         self.assertIn("HEAD /health", titles)
 
+    def test_openapi_3_relative_server_returns_pages_under_resolved_base_path(self):
+        spec = {
+            "openapi": "3.0.1",
+            "servers": [{"url": "/api"}],
+            "paths": {
+                "/users": {
+                    "get": {"summary": "List users"},
+                },
+            },
+        }
+
+        pages = parse_openapi_spec("https://app.example.test/docs/openapi.json", json.dumps(spec))
+
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0].url, "https://app.example.test/api/users")
+        self.assertEqual(pages[0].title, "GET /users")
+
     def test_non_json_returns_empty_list(self):
         self.assertEqual(parse_openapi_spec("http://x/y", "<html>not json</html>"), [])
         self.assertEqual(parse_openapi_spec("http://x/y", None), [])
@@ -154,13 +171,12 @@ class ExtractBaseUrlTests(unittest.TestCase):
         base = _extract_base_url({}, "https://fallback.example.com/docs/json?x=1")
         self.assertEqual(base, "https://fallback.example.com")
 
-    def test_servers_relative_url_falls_through_to_fallback(self):
-        # A relative server url (not starting with http) should not be used
+    def test_servers_relative_url_resolves_against_spec_url(self):
         base = _extract_base_url(
             {"servers": [{"url": "/api"}]},
             "https://fallback.example.com/spec",
         )
-        self.assertEqual(base, "https://fallback.example.com")
+        self.assertEqual(base, "https://fallback.example.com/api")
 
 
 if __name__ == "__main__":
