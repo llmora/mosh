@@ -1582,18 +1582,65 @@ def _build_run_security_command_tool(crewai: Any, config: AppConfig, state: Secu
 
 def _build_submit_execution_evidence_tool(crewai: Any, state: SecurityTestExecutionState):
     class EvidenceInput(crewai.BaseModel):
-        evidence: dict[str, Any] | str = crewai.Field(
+        status: str = crewai.Field(
             ...,
-            description="Structured execution evidence, commands run, observations, status, and provisional result.",
+            description="Execution status: finding, no-finding, inconclusive, or failed.",
         )
+        hypothesis_validated: bool | str | None = crewai.Field(None, description="Whether the original hypothesis was validated.")
+        original_hypothesis_result: str | None = crewai.Field(None, description="Explanation of the original hypothesis result.")
+        summary: str | None = crewai.Field(None, description="Short execution summary.")
+        observations: Any = crewai.Field(None, description="Evidence observations from tools and responses.")
+        source_evidence: Any = crewai.Field(None, description="Concrete source evidence references.")
+        live_evidence: Any = crewai.Field(None, description="Concrete live target evidence.")
+        correlation: Any = crewai.Field(None, description="Source/live correlation for combined tests.")
+        discovery_updates: Any = crewai.Field(None, description="New discovery facts learned during testing.")
+        artifacts: Any = crewai.Field(None, description="Useful generated outputs.")
+        residual_findings: Any = crewai.Field(None, description="Separate adjacent findings.")
+        finding: Any = crewai.Field(None, description="Validated vulnerability finding object, if any.")
+        result: str | None = crewai.Field(None, description="Supported conclusion.")
+        safety_notes: str | None = crewai.Field(None, description="Safety limits followed.")
+        follow_up: Any = crewai.Field(None, description="Remaining work, if any.")
 
     class SubmitExecutionEvidenceTool(crewai.BaseTool):
         name: str = "submit_security_test_evidence"
         description: str = "Submit structured evidence from the security test execution."
         args_schema: type[crewai.BaseModel] = EvidenceInput
 
-        def _run(self, evidence: Any) -> str:
-            content = _coerce_mapping(evidence)
+        def _run(
+            self,
+            status: str,
+            hypothesis_validated: Any = None,
+            original_hypothesis_result: str | None = None,
+            summary: str | None = None,
+            observations: Any = None,
+            source_evidence: Any = None,
+            live_evidence: Any = None,
+            correlation: Any = None,
+            discovery_updates: Any = None,
+            artifacts: Any = None,
+            residual_findings: Any = None,
+            finding: Any = None,
+            result: str | None = None,
+            safety_notes: str | None = None,
+            follow_up: Any = None,
+        ) -> str:
+            content = _coerce_execution_submission_fields(
+                status=status,
+                hypothesis_validated=hypothesis_validated,
+                original_hypothesis_result=original_hypothesis_result,
+                summary=summary,
+                observations=observations,
+                source_evidence=source_evidence,
+                live_evidence=live_evidence,
+                correlation=correlation,
+                discovery_updates=discovery_updates,
+                artifacts=artifacts,
+                residual_findings=residual_findings,
+                finding=finding,
+                result=result,
+                safety_notes=safety_notes,
+                follow_up=follow_up,
+            )
             content.setdefault("commands", state.commands)
             content.setdefault("source_reads", state.source_reads)
             content.setdefault("source_searches", state.source_searches)
@@ -2736,6 +2783,24 @@ def _coerce_mapping(value: Any | None) -> dict[str, Any]:
             return {"content": value}
         return parsed if isinstance(parsed, dict) else {"content": parsed}
     return {"content": value}
+
+
+def _coerce_execution_submission_fields(**fields: Any) -> dict[str, Any]:
+    return {key: _coerce_json_value(value) for key, value in fields.items() if value is not None}
+
+
+def _coerce_json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return ""
+    if not (text.startswith("{") or text.startswith("[") or text in {"true", "false", "null"}):
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
 
 
 def _markdown_value(value: Any) -> str:

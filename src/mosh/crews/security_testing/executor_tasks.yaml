@@ -60,8 +60,8 @@ execute_security_test_task:
     attempt production URLs just to confirm they are blocked when an alternative
     target is available.
 
-    You must call submit_security_test_evidence exactly once with a structured
-    object containing:
+    You must call submit_security_test_evidence exactly once with top-level tool
+    arguments. Do not wrap these fields inside an evidence object. Submit:
     - status: finding, no-finding, inconclusive, or failed
     - hypothesis_validated: true, false, or partial for the original planned
       hypothesis, independent of adjacent hardening observations

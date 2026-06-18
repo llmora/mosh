@@ -544,3 +544,4 @@ At minimum, tests should cover:
 * We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
 * We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
 * As targets grow, we will run out of context very quickly during planning phase - check if planning can be done per asset + links, and what is the difference in output.
+* Incorporate OWASP testing guide
