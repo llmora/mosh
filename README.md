@@ -50,11 +50,13 @@ uv run mosh engagement attach eng_a1b2c3d4 https://app.example.com
 uv run mosh discover eng_a1b2c3d4
 ```
 
-You can also activate the environment manually:
+All command examples in this README use `uv run mosh` so they work without activating the virtual environment. If you prefer to activate the environment manually, run:
 
 ```bash
 source .venv/bin/activate
 ```
+
+After activation, you can omit `uv run` and use `mosh ...`.
 
 ## Configuration
 
@@ -141,13 +143,13 @@ An engagement is the top-level assessment container. Assets are the components t
 You do not need to provide all of these, e.g. `mosh` works with just a single asset - but providing more assets allows better security hypotheses to be created and tested, leading to more effective vulnerability identification.
 
 ```bash
-$ mosh engagement create --title "Example App"
+$ uv run mosh engagement create --title "Example App"
 Engagement created: eng_a1b2c3d4
 
-$ mosh engagement attach eng_a1b2c3d4 https://app.example.com
+$ uv run mosh engagement attach eng_a1b2c3d4 https://app.example.com
 Attached: asset_live_1 (live_url)
 
-$ mosh engagement attach eng_a1b2c3d4 /path/to/repo
+$ uv run mosh engagement attach eng_a1b2c3d4 /path/to/repo
 Attached: asset_source_1 (source_tree)
 ```
 
@@ -158,13 +160,13 @@ Attached: asset_source_1 (source_tree)
 Run discovery for every attached asset that does not already have discovery output:
 
 ```bash
-mosh discover eng_a1b2c3d4
+uv run mosh discover eng_a1b2c3d4
 ```
 
 You can optionally specify an asset to discover, instead of running discovery on all assets:
 
 ```bash
-mosh discover eng_a1b2c3d4 --asset asset_live_1
+uv run mosh discover eng_a1b2c3d4 --asset asset_live_1
 ```
 
 Discovery writes the result of the discovery of each asset in a markdown report:
@@ -178,7 +180,7 @@ report/<engagement-id>/assets/<asset-id>/discovery/report.md
 After all the assets have been discovered, the planning phase performs the key task of understanding the application, its key business risks and then produces a list of testable hypothesis that, if confirmed, would confirm a major flaw in the application:
 
 ```bash
-mosh plan eng_a1b2c3d4
+uv run mosh plan eng_a1b2c3d4
 ```
 
 This writes the engagement security plan under:
@@ -213,14 +215,14 @@ The testing crew treats this file as execution configuration.
 When the plan and engagement file are ready, run:
 
 ```bash
-mosh test eng_a1b2c3d4
+uv run mosh test eng_a1b2c3d4
 ```
 
 Temporary targeted execution for testing the tester is available with a
 hypothesis ID from `plan/plan.md`:
 
 ```bash
-mosh test eng_a1b2c3d4 --hypothesis AUTH-001
+uv run mosh test eng_a1b2c3d4 --hypothesis AUTH-001
 ```
 
 Repeat `--hypothesis` or pass comma-separated IDs to run a small subset.
@@ -261,7 +263,7 @@ Open `preflight.md` after the first run. It tells you which tests were ready, wh
 You can run security testing repeatedly to incrementally complete the test:
 
 ```bash
-mosh test eng_a1b2c3d4
+uv run mosh test eng_a1b2c3d4
 ```
 
 If you fill in missing information in `engagement_template.yaml` and run the command again, previously blocked tests will become ready and be executed.
@@ -275,7 +277,7 @@ This self-learning feedback loop ensures that all the information discovered dur
 When security testing is complete, create the customer-facing engagement report:
 
 ```bash
-mosh report eng_a1b2c3d4
+uv run mosh report eng_a1b2c3d4
 ```
 
 Final reporting writes:
@@ -303,20 +305,20 @@ Qualitative severity is taken from hypotheses results and put in the context of 
 ## End-To-End Example
 
 ```bash
-mosh engagement create --title "Example App"
-mosh engagement attach eng_a1b2c3d4 https://app.example.com
-mosh engagement attach eng_a1b2c3d4 /path/to/repo
-mosh discover eng_a1b2c3d4
-mosh plan eng_a1b2c3d4
+uv run mosh engagement create --title "Example App"
+uv run mosh engagement attach eng_a1b2c3d4 https://app.example.com
+uv run mosh engagement attach eng_a1b2c3d4 /path/to/repo
+uv run mosh discover eng_a1b2c3d4
+uv run mosh plan eng_a1b2c3d4
 
 # Review and edit report/eng_a1b2c3d4/engagement_template.yaml.
 
-mosh test eng_a1b2c3d4
+uv run mosh test eng_a1b2c3d4
 
 # If the CLI reports blocked tests, add the missing engagement details and run it again.
-mosh test eng_a1b2c3d4
+uv run mosh test eng_a1b2c3d4
 
-mosh report eng_a1b2c3d4
+uv run mosh report eng_a1b2c3d4
 ```
 
 ## What you get
@@ -354,7 +356,7 @@ A practical remediation loop looks like this:
 4. Run security testing again:
 
 ```bash
-mosh test eng_a1b2c3d4
+uv run mosh test eng_a1b2c3d4
 ```
 
 `mosh` compares the current plan and execution metadata with previous reports. Tests that are already current and accepted are skipped, while tests that need fresh evidence can run again. This makes repeat testing useful after a fix: you keep the historical reports, but the current run shows whether the issue still reproduces.
@@ -362,9 +364,9 @@ mosh test eng_a1b2c3d4
 If a fix changes the application surface, run discovery and planning again before retesting:
 
 ```bash
-mosh discover eng_a1b2c3d4 --refresh
-mosh plan eng_a1b2c3d4
-mosh test eng_a1b2c3d4
+uv run mosh discover eng_a1b2c3d4 --refresh
+uv run mosh plan eng_a1b2c3d4
+uv run mosh test eng_a1b2c3d4
 ```
 
 Keep the engagement file up to date as the application changes. New roles, test accounts, safe test data, or staging mappings can unblock additional tests and give `mosh` enough context to validate more of the application.
