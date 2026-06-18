@@ -315,27 +315,35 @@ def _run_one_security_test(
                 "executor",
             )
         reviewer_crew = _build_reviewer_crew(crewai, config, state)
-        _kickoff_capturing_tool_state(
-            reviewer_crew,
-            state,
-            agent_name="reviewer",
-            task_name="review_security_test_evidence_task",
-            captured=lambda: state.review is not None,
-            inputs={
-                "target_url": target_url,
-                "test_id": test_id,
-                "revision": revision,
-                "max_attempts": max_attempts,
-                "hypothesis": json.dumps(hypothesis, sort_keys=True),
-                "targets": json.dumps(targets, sort_keys=True),
-                "evidence": json.dumps(state.evidence or {}, sort_keys=True),
-            },
-        )
+        try:
+            _kickoff_capturing_tool_state(
+                reviewer_crew,
+                state,
+                agent_name="reviewer",
+                task_name="review_security_test_evidence_task",
+                captured=lambda: state.review is not None,
+                inputs={
+                    "target_url": target_url,
+                    "test_id": test_id,
+                    "revision": revision,
+                    "max_attempts": max_attempts,
+                    "hypothesis": json.dumps(hypothesis, sort_keys=True),
+                    "targets": json.dumps(targets, sort_keys=True),
+                    "evidence": json.dumps(state.evidence or {}, sort_keys=True),
+                },
+            )
+        except Exception as exc:
+            state.memory.record_event(
+                "reviewer",
+                "crew_failure",
+                "Reviewer crew failed; proceeding with default review to preserve partial results",
+                {"error": str(exc), "error_type": type(exc).__name__, "test_id": test_id},
+            )
         if state.review is None:
             state.review = {
                 "accepted": False,
-                "summary": "Reviewer did not submit a review.",
-                "requested_changes": ["Submit a structured review."],
+                "summary": "Reviewer unavailable due to crew failure.",
+                "requested_changes": ["Re-run when LLM is available."],
             }
         _apply_review_artifact_decisions(state.artifacts, state.review)
         _record_execution_attempt(state, command_start)
@@ -350,8 +358,9 @@ def _run_one_security_test(
         "security_test_coordinator",
     )
     reporter_crew = _build_reporter_crew(crewai, config, state)
-    _kickoff_capturing_tool_state(
-        reporter_crew,
+    try:
+        _kickoff_capturing_tool_state(
+            reporter_crew,
         state,
         agent_name="reporter",
         task_name="write_executed_security_test_report_task",
@@ -367,6 +376,13 @@ def _run_one_security_test(
             "execution_bundle": json.dumps(execution_bundle, sort_keys=True),
         },
     )
+    except Exception as exc:
+        memory.record_event(
+            "reporter",
+            "crew_failure",
+            "Reporter crew failed; fallback will write partial report",
+            {"error": str(exc), "error_type": type(exc).__name__, "test_id": test_id},
+        )
     if not state.report_written:
         markdown = render_executed_test_report(
             target_url=target_url,
