@@ -15,9 +15,6 @@ mosh = "mosh.cli:main"
 [dependency-groups]
 dev = ["pydantic>=2.0"]
 
-[dependency-groups]
-dev = ["pydantic>=2.0"]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["mosh*"]
