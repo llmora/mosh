@@ -18,7 +18,7 @@ draft_security_test_plan_task:
     For engagement-backed planning, review all detailed asset-scoped evidence in
     asset_evidence.live[].discovery and asset_evidence.source[].discovery, and
     use correlation.evidence_links as source/live linkage input. The top-level
-    live_discovery and source_discovery entries may be compact availability
+    discovery_live and discovery_source entries may be compact availability
     markers; do not stop there when asset_evidence is present. Deterministic
     links are stronger than model-assisted candidates, but candidate links may
     still justify combined hypotheses when the rationale is concrete and useful
@@ -129,12 +129,12 @@ draft_security_test_plan_task:
       a deployment, emulator, simulator, external service, explicit budget, or
       owner authorization that is not available
 
-    If source_discovery is present in the assessment evidence bundle, use its
+    If discovery_source is present in the assessment evidence bundle, use its
     source_index, route records, component_map, gap_analysis, and evidence_refs
     to populate affected_source and evidence_sources. In engagement-backed
     planning, these source details may live under
     asset_evidence.source[].discovery.source_index instead of the top-level
-    source_discovery marker. If live_discovery is absent, do not invent runtime
+    discovery_source marker. If discovery_live is absent, do not invent runtime
     reachability; use source or deferred modes.
     When source is available, do not defer work solely because it requires
     source inspection, bounded source search, manual grep, source route
@@ -145,7 +145,7 @@ draft_security_test_plan_task:
     hypotheses when bounded source tools can resolve them.
     In source-only planning, endpoint-shaped source routes are code evidence,
     not proof that a live endpoint is reachable. Do not make curl, browser, or
-    live HTTP probing an immediate test step unless live_discovery is present or
+    live HTTP probing an immediate test step unless discovery_live is present or
     the discovery evidence includes an explicit local/runtime target. Instead,
     source-mode tests should inspect route registration, middleware,
     authorization guards, validation, configuration, dependencies, and existing

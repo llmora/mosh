@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import (
+from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
@@ -15,22 +15,22 @@ from mosh.crews.discovery.crew import (
     _load_crewai,
 )
 from mosh.crews.events import MoshCrewAIEventListener
-from mosh.crews.source_discovery.agents import (
+from mosh.crews.discovery_source.agents import (
     DependencyConfigAgent,
-    SourceDiscoveryReporterAgent,
+    DiscoverySourceReporterAgent,
     SourceIntakeAgent,
     SourceMapperAgent,
-    build_source_discovery_agents,
-    source_discovery_agent_definitions,
+    build_discovery_source_agents,
+    discovery_source_agent_definitions,
 )
-from mosh.crews.source_discovery.reporting import write_source_discovery_report
-from mosh.crews.source_discovery.tools import build_source_index
+from mosh.crews.discovery_source.reporting import write_discovery_source_report
+from mosh.crews.discovery_source.tools import build_source_index
 from mosh.memory import FileMemory
 from mosh.models import Event
 
 
 @dataclass
-class SourceDiscoveryCrewState:
+class DiscoverySourceCrewState:
     source: str
     report_dir: Path
     memory: FileMemory
@@ -48,38 +48,38 @@ class SourceDiscoveryCrewState:
 
 
 @dataclass(frozen=True)
-class SourceDiscoveryCrewResult:
+class DiscoverySourceCrewResult:
     source_index: dict[str, Any]
     summary: dict[str, Any]
 
 
-class SourceDiscoveryCrewRunner(Protocol):
-    def run(self, source: str, report_dir: Path, memory: FileMemory) -> SourceDiscoveryCrewResult:
+class DiscoverySourceCrewRunner(Protocol):
+    def run(self, source: str, report_dir: Path, memory: FileMemory) -> DiscoverySourceCrewResult:
         pass
 
 
-class CrewAISourceDiscoveryCrewRunner:
+class CrewAIDiscoverySourceCrewRunner:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def run(self, source: str, report_dir: Path, memory: FileMemory) -> SourceDiscoveryCrewResult:
+    def run(self, source: str, report_dir: Path, memory: FileMemory) -> DiscoverySourceCrewResult:
         missing_keys = self.config.missing_llm_api_keys_for_models(
             [
-                self.config.models.source_discovery.intake,
-                self.config.models.source_discovery.mapper,
-                self.config.models.source_discovery.route_resolver,
-                self.config.models.source_discovery.dependency_config,
-                self.config.models.source_discovery.component_mapper,
-                self.config.models.source_discovery.gap_analyst,
-                self.config.models.source_discovery.reporter,
+                self.config.models.discovery_source.intake,
+                self.config.models.discovery_source.mapper,
+                self.config.models.discovery_source.route_resolver,
+                self.config.models.discovery_source.dependency_config,
+                self.config.models.discovery_source.component_mapper,
+                self.config.models.discovery_source.gap_analyst,
+                self.config.models.discovery_source.reporter,
             ]
         )
         if missing_keys:
             raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
 
         crewai = _load_crewai()
-        state = SourceDiscoveryCrewState(source=source, report_dir=report_dir, memory=memory)
-        agents = build_source_discovery_agents(self.config)
+        state = DiscoverySourceCrewState(source=source, report_dir=report_dir, memory=memory)
+        agents = build_discovery_source_agents(self.config)
 
         memory.record_event(
             "orchestrator",
@@ -87,7 +87,7 @@ class CrewAISourceDiscoveryCrewRunner:
             "Starting CrewAI source discovery crew",
             {"source": source},
         )
-        crew = _build_yaml_source_discovery_crew(
+        crew = _build_yaml_discovery_source_crew(
             crewai=crewai,
             config=self.config,
             state=state,
@@ -108,29 +108,29 @@ class CrewAISourceDiscoveryCrewRunner:
             "CrewAI source discovery crew completed",
             {"source": source},
         )
-        return SourceDiscoveryCrewResult(source_index=state.source_index, summary=state.summary or {})
+        return DiscoverySourceCrewResult(source_index=state.source_index, summary=state.summary or {})
 
 
-def build_source_discovery_crew_runner(config: AppConfig) -> SourceDiscoveryCrewRunner:
-    return CrewAISourceDiscoveryCrewRunner(config)
+def build_discovery_source_crew_runner(config: AppConfig) -> DiscoverySourceCrewRunner:
+    return CrewAIDiscoverySourceCrewRunner(config)
 
 
-class SourceDiscoveryOrchestrator:
+class DiscoverySourceOrchestrator:
     def __init__(
         self,
         config: AppConfig,
         output_root: Path = Path("report"),
         event_sink: Callable[[Event], None] | None = None,
-        crew_runner: SourceDiscoveryCrewRunner | None = None,
+        crew_runner: DiscoverySourceCrewRunner | None = None,
     ) -> None:
         self.config = config
         self.output_root = output_root
         self.event_sink = event_sink
-        self.crew_runner = crew_runner or build_source_discovery_crew_runner(config)
+        self.crew_runner = crew_runner or build_discovery_source_crew_runner(config)
 
     def run(self, source: str, *, report_dir: Path) -> Path:
         memory = FileMemory(report_dir, event_sink=self.event_sink)
-        agent_definitions = source_discovery_agent_definitions(self.config)
+        agent_definitions = discovery_source_agent_definitions(self.config)
         memory.record_event(
             "orchestrator",
             "start",
@@ -150,15 +150,15 @@ class SourceDiscoveryOrchestrator:
         return report_dir
 
 
-def _build_yaml_source_discovery_crew(
+def _build_yaml_discovery_source_crew(
     *,
     crewai: Any,
     config: AppConfig,
-    state: SourceDiscoveryCrewState,
+    state: DiscoverySourceCrewState,
     intake_agent: SourceIntakeAgent,
     mapper_agent: SourceMapperAgent,
     dependency_config_agent: DependencyConfigAgent,
-    reporter_agent: SourceDiscoveryReporterAgent,
+    reporter_agent: DiscoverySourceReporterAgent,
 ):
     validate_tool = _build_validate_source_path_tool(crewai, state, intake_agent)
     inventory_tool = _build_source_inventory_tool(crewai, state, mapper_agent)
@@ -176,15 +176,15 @@ def _build_yaml_source_discovery_crew(
     route_resolution_tool = _build_submit_route_resolution_tool(crewai, state)
     dependency_tool = _build_dependency_inventory_tool(crewai, state, dependency_config_agent)
     config_tool = _build_config_inventory_tool(crewai, state, dependency_config_agent)
-    context_tool = _build_source_discovery_context_tool(crewai, state)
+    context_tool = _build_discovery_source_context_tool(crewai, state)
     component_map_tool = _build_submit_source_component_map_tool(crewai, state)
     gap_analysis_tool = _build_submit_source_gap_analysis_tool(crewai, state)
-    report_tool = _build_write_source_discovery_report_tool(crewai, state, reporter_agent)
-    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/agents.yaml"))
-    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/tasks.yaml"))
+    report_tool = _build_write_discovery_source_report_tool(crewai, state, reporter_agent)
+    agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_source/agents.yaml"))
+    tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_source/tasks.yaml"))
 
     @crewai.CrewBase
-    class SourceDiscoveryCrew:
+    class DiscoverySourceCrew:
         agents_config = agents_path
         tasks_config = tasks_path
 
@@ -192,7 +192,7 @@ def _build_yaml_source_discovery_crew(
         def source_intake(self):
             return crewai.Agent(
                 config=self.agents_config["source_intake"],
-                llm=_llm(crewai, config, config.models.source_discovery.intake),
+                llm=_llm(crewai, config, config.models.discovery_source.intake),
                 tools=[validate_tool],
                 allow_delegation=False,
             )
@@ -201,7 +201,7 @@ def _build_yaml_source_discovery_crew(
         def source_mapper(self):
             return crewai.Agent(
                 config=self.agents_config["source_mapper"],
-                llm=_llm(crewai, config, config.models.source_discovery.mapper),
+                llm=_llm(crewai, config, config.models.discovery_source.mapper),
                 tools=[inventory_tool, route_tool, search_tool, read_slice_tool],
                 allow_delegation=False,
             )
@@ -210,7 +210,7 @@ def _build_yaml_source_discovery_crew(
         def dependency_config(self):
             return crewai.Agent(
                 config=self.agents_config["dependency_config"],
-                llm=_llm(crewai, config, config.models.source_discovery.dependency_config),
+                llm=_llm(crewai, config, config.models.discovery_source.dependency_config),
                 tools=[dependency_tool, config_tool],
                 allow_delegation=False,
             )
@@ -219,7 +219,7 @@ def _build_yaml_source_discovery_crew(
         def source_route_resolver(self):
             return crewai.Agent(
                 config=self.agents_config["source_route_resolver"],
-                llm=_llm(crewai, config, config.models.source_discovery.route_resolver),
+                llm=_llm(crewai, config, config.models.discovery_source.route_resolver),
                 tools=[route_context_tool, route_search_tool, route_read_slice_tool, route_resolution_tool],
                 allow_delegation=False,
             )
@@ -228,7 +228,7 @@ def _build_yaml_source_discovery_crew(
         def source_component_mapper(self):
             return crewai.Agent(
                 config=self.agents_config["source_component_mapper"],
-                llm=_llm(crewai, config, config.models.source_discovery.component_mapper),
+                llm=_llm(crewai, config, config.models.discovery_source.component_mapper),
                 tools=[context_tool, component_map_tool],
                 allow_delegation=False,
             )
@@ -237,7 +237,7 @@ def _build_yaml_source_discovery_crew(
         def source_gap_analyst(self):
             return crewai.Agent(
                 config=self.agents_config["source_gap_analyst"],
-                llm=_llm(crewai, config, config.models.source_discovery.gap_analyst),
+                llm=_llm(crewai, config, config.models.discovery_source.gap_analyst),
                 tools=[context_tool, gap_analysis_tool],
                 allow_delegation=False,
             )
@@ -246,7 +246,7 @@ def _build_yaml_source_discovery_crew(
         def reporter(self):
             return crewai.Agent(
                 config=self.agents_config["reporter"],
-                llm=_llm(crewai, config, config.models.source_discovery.reporter),
+                llm=_llm(crewai, config, config.models.discovery_source.reporter),
                 tools=[report_tool],
                 allow_delegation=False,
             )
@@ -307,25 +307,25 @@ def _build_yaml_source_discovery_crew(
             )
 
         @crewai.task
-        def analyze_source_discovery_gaps_task(self):
+        def analyze_discovery_source_gaps_task(self):
             return _build_task_with_output_event(
                 crewai,
                 state,
-                config=self.tasks_config["analyze_source_discovery_gaps_task"],
+                config=self.tasks_config["analyze_discovery_source_gaps_task"],
                 agent=self.source_gap_analyst(),
                 agent_name="source_gap_analyst",
-                task_name="analyze_source_discovery_gaps_task",
+                task_name="analyze_discovery_source_gaps_task",
             )
 
         @crewai.task
-        def write_source_discovery_report_task(self):
+        def write_discovery_source_report_task(self):
             return _build_task_with_output_event(
                 crewai,
                 state,
-                config=self.tasks_config["write_source_discovery_report_task"],
+                config=self.tasks_config["write_discovery_source_report_task"],
                 agent=self.reporter(),
                 agent_name="reporter",
-                task_name="write_source_discovery_report_task",
+                task_name="write_discovery_source_report_task",
             )
 
         @crewai.crew
@@ -346,18 +346,18 @@ def _build_yaml_source_discovery_crew(
                     self.resolve_source_routes_task(),
                     self.inspect_dependency_config_task(),
                     self.map_source_components_task(),
-                    self.analyze_source_discovery_gaps_task(),
-                    self.write_source_discovery_report_task(),
+                    self.analyze_discovery_source_gaps_task(),
+                    self.write_discovery_source_report_task(),
                 ],
                 process=crewai.Process.sequential,
                 verbose=True,
                 event_listeners=[MoshCrewAIEventListener(state.memory)],
             )
 
-    return SourceDiscoveryCrew()
+    return DiscoverySourceCrew()
 
 
-def _build_validate_source_path_tool(crewai: Any, state: SourceDiscoveryCrewState, agent: SourceIntakeAgent):
+def _build_validate_source_path_tool(crewai: Any, state: DiscoverySourceCrewState, agent: SourceIntakeAgent):
     class ValidateSourcePathInput(crewai.BaseModel):
         source: str = crewai.Field(..., description="Local filesystem path to the source tree.")
 
@@ -374,7 +374,7 @@ def _build_validate_source_path_tool(crewai: Any, state: SourceDiscoveryCrewStat
     return ValidateSourcePathCrewTool()
 
 
-def _build_source_inventory_tool(crewai: Any, state: SourceDiscoveryCrewState, agent: SourceMapperAgent):
+def _build_source_inventory_tool(crewai: Any, state: DiscoverySourceCrewState, agent: SourceMapperAgent):
     class SourceInventoryInput(crewai.BaseModel):
         source: str = crewai.Field(..., description="Local filesystem path to inventory.")
 
@@ -391,7 +391,7 @@ def _build_source_inventory_tool(crewai: Any, state: SourceDiscoveryCrewState, a
     return SourceInventoryCrewTool()
 
 
-def _build_route_api_extractor_tool(crewai: Any, state: SourceDiscoveryCrewState, agent: SourceMapperAgent):
+def _build_route_api_extractor_tool(crewai: Any, state: DiscoverySourceCrewState, agent: SourceMapperAgent):
     class RouteApiExtractorInput(crewai.BaseModel):
         source: str = crewai.Field(..., description="Local filesystem path to inspect for route definitions.")
 
@@ -410,7 +410,7 @@ def _build_route_api_extractor_tool(crewai: Any, state: SourceDiscoveryCrewState
 
 def _build_source_search_tool(
     crewai: Any,
-    state: SourceDiscoveryCrewState,
+    state: DiscoverySourceCrewState,
     agent: SourceMapperAgent,
     agent_name: str = "source_mapper",
 ):
@@ -440,7 +440,7 @@ def _build_source_search_tool(
 
 def _build_read_source_slice_tool(
     crewai: Any,
-    state: SourceDiscoveryCrewState,
+    state: DiscoverySourceCrewState,
     agent: SourceMapperAgent,
     agent_name: str = "source_mapper",
 ):
@@ -468,7 +468,7 @@ def _build_read_source_slice_tool(
     return ReadSourceSliceCrewTool()
 
 
-def _build_dependency_inventory_tool(crewai: Any, state: SourceDiscoveryCrewState, agent: DependencyConfigAgent):
+def _build_dependency_inventory_tool(crewai: Any, state: DiscoverySourceCrewState, agent: DependencyConfigAgent):
     class DependencyInventoryInput(crewai.BaseModel):
         source: str = crewai.Field(..., description="Local filesystem path to inspect for manifests.")
 
@@ -491,7 +491,7 @@ def _build_dependency_inventory_tool(crewai: Any, state: SourceDiscoveryCrewStat
     return DependencyInventoryCrewTool()
 
 
-def _build_config_inventory_tool(crewai: Any, state: SourceDiscoveryCrewState, agent: DependencyConfigAgent):
+def _build_config_inventory_tool(crewai: Any, state: DiscoverySourceCrewState, agent: DependencyConfigAgent):
     class ConfigInventoryInput(crewai.BaseModel):
         source: str = crewai.Field(..., description="Local filesystem path to inspect for configuration.")
 
@@ -508,7 +508,7 @@ def _build_config_inventory_tool(crewai: Any, state: SourceDiscoveryCrewState, a
     return ConfigInventoryCrewTool()
 
 
-def _build_route_resolution_context_tool(crewai: Any, state: SourceDiscoveryCrewState):
+def _build_route_resolution_context_tool(crewai: Any, state: DiscoverySourceCrewState):
     class RouteResolutionContextInput(crewai.BaseModel):
         include_entrypoints: bool = crewai.Field(
             True,
@@ -539,7 +539,7 @@ def _build_route_resolution_context_tool(crewai: Any, state: SourceDiscoveryCrew
     return RouteResolutionContextCrewTool()
 
 
-def _build_submit_route_resolution_tool(crewai: Any, state: SourceDiscoveryCrewState):
+def _build_submit_route_resolution_tool(crewai: Any, state: DiscoverySourceCrewState):
     class RouteResolutionInput(crewai.BaseModel):
         route_resolution: dict[str, Any] | str = crewai.Field(
             ...,
@@ -575,25 +575,25 @@ def _build_submit_route_resolution_tool(crewai: Any, state: SourceDiscoveryCrewS
     return SubmitRouteResolutionCrewTool()
 
 
-def _build_source_discovery_context_tool(crewai: Any, state: SourceDiscoveryCrewState):
-    class SourceDiscoveryContextInput(crewai.BaseModel):
+def _build_discovery_source_context_tool(crewai: Any, state: DiscoverySourceCrewState):
+    class DiscoverySourceContextInput(crewai.BaseModel):
         include_component_map: bool = crewai.Field(
             True,
             description="Include the submitted component map when one is available.",
         )
 
-    class SourceDiscoveryContextCrewTool(crewai.BaseTool):
-        name: str = "get_source_discovery_context"
+    class DiscoverySourceContextCrewTool(crewai.BaseTool):
+        name: str = "get_discovery_source_context"
         description: str = "Return compact deterministic source discovery context for model-assisted analysis."
-        args_schema: type[crewai.BaseModel] = SourceDiscoveryContextInput
+        args_schema: type[crewai.BaseModel] = DiscoverySourceContextInput
 
         def _run(self, include_component_map: bool = True) -> str:
             source_index = _deterministic_source_index(state)
-            context = _compact_source_discovery_context(source_index)
+            context = _compact_discovery_source_context(source_index)
             if include_component_map and state.component_map:
                 context["component_map"] = state.component_map
             state.memory.record_event(
-                "source_discovery_context",
+                "discovery_source_context",
                 "tool_result",
                 "Provided compact source discovery context",
                 {
@@ -604,10 +604,10 @@ def _build_source_discovery_context_tool(crewai: Any, state: SourceDiscoveryCrew
             )
             return json.dumps(context, sort_keys=True)
 
-    return SourceDiscoveryContextCrewTool()
+    return DiscoverySourceContextCrewTool()
 
 
-def _build_submit_source_component_map_tool(crewai: Any, state: SourceDiscoveryCrewState):
+def _build_submit_source_component_map_tool(crewai: Any, state: DiscoverySourceCrewState):
     class SourceComponentMapInput(crewai.BaseModel):
         component_map: dict[str, Any] | str = crewai.Field(
             ...,
@@ -639,7 +639,7 @@ def _build_submit_source_component_map_tool(crewai: Any, state: SourceDiscoveryC
     return SubmitSourceComponentMapCrewTool()
 
 
-def _build_submit_source_gap_analysis_tool(crewai: Any, state: SourceDiscoveryCrewState):
+def _build_submit_source_gap_analysis_tool(crewai: Any, state: DiscoverySourceCrewState):
     class SourceGapAnalysisInput(crewai.BaseModel):
         gap_analysis: dict[str, Any] | str = crewai.Field(
             ...,
@@ -671,10 +671,10 @@ def _build_submit_source_gap_analysis_tool(crewai: Any, state: SourceDiscoveryCr
     return SubmitSourceGapAnalysisCrewTool()
 
 
-def _build_write_source_discovery_report_tool(
+def _build_write_discovery_source_report_tool(
     crewai: Any,
-    state: SourceDiscoveryCrewState,
-    agent: SourceDiscoveryReporterAgent,
+    state: DiscoverySourceCrewState,
+    agent: DiscoverySourceReporterAgent,
 ):
     class ReportInput(crewai.BaseModel):
         report: dict[str, Any] | str = crewai.Field(
@@ -682,8 +682,8 @@ def _build_write_source_discovery_report_tool(
             description="Structured source discovery report content. Prefer a JSON object.",
         )
 
-    class WriteSourceDiscoveryReportCrewTool(crewai.BaseTool):
-        name: str = "write_source_discovery_report"
+    class WriteDiscoverySourceReportCrewTool(crewai.BaseTool):
+        name: str = "write_discovery_source_report"
         description: str = "Persist source discovery as a stable Markdown report."
         args_schema: type[crewai.BaseModel] = ReportInput
 
@@ -719,7 +719,7 @@ def _build_write_source_discovery_report_tool(
                 gap_analysis=state.gap_analysis,
             )
             state.memory.add_item("llm_report", {"structured": report_content}, "reporter")
-            markdown = write_source_discovery_report(state.report_dir, state.source_index, report_content)
+            markdown = write_discovery_source_report(state.report_dir, state.source_index, report_content)
             state.report_written = True
             state.memory.record_event(
                 "reporter",
@@ -733,10 +733,10 @@ def _build_write_source_discovery_report_tool(
             )
             return json.dumps({"report_dir": str(state.report_dir), "markdown_bytes": len(markdown.encode("utf-8"))})
 
-    return WriteSourceDiscoveryReportCrewTool()
+    return WriteDiscoverySourceReportCrewTool()
 
 
-def _source_arg(state: SourceDiscoveryCrewState, source: str) -> str:
+def _source_arg(state: DiscoverySourceCrewState, source: str) -> str:
     if state.source_info and state.source_info.get("path"):
         return str(state.source_info["path"])
     return source
@@ -858,7 +858,7 @@ def _normalize_route_path(value: Any) -> str:
     return "/" + text.strip("/")
 
 
-def _deterministic_source_index(state: SourceDiscoveryCrewState) -> dict[str, Any]:
+def _deterministic_source_index(state: DiscoverySourceCrewState) -> dict[str, Any]:
     if not state.source_info:
         raise RuntimeError("Source info is required before reading source discovery context.")
     if not state.inventory:
@@ -879,10 +879,10 @@ def _deterministic_source_index(state: SourceDiscoveryCrewState) -> dict[str, An
     )
 
 
-def _compact_source_discovery_context(source_index: dict[str, Any]) -> dict[str, Any]:
+def _compact_discovery_source_context(source_index: dict[str, Any]) -> dict[str, Any]:
     inventory = source_index.get("inventory") if isinstance(source_index.get("inventory"), dict) else {}
     return {
-        "schema": "mosh.source-discovery-context.v1",
+        "schema": "mosh.discovery-source-context.v1",
         "source": source_index.get("source"),
         "summary": source_index.get("summary"),
         "apps": _limit_items(inventory.get("apps"), 50),

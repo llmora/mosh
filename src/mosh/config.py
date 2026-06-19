@@ -10,7 +10,7 @@ from dotenv import dotenv_values
 
 
 @dataclass(frozen=True)
-class DiscoveryModelConfig:
+class DiscoveryLiveModelConfig:
     crawler: str = "deepseek/deepseek-v4-flash"
     technology_mapper: str = "deepseek/deepseek-v4-flash"
     reporter: str = "deepseek/deepseek-v4-flash"
@@ -33,7 +33,7 @@ class SecurityTestingModelConfig:
 
 
 @dataclass(frozen=True)
-class SourceDiscoveryModelConfig:
+class DiscoverySourceModelConfig:
     intake: str = "deepseek/deepseek-v4-flash"
     mapper: str = "deepseek/deepseek-v4-flash"
     route_resolver: str = "deepseek/deepseek-v4-flash"
@@ -51,10 +51,10 @@ class ReportingModelConfig:
 
 @dataclass(frozen=True)
 class AgentModelConfig:
-    discovery: DiscoveryModelConfig = field(default_factory=DiscoveryModelConfig)
+    discovery_live: DiscoveryLiveModelConfig = field(default_factory=DiscoveryLiveModelConfig)
     planning: SecurityPlanningModelConfig = field(default_factory=SecurityPlanningModelConfig)
     testing: SecurityTestingModelConfig = field(default_factory=SecurityTestingModelConfig)
-    source_discovery: SourceDiscoveryModelConfig = field(default_factory=SourceDiscoveryModelConfig)
+    discovery_source: DiscoverySourceModelConfig = field(default_factory=DiscoverySourceModelConfig)
     reporting: ReportingModelConfig = field(default_factory=ReportingModelConfig)
 
 
@@ -181,11 +181,11 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
 
     defaults = AgentModelConfig()
     crew_configs = {
-        "discovery": defaults.discovery,
+        "discovery_live": defaults.discovery_live,
         "reporting": defaults.reporting,
         "planning": defaults.planning,
         "testing": defaults.testing,
-        "source_discovery": defaults.source_discovery,
+        "discovery_source": defaults.discovery_source,
     }
     overrides: dict[str, object] = {}
     for crew_name, crew_values in raw_models.items():

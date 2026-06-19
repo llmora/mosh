@@ -9,7 +9,7 @@ from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
 from mosh.crews.definitions import AgentDefinition
-from mosh.crews.discovery.crew import (
+from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
@@ -41,7 +41,7 @@ class SecurityTestPlanningState:
     memory: FileMemory
     discovery_context: dict[str, Any]
     source: str | None = None
-    source_discovery_dir: Path | None = None
+    discovery_source_dir: Path | None = None
     engagement_template_dir: Path | None = None
     current_plan: dict[str, Any] | None = None
     current_review: dict[str, Any] | None = None
@@ -154,7 +154,7 @@ class CrewAISecurityTestPlanningCrewRunner:
 
         engagement = load_engagement(output_root, engagement_id)
         target_url, source = _engagement_primary_targets(engagement)
-        source_discovery_dir = _first_asset_discovery_dir(output_root, engagement, "source_tree")
+        discovery_source_dir = _first_asset_discovery_dir(output_root, engagement, "source_tree")
         memory.record_event(
             "orchestrator",
             "crew_start",
@@ -165,7 +165,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                 "target_url": target_url,
                 "source": source,
                 "discovery_dir": str(engagement_dir(output_root, engagement.id)),
-                "source_discovery_dir": str(source_discovery_dir) if source_discovery_dir else None,
+                "discovery_source_dir": str(discovery_source_dir) if discovery_source_dir else None,
             },
         )
         evidence_links = run_planning_evidence_linking(self.config, output_root, engagement.id, memory=memory)
@@ -182,7 +182,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             memory=memory,
             discovery_context=discovery_context,
             source=source,
-            source_discovery_dir=source_discovery_dir,
+            discovery_source_dir=discovery_source_dir,
             engagement_template_dir=engagement_dir(output_root, engagement.id),
         )
 
@@ -430,15 +430,15 @@ def load_discovery_context(discovery_dir: Path) -> dict[str, Any]:
     }
 
 
-def load_source_discovery_context(source_discovery_dir: Path) -> dict[str, Any]:
-    if not source_discovery_dir.exists():
-        raise FileNotFoundError(f"Source discovery output not found: {source_discovery_dir}")
-    memory = _read_json(source_discovery_dir / "memory.json", [])
+def load_discovery_source_context(discovery_source_dir: Path) -> dict[str, Any]:
+    if not discovery_source_dir.exists():
+        raise FileNotFoundError(f"Source discovery output not found: {discovery_source_dir}")
+    memory = _read_json(discovery_source_dir / "memory.json", [])
     source_index = _latest_memory_item(memory, "source_index")
     source_index_mapping = source_index if isinstance(source_index, dict) else {}
     return {
-        "schema": "mosh.source-discovery-planning-context.v1",
-        "report_markdown": _truncate_text(_read_text(source_discovery_dir / "report.md"), DISCOVERY_REPORT_MAX_CHARS),
+        "schema": "mosh.discovery-source-planning-context.v1",
+        "report_markdown": _truncate_text(_read_text(discovery_source_dir / "report.md"), DISCOVERY_REPORT_MAX_CHARS),
         "source_index": _compact_source_index(source_index_mapping),
         "component_map": _compact_value(_latest_memory_item(memory, "source_component_map")),
         "gap_analysis": _compact_value(_latest_memory_item(memory, "source_gap_analysis")),
@@ -488,7 +488,7 @@ def load_engagement_assessment_evidence_bundle(
                 source_discoveries.append(
                     {
                         "asset_id": asset.id,
-                        "discovery": load_source_discovery_context(discovery_dir),
+                        "discovery": load_discovery_source_context(discovery_dir),
                     }
                 )
             else:
@@ -504,8 +504,8 @@ def load_engagement_assessment_evidence_bundle(
             "title": engagement.title,
             "asset_refs": [{"id": asset.id, "type": asset.type} for asset in engagement.assets],
         },
-        "live_discovery": _primary_asset_discovery_marker(live_discoveries),
-        "source_discovery": _primary_asset_discovery_marker(source_discoveries),
+        "discovery_live": _primary_asset_discovery_marker(live_discoveries),
+        "discovery_source": _primary_asset_discovery_marker(source_discoveries),
         "asset_evidence": {
             "live": live_discoveries,
             "source": source_discoveries,
@@ -1571,7 +1571,7 @@ def _is_source_only_assessment(assessment_context: dict[str, Any]) -> bool:
 
 
 def _assessment_has_source(assessment_context: dict[str, Any]) -> bool:
-    source = assessment_context.get("source_discovery")
+    source = assessment_context.get("discovery_source")
     if isinstance(source, dict) and source:
         return bool(source.get("available", True))
     asset_evidence = assessment_context.get("asset_evidence") if isinstance(assessment_context.get("asset_evidence"), dict) else {}
@@ -1580,7 +1580,7 @@ def _assessment_has_source(assessment_context: dict[str, Any]) -> bool:
 
 
 def _assessment_has_live(assessment_context: dict[str, Any]) -> bool:
-    live = assessment_context.get("live_discovery")
+    live = assessment_context.get("discovery_live")
     if isinstance(live, dict) and live:
         return bool(live.get("available", True))
     asset_evidence = assessment_context.get("asset_evidence") if isinstance(assessment_context.get("asset_evidence"), dict) else {}
@@ -1612,7 +1612,7 @@ def _default_evidence_sources(assessment_context: dict[str, Any]) -> list[str]:
 def _default_affected_source(hypothesis: dict[str, Any], assessment_context: dict[str, Any]) -> list[dict[str, Any]]:
     if hypothesis.get("execution_mode") == "live":
         return []
-    source = assessment_context.get("source_discovery") if isinstance(assessment_context.get("source_discovery"), dict) else {}
+    source = assessment_context.get("discovery_source") if isinstance(assessment_context.get("discovery_source"), dict) else {}
     source_index = source.get("source_index") if isinstance(source.get("source_index"), dict) else {}
     if not source_index:
         asset_evidence = assessment_context.get("asset_evidence") if isinstance(assessment_context.get("asset_evidence"), dict) else {}

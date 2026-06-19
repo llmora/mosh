@@ -42,7 +42,7 @@ critique_security_test_plan_task:
     applications, external services, subdomains, integrations, or valuable
     surfaces that are excluded from immediate testing, require them to be
     preserved in deferred_test_opportunities with a clear defer_reason and
-    requirements_to_proceed. When live_discovery is absent, reject any immediate
+    requirements_to_proceed. When discovery_live is absent, reject any immediate
     live or combined hypothesis and any source hypothesis whose steps depend
     only on curl, browser, or live HTTP probing instead of source inspection or
     source tooling. Reject source hypotheses when source_assessment_type is

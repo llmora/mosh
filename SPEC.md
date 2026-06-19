@@ -109,12 +109,12 @@ Each agent can be configured to use a specific LLM model through an optional `mo
 
 ```yaml
 models:
-  discovery:
+  discovery_live:
     crawler: openai/gpt-5.2-mini
     technology_mapper: openai/gpt-5.2-mini
     reporter: openai/gpt-5.2-mini
 
-  source_discovery:
+  discovery_source:
     intake: openai/gpt-5.2-mini
     mapper: openai/gpt-5.2-mini
     route_resolver: openai/gpt-5.2-mini
@@ -144,7 +144,7 @@ Omitted model keys keep their built-in defaults. Unknown model keys should fail 
 
 CrewAI agent and task definitions should use CrewAI's built-in YAML configuration pattern. Configuration is grouped by crew, so each crew's agents and tasks are kept together for future reference. Python should bind live tool implementations to the YAML-defined agents, but agent roles, goals, backstories, task descriptions, and expected outputs should live in YAML.
 
-Crew-specific Python code should also live with the crew. For example, the discovery crew owns its `crew.py`, `agents.py`, `crawler.py`, `tools.py`, and `reporting.py` modules under `src/mosh/crews/discovery/`. Shared application primitives such as configuration, Docker execution, engagement files, file-backed memory, shared models, and scope helpers stay at the `mosh` package root.
+Crew-specific Python code should also live with the crew. For example, the live discovery crew owns its `crew.py`, `agents.py`, `crawler.py`, `tools.py`, and `reporting.py` modules under `src/mosh/crews/discovery_live/`. Shared application primitives such as configuration, Docker execution, engagement files, file-backed memory, shared models, and scope helpers stay at the `mosh` package root.
 
 ## Shared Memory
 
@@ -237,24 +237,24 @@ The application should not write a final `report.json` artifact. Structured runt
 
 Observable agent report output should be stored in shared memory or events. CrewAI final chat/task responses are not sufficient by themselves unless the application explicitly persists them.
 
-## Initial Crew: Discovery
+## Initial Crew: Live Discovery
 
-The first crew is the discovery crew.
+The first crew is the live discovery crew.
 
-The discovery crew is not expected to find vulnerabilities. Vulnerability discovery and testing will come later.
+The live discovery crew is not expected to find vulnerabilities. Vulnerability discovery and testing will come later.
 
-The discovery crew should focus on being excellent at appsec discovery.
+The live discovery crew should focus on being excellent at appsec discovery.
 
-### Discovery Crew Agents
+### Live Discovery Crew Agents
 
-The discovery crew has these agents:
+The live discovery crew has these agents:
 
-- orchestrator: coordinates the discovery crew and routes work between agents
+- orchestrator: coordinates the live discovery crew and routes work between agents
 - crawler agent: discovers pages, links, URLs, paths, references, source, files, and forms
 - technology mapper agent: identifies observable software components such as libraries, servers, frameworks, and related technologies
 - reporter agent: summarizes findings and returns them to the orchestrator for reporting
 
-### Discovery Crew Tool Ownership
+### Live Discovery Crew Tool Ownership
 
 The crawler is a tool owned by the crawler agent. The orchestrator must not call the crawler directly.
 
@@ -371,7 +371,7 @@ Useful artifacts include generated policies, proof-of-concept payloads, endpoint
 
 Each executed test report should include a `Resolution` section aimed at developers and application owners. This section should explain how to remediate an identified issue using concrete configuration, code, header, control, or process changes where evidence supports them. If no issue is identified, the section should state that no remediation is required for that hypothesis.
 
-Security testing can discover additional facts that belong back in discovery, whether the evidence came from live, source-backed, or combined testing: new entry points, endpoints, technologies, versions, service behavior, headers, generated API specifications, or other app-surface information. The executor should submit these as structured `discovery_updates` in its evidence. After ready tests finish, the testing orchestrator feeds those updates into the discovery crew's file-backed memory, updates the discovery report with a deterministic `Security Testing Feedback` section, and then asks the planning crew to refresh the test plan. The system does not immediately auto-run new tests from that refreshed plan; additional execution happens on the next security-testing run only if the refreshed plan contains ready, unexecuted hypotheses.
+Security testing can discover additional facts that belong back in discovery, whether the evidence came from live, source-backed, or combined testing: new entry points, endpoints, technologies, versions, service behavior, headers, generated API specifications, or other app-surface information. The executor should submit these as structured `discovery_updates` in its evidence. After ready tests finish, the testing orchestrator feeds those updates into the relevant discovery crew's file-backed memory, updates the discovery report with a deterministic `Security Testing Feedback` section, and then asks the planning crew to refresh the test plan. The system does not immediately auto-run new tests from that refreshed plan; additional execution happens on the next security-testing run only if the refreshed plan contains ready, unexecuted hypotheses.
 
 After a successful `test` run, the CLI must print a deterministic human-readable summary of any blocked tests that still prevent completion. The summary should list each blocked test ID, title, priority, and concrete engagement template fields or values needed to unblock it. This mirrors the preflight data without requiring the user to open `preflight.md` for the next action.
 
@@ -528,8 +528,6 @@ At minimum, tests should cover:
 - security test rerun decisions from embedded report metadata and preserved history
 
 # Roadmap
-
-* Continue improving engagement-scoped source, live, and combined assessment. Source and live assets should be attached to the same engagement, evidence links should enrich planning, testing, and reporting automatically, and final reports should correlate source-specific fixes with live verification where available.
 
 * Implement abiity to use arbitraty openai-like API backends (custom), for companies that do not have openrouter or deepseek access (maybe those using internal AI API endpoints)
 

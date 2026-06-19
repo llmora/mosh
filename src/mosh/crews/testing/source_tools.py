@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from mosh.config import AppConfig
-from mosh.crews.source_discovery.tools import (
+from mosh.crews.discovery_source.tools import (
     ReadSourceSliceTool,
     _iter_nonignored_files,
     _read_text_file,
@@ -511,10 +511,10 @@ def _compact_source_context(source_context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _load_source_context(source_discovery_dir: Path | None) -> dict[str, Any]:
-    if not source_discovery_dir:
+def _load_source_context(discovery_source_dir: Path | None) -> dict[str, Any]:
+    if not discovery_source_dir:
         return {}
-    memory_path = source_discovery_dir / "memory.json"
+    memory_path = discovery_source_dir / "memory.json"
     if not memory_path.exists():
         return {}
     try:

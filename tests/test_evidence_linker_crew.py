@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import _load_crewai
+from mosh.crews.discovery_live.crew import _load_crewai
 from mosh.crews.planning.evidence_linker import (
     EvidenceLinkerState,
     _build_planning_evidence_linker_crew,

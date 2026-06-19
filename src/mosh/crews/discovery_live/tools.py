@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from mosh.crews.discovery.crawler import Crawler
+from mosh.crews.discovery_live.crawler import Crawler
 from mosh.docker_tools import DockerToolRunner
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
 from mosh.scope import ScopePolicy, normalize_url, strip_fragment

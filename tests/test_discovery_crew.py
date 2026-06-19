@@ -7,13 +7,13 @@ from importlib import resources
 from pathlib import Path
 from unittest.mock import patch
 
-from mosh.crews.discovery.agents import DiscoveryReporterAgent
+from mosh.crews.discovery_live.agents import DiscoveryLiveReporterAgent
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import (
+from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
-    CrewAIDiscoveryCrewRunner,
+    CrewAIDiscoveryLiveCrewRunner,
     CrewAIUnavailable,
-    DiscoveryCrewState,
+    DiscoveryLiveCrewState,
     _build_crawler_tool,
     _build_report_tool,
     _build_task_with_output_event,
@@ -82,11 +82,11 @@ class FakeTaskOutput:
         return "task output text"
 
 
-class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
+class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
     def test_requires_openrouter_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            runner = CrewAIDiscoveryCrewRunner(AppConfig(openrouter_api_key=None))
+            runner = CrewAIDiscoveryLiveCrewRunner(AppConfig(openrouter_api_key=None))
 
             with self.assertRaisesRegex(CrewAIUnavailable, "OPENROUTER_API_KEY"):
                 runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
@@ -94,9 +94,9 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
     def test_discovery_can_use_direct_deepseek_without_openrouter_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            runner = CrewAIDiscoveryCrewRunner(AppConfig(deepseek_api_key="deepseek-key"))
+            runner = CrewAIDiscoveryLiveCrewRunner(AppConfig(deepseek_api_key="deepseek-key"))
 
-            with patch("mosh.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+            with patch("mosh.crews.discovery_live.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
                 with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
                     runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
@@ -123,16 +123,16 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
     def test_builds_crawler_agent_with_configured_discovery_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            runner = CrewAIDiscoveryCrewRunner(AppConfig(openrouter_api_key="test-key"))
+            runner = CrewAIDiscoveryLiveCrewRunner(AppConfig(openrouter_api_key="test-key"))
 
-            with patch("mosh.crews.discovery.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
+            with patch("mosh.crews.discovery_live.crew._load_crewai", side_effect=CrewAIUnavailable("stop")):
                 with self.assertRaisesRegex(CrewAIUnavailable, "stop"):
                     runner.run("https://example.test", Path(directory), memory, max_pages=5, max_depth=3)
 
-            # The real wiring path is covered by build_discovery_agents, which the CrewAI runner now uses.
-            from mosh.crews.discovery.agents import build_discovery_agents
+            # The real wiring path is covered by build_discovery_live_agents, which the CrewAI runner now uses.
+            from mosh.crews.discovery_live.agents import build_discovery_live_agents
 
-            agents = build_discovery_agents(AppConfig(openrouter_api_key="test-key"))
+            agents = build_discovery_live_agents(AppConfig(openrouter_api_key="test-key"))
             tool_names = [tool.name for tool in agents.crawler.available_tool_definitions]
             self.assertIn("katana_docker_crawler", tool_names)
             self.assertIn("dirb_docker_discovery", tool_names)
@@ -140,8 +140,8 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
             self.assertIn("js_static_endpoint_discovery", tool_names)
 
     def test_crewai_yaml_config_files_are_packaged(self) -> None:
-        agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/agents.yaml")
-        tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery/tasks.yaml")
+        agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/agents.yaml")
+        tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/tasks.yaml")
         planning_yaml = [
             resources.files(CREW_CONFIG_PACKAGE).joinpath(f"planning/{file}")
             for file in [
@@ -157,8 +157,8 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
                 "engagement_refiner_tasks.yaml",
             ]
         ]
-        source_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/agents.yaml")
-        source_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("source_discovery/tasks.yaml")
+        source_agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_source/agents.yaml")
+        source_tasks_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_source/tasks.yaml")
 
         self.assertTrue(agents_yaml.is_file())
         self.assertTrue(tasks_yaml.is_file())
@@ -184,12 +184,12 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
         self.assertIn("validate_source_task:", source_tasks_yaml.read_text(encoding="utf-8"))
         self.assertIn("resolve_source_routes_task:", source_tasks_yaml.read_text(encoding="utf-8"))
         self.assertIn("map_source_components_task:", source_tasks_yaml.read_text(encoding="utf-8"))
-        self.assertIn("analyze_source_discovery_gaps_task:", source_tasks_yaml.read_text(encoding="utf-8"))
+        self.assertIn("analyze_discovery_source_gaps_task:", source_tasks_yaml.read_text(encoding="utf-8"))
 
     def test_crawler_tool_skips_previously_crawled_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            state = DiscoveryCrewState(
+            state = DiscoveryLiveCrewState(
                 target_url="https://example.test/path",
                 report_dir=Path(directory),
                 memory=memory,
@@ -216,7 +216,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
     def test_crawler_tool_merges_distinct_crawl_results(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            state = DiscoveryCrewState(
+            state = DiscoveryLiveCrewState(
                 target_url="https://example.test/one",
                 report_dir=Path(directory),
                 memory=memory,
@@ -242,7 +242,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
     def test_task_callback_records_agent_output_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            state = DiscoveryCrewState(
+            state = DiscoveryLiveCrewState(
                 target_url="https://example.test",
                 report_dir=Path(directory),
                 memory=memory,
@@ -270,7 +270,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
     def test_report_tool_schema_and_runner_accept_json_string_report_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
-            state = DiscoveryCrewState(
+            state = DiscoveryLiveCrewState(
                 target_url="https://example.test",
                 report_dir=Path(directory),
                 memory=memory,
@@ -284,7 +284,7 @@ class CrewAIDiscoveryCrewRunnerTests(unittest.TestCase):
                     robots=None,
                 ),
             )
-            tool = _build_report_tool(FakeCrewAI, state, DiscoveryReporterAgent())
+            tool = _build_report_tool(FakeCrewAI, state, DiscoveryLiveReporterAgent())
             report = {
                 "title": "Application Discovery Results",
                 "executive_summary": "Summary",

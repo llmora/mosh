@@ -92,12 +92,12 @@ By default, `mosh` uses DeepSeek models to balance quality and cost. To choose d
 
 ```yaml
 models:
-  discovery:
+  discovery_live:
     crawler: deepseek/deepseek-v4-flash
     technology_mapper: deepseek/deepseek-v4-flash
     reporter: deepseek/deepseek-v4-flash
 
-  source_discovery:
+  discovery_source:
     intake: deepseek/deepseek-v4-flash
     mapper: deepseek/deepseek-v4-flash
     route_resolver: deepseek/deepseek-v4-flash
@@ -127,10 +127,10 @@ Only include the agents you want to override; omitted agents keep their defaults
 
 ```yaml
 models:
-  discovery:
+  discovery_live:
     crawler: openai/gpt-5.2-mini
 
-  source_discovery:
+  discovery_source:
     mapper: openai/gpt-5.2-mini
 
   planning:
@@ -395,7 +395,7 @@ The orchestrator coordinates the run. Agents own specialist work. Tools are invo
 
 Current crews:
 
-- **Discovery crew:** crawls and summarizes the application surface, identifies business context and correlated assets for more effective planning.
+- **Live discovery crew:** crawls and summarizes live application surfaces, identifies business context and correlated assets for more effective planning.
 - **Planning crew:** turns discovery evidence and business context into testable security hypotheses.
 - **Testing crew:** checks ready hypotheses using the engagement file and security testing tools.
 

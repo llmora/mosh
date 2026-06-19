@@ -145,9 +145,9 @@ class AppConfigTests(unittest.TestCase):
                 "\n".join(
                     [
                         "models:",
-                        "  discovery:",
+                        "  discovery_live:",
                         "    crawler: openai/gpt-5.2-mini",
-                        "  source_discovery:",
+                        "  discovery_source:",
                         "    mapper: openai/gpt-5.2-mini",
                         "    route_resolver: openai/gpt-5.2-mini",
                         "    component_mapper: openai/gpt-5.2",
@@ -167,17 +167,17 @@ class AppConfigTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 config = AppConfig.from_env(config_path=config_path, dotenv_path=Path(directory) / ".env")
 
-        self.assertEqual(config.models.discovery.crawler, "openai/gpt-5.2-mini")
-        self.assertEqual(config.models.source_discovery.mapper, "openai/gpt-5.2-mini")
-        self.assertEqual(config.models.source_discovery.route_resolver, "openai/gpt-5.2-mini")
-        self.assertEqual(config.models.source_discovery.component_mapper, "openai/gpt-5.2")
-        self.assertEqual(config.models.source_discovery.gap_analyst, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.discovery_live.crawler, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.discovery_source.mapper, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.discovery_source.route_resolver, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.discovery_source.component_mapper, "openai/gpt-5.2")
+        self.assertEqual(config.models.discovery_source.gap_analyst, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.planning.evidence_linker, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.planning.reviewer, "openai/gpt-5.2")
         self.assertEqual(config.models.testing.reviewer, "anthropic/claude-sonnet-4.5")
         self.assertEqual(config.models.reporting.writer, "openai/gpt-5.2-mini")
-        self.assertEqual(config.models.discovery.reporter, "deepseek/deepseek-v4-flash")
-        self.assertEqual(config.models.source_discovery.reporter, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.discovery_live.reporter, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.discovery_source.reporter, "deepseek/deepseek-v4-flash")
 
     def test_missing_mosh_yaml_keeps_default_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -187,22 +187,22 @@ class AppConfigTests(unittest.TestCase):
                     dotenv_path=Path(directory) / ".env",
                 )
 
-        self.assertEqual(config.models.discovery.crawler, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.discovery_live.crawler, "deepseek/deepseek-v4-flash")
 
     def test_unknown_model_key_in_mosh_yaml_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "mosh.yaml"
-            config_path.write_text("models:\n  discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
+            config_path.write_text("models:\n  discovery_live:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery.crawlerr`"):
+            with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery_live.crawlerr`"):
                 AppConfig.from_env(config_path=config_path, dotenv_path=Path(directory) / ".env")
 
-    def test_unknown_source_discovery_model_key_fails_clearly(self) -> None:
+    def test_unknown_discovery_source_model_key_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "mosh.yaml"
-            config_path.write_text("models:\n  source_discovery:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
+            config_path.write_text("models:\n  discovery_source:\n    crawlerr: openai/gpt-5.2\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "Unknown model key `models.source_discovery.crawlerr`"):
+            with self.assertRaisesRegex(ValueError, "Unknown model key `models.discovery_source.crawlerr`"):
                 AppConfig.from_env(config_path=config_path, dotenv_path=Path(directory) / ".env")
 
     def test_deepseek_models_use_direct_deepseek_when_key_is_available(self) -> None:

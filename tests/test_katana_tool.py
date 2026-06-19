@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from mosh.docker_tools import DockerToolResult
-from mosh.crews.discovery.tools import KatanaDockerCrawlerTool, parse_katana_output
+from mosh.crews.discovery_live.tools import KatanaDockerCrawlerTool, parse_katana_output
 
 
 class FakeDockerRunner:
