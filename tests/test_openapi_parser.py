@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from mosh.crews.discovery.openapi_parser import (
+from mosh.crews.discovery_live.openapi_parser import (
     is_openapi_spec,
     parse_openapi_spec,
     _extract_base_url,

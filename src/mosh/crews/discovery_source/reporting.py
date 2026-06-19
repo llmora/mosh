@@ -5,15 +5,15 @@ from pathlib import Path
 from typing import Any
 
 
-SOURCE_DISCOVERY_REPORT_SCHEMA = "mosh.source-discovery-report.v1"
+DISCOVERY_SOURCE_REPORT_SCHEMA = "mosh.discovery-source-report.v1"
 
 
-def write_source_discovery_report(
+def write_discovery_source_report(
     report_dir: Path,
     source_index: dict[str, Any],
     report_content: dict[str, Any] | None = None,
 ) -> str:
-    markdown = render_source_discovery_report(source_index, report_content or {})
+    markdown = render_discovery_source_report(source_index, report_content or {})
     report_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / "report.md").write_text(markdown, encoding="utf-8")
     stale_json_report = report_dir / "report.json"
@@ -22,7 +22,7 @@ def write_source_discovery_report(
     return markdown
 
 
-def render_source_discovery_report(source_index: dict[str, Any], report_content: dict[str, Any]) -> str:
+def render_discovery_source_report(source_index: dict[str, Any], report_content: dict[str, Any]) -> str:
     source = source_index.get("source") if isinstance(source_index.get("source"), dict) else {}
     inventory = source_index.get("inventory") if isinstance(source_index.get("inventory"), dict) else {}
     summary = source_index.get("summary") if isinstance(source_index.get("summary"), dict) else {}
@@ -34,7 +34,7 @@ def render_source_discovery_report(source_index: dict[str, Any], report_content:
         "",
         "## Report Metadata",
         "",
-        f"- Schema version: `{SOURCE_DISCOVERY_REPORT_SCHEMA}`",
+        f"- Schema version: `{DISCOVERY_SOURCE_REPORT_SCHEMA}`",
         f"- Source kind: `{_text(source.get('kind')) or 'unknown'}`",
         f"- Source path: `{_text(source.get('path')) or 'unknown'}`",
         f"- Commit SHA: `{_text(source.get('commit_sha')) or 'unknown'}`",

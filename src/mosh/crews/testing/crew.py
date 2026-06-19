@@ -10,8 +10,8 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.reporting import update_report_with_testing_feedback
-from mosh.crews.discovery.crew import (
+from mosh.crews.discovery_live.reporting import update_report_with_testing_feedback
+from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
     _build_task_with_output_event,
@@ -83,7 +83,7 @@ class SecurityTestingCrewRunner(Protocol):
         self,
         target_url: str,
         source: str | None,
-        source_discovery_dir: Path | None,
+        discovery_source_dir: Path | None,
         evidence_links: dict[str, Any],
         report_dir: Path,
         memory: FileMemory,
@@ -131,11 +131,11 @@ class SecurityTestingOrchestrator:
             discovery_dir = asset_discovery_dir(self.output_root, engagement.id, source_asset.id)
         else:
             raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
-        source_discovery_dir = (
+        discovery_source_dir = (
             asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset else None
         )
-        live_discovery_asset = (engagement.id, live_asset.id) if live_asset else None
-        source_discovery_asset = (engagement.id, source_asset.id) if source_asset else None
+        discovery_live_asset = (engagement.id, live_asset.id) if live_asset else None
+        discovery_source_asset = (engagement.id, source_asset.id) if source_asset else None
         planning_dir = engagement_plan_dir(self.output_root, engagement.id)
         report_dir = domain_dir / "security-testing"
         engagement_path = domain_dir / "engagement_template.yaml"
@@ -193,7 +193,7 @@ class SecurityTestingOrchestrator:
             self.crew_runner.run(
                 target,
                 source,
-                source_discovery_dir,
+                discovery_source_dir,
                 evidence_links,
                 report_dir,
                 memory,
@@ -205,11 +205,11 @@ class SecurityTestingOrchestrator:
             executed_count += len(executable_pending)
             refresh_targets: list[tuple[Path, tuple[str, str] | None]] = []
             if url:
-                refresh_targets.append((discovery_dir, live_discovery_asset))
-            if source_discovery_dir and source_discovery_dir != discovery_dir:
-                refresh_targets.append((source_discovery_dir, source_discovery_asset))
+                refresh_targets.append((discovery_dir, discovery_live_asset))
+            if discovery_source_dir and discovery_source_dir != discovery_dir:
+                refresh_targets.append((discovery_source_dir, discovery_source_asset))
             if not refresh_targets:
-                refresh_targets.append((discovery_dir, live_discovery_asset or source_discovery_asset))
+                refresh_targets.append((discovery_dir, discovery_live_asset or discovery_source_asset))
             for index, (target_discovery_dir, discovery_asset) in enumerate(refresh_targets):
                 _refresh_discovery_from_testing_feedback(
                     config=self.config,
@@ -265,7 +265,7 @@ class CrewAISecurityTestingCrewRunner:
         self,
         target_url: str,
         source: str | None,
-        source_discovery_dir: Path | None,
+        discovery_source_dir: Path | None,
         evidence_links: dict[str, Any],
         report_dir: Path,
         memory: FileMemory,
@@ -286,7 +286,7 @@ class CrewAISecurityTestingCrewRunner:
         crewai = _load_crewai()
         current_plan_revision_id = plan_revision_id(plan)
         source_root = _validated_source_root(source) if source else None
-        source_context = _load_unified_source_context(source_discovery_dir)
+        source_context = _load_unified_source_context(discovery_source_dir)
         for hypothesis in executable_pending:
             _run_one_security_test(
                 crewai=crewai,
@@ -1798,15 +1798,15 @@ def _load_testing_evidence_links(planning_dir: Path) -> dict[str, Any]:
 
 
 def _validated_source_root(source: str) -> Path:
-    from mosh.crews.source_discovery.tools import _validated_root
+    from mosh.crews.discovery_source.tools import _validated_root
 
     return _validated_root(source)
 
 
-def _load_unified_source_context(source_discovery_dir: Path | None) -> dict[str, Any]:
+def _load_unified_source_context(discovery_source_dir: Path | None) -> dict[str, Any]:
     from mosh.crews.testing.source_tools import _load_source_context
 
-    return _load_source_context(source_discovery_dir)
+    return _load_source_context(discovery_source_dir)
 
 
 def _compact_unified_source_context(source_context: dict[str, Any]) -> dict[str, Any]:

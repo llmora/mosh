@@ -7,9 +7,9 @@ from pathlib import Path
 
 from mosh.config import AppConfig
 from mosh.models import Event
-from mosh.crews.discovery.crew import DiscoveryOrchestrator
+from mosh.crews.discovery_live.crew import DiscoveryLiveOrchestrator
 from mosh.crews.reporting.crew import FinalReportingOrchestrator
-from mosh.crews.source_discovery.crew import SourceDiscoveryOrchestrator
+from mosh.crews.discovery_source.crew import DiscoverySourceOrchestrator
 from mosh.engagements import (
     Engagement,
     EngagementAsset,
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     engagement_attach_parser.add_argument("--label", help="Human-readable asset label")
     engagement_attach_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
-    discover_parser = subcommands.add_parser("discover", help="Run the discovery crew")
+    discover_parser = subcommands.add_parser("discover", help="Run the live/source discovery crew")
     discover_parser.add_argument("engagement_id", help="Engagement ID to discover")
     discover_parser.add_argument("--asset", action="append", default=[], help="Only discover the selected asset ID; can be repeated")
     discover_parser.add_argument("--refresh", action="store_true", help="Rerun discovery even when an asset already has discovery output")
@@ -192,7 +192,7 @@ def _run_asset_discovery(
 ) -> Path:
     report_dir = asset_discovery_dir(output_root, engagement.id, asset.id)
     if asset.type == "live_url":
-        return DiscoveryOrchestrator(
+        return DiscoveryLiveOrchestrator(
             config,
             output_root=output_root,
             event_sink=_print_event,
@@ -203,7 +203,7 @@ def _run_asset_discovery(
             report_dir=report_dir,
         )
     if asset.type == "source_tree":
-        return SourceDiscoveryOrchestrator(
+        return DiscoverySourceOrchestrator(
             config,
             output_root=output_root,
             event_sink=_print_event,

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from mosh.models import CrawledPage, CrawlResult
-from mosh.crews.discovery.reporting import update_report_with_testing_feedback, write_reports
+from mosh.crews.discovery_live.reporting import update_report_with_testing_feedback, write_reports
 
 
 class ReportingTests(unittest.TestCase):

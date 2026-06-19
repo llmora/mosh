@@ -79,7 +79,7 @@ map_source_components_task:
     Source:
     {source}
 
-    You must call get_source_discovery_context first. Then call
+    You must call get_discovery_source_context first. Then call
     submit_source_component_map exactly once with a structured object that may
     include:
     - application_purpose
@@ -99,7 +99,7 @@ map_source_components_task:
     evidence-backed application purpose and component map.
   agent: source_component_mapper
 
-analyze_source_discovery_gaps_task:
+analyze_discovery_source_gaps_task:
   description: >
     Identify source discovery limitations and follow-up needed before
     source-backed security planning.
@@ -107,7 +107,7 @@ analyze_source_discovery_gaps_task:
     Source:
     {source}
 
-    You must call get_source_discovery_context first. Include the submitted
+    You must call get_discovery_source_context first. Include the submitted
     component map when available. Then call submit_source_gap_analysis exactly
     once with a structured object that may include:
     - gaps
@@ -125,7 +125,7 @@ analyze_source_discovery_gaps_task:
     limitations, and follow-up recommendations.
   agent: source_gap_analyst
 
-write_source_discovery_report_task:
+write_discovery_source_report_task:
   description: >
     Write the source discovery report after source intake, source mapping,
     route resolution, dependency/config inspection, component mapping, and gap
@@ -134,7 +134,7 @@ write_source_discovery_report_task:
     Source:
     {source}
 
-    You must call write_source_discovery_report exactly once with a structured
+    You must call write_discovery_source_report exactly once with a structured
     report object or JSON string. The report object may include:
     - title
     - executive_summary
@@ -146,6 +146,6 @@ write_source_discovery_report_task:
     report-writing tool owns the stable Markdown layout and source index
     persistence.
   expected_output: >
-    Confirmation that write_source_discovery_report persisted report.md and the
+    Confirmation that write_discovery_source_report persisted report.md and the
     source index.
   agent: reporter

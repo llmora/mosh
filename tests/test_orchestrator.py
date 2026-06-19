@@ -6,18 +6,18 @@ import unittest
 from pathlib import Path
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import DiscoveryOrchestrator
+from mosh.crews.discovery_live.crew import DiscoveryLiveOrchestrator
 from tests.fakes import FakeCrewRunner
 from tests.fixtures import fixture_server
 
 
-class DiscoveryOrchestratorTests(unittest.TestCase):
+class DiscoveryLiveOrchestratorTests(unittest.TestCase):
     def test_delegates_execution_to_crewai_crew_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             crew_runner = FakeCrewRunner()
             with fixture_server() as url:
                 expected_report_dir = Path(directory) / "report" / "eng_test" / "assets" / "asset_live_1" / "discovery"
-                report_dir = DiscoveryOrchestrator(
+                report_dir = DiscoveryLiveOrchestrator(
                     AppConfig(),
                     output_root=Path(directory) / "report",
                     crew_runner=crew_runner,
@@ -36,7 +36,7 @@ class DiscoveryOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             crew_runner = FakeCrewRunner()
             with fixture_server() as url:
-                DiscoveryOrchestrator(
+                DiscoveryLiveOrchestrator(
                     AppConfig(max_depth=5),
                     output_root=Path(directory) / "report",
                     crew_runner=crew_runner,

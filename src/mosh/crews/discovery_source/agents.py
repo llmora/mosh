@@ -5,7 +5,7 @@ from typing import Any
 
 from mosh.config import AppConfig
 from mosh.crews.definitions import AgentDefinition
-from mosh.crews.source_discovery.tools import (
+from mosh.crews.discovery_source.tools import (
     ConfigInventoryTool,
     DependencyInventoryTool,
     ReadSourceSliceTool,
@@ -20,9 +20,9 @@ from mosh.crews.source_discovery.tools import (
 from mosh.memory import FileMemory
 
 
-def source_discovery_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
+def discovery_source_agent_definitions(config: AppConfig) -> list[AgentDefinition]:
     source_context_tool = ToolDefinition(
-        name="get_source_discovery_context",
+        name="get_discovery_source_context",
         description="Read a compact deterministic source discovery context without full file contents.",
     )
     component_map_tool = ToolDefinition(
@@ -46,20 +46,20 @@ def source_discovery_agent_definitions(config: AppConfig) -> list[AgentDefinitio
             name="orchestrator",
             role="Source discovery coordinator",
             goal="Coordinate source discovery work and route findings between source agents.",
-            model=config.models.source_discovery.reporter,
+            model=config.models.discovery_source.reporter,
         ),
         AgentDefinition(
             name="source_intake",
             role="Source intake validator",
             goal="Validate the source tree and record source identity metadata.",
-            model=config.models.source_discovery.intake,
+            model=config.models.discovery_source.intake,
             tools=[ValidateSourcePathTool.definition],
         ),
         AgentDefinition(
             name="source_mapper",
             role="Source surface mapper",
             goal="Build a compact source inventory, route map, and retrievable source evidence references.",
-            model=config.models.source_discovery.mapper,
+            model=config.models.discovery_source.mapper,
             tools=[
                 SourceInventoryTool.definition,
                 RouteApiExtractorTool.definition,
@@ -71,14 +71,14 @@ def source_discovery_agent_definitions(config: AppConfig) -> list[AgentDefinitio
             name="dependency_config",
             role="Dependency and configuration mapper",
             goal="Identify dependency manifests, lockfiles, configuration, deployment, and CI files.",
-            model=config.models.source_discovery.dependency_config,
+            model=config.models.discovery_source.dependency_config,
             tools=[DependencyInventoryTool.definition, ConfigInventoryTool.definition],
         ),
         AgentDefinition(
             name="source_route_resolver",
             role="Source route resolver",
             goal="Resolve API candidates to evidence-backed full paths, especially when router mounts or app prefixes are ambiguous.",
-            model=config.models.source_discovery.route_resolver,
+            model=config.models.discovery_source.route_resolver,
             tools=[
                 route_context_tool,
                 SourceSearchTool.definition,
@@ -90,31 +90,31 @@ def source_discovery_agent_definitions(config: AppConfig) -> list[AgentDefinitio
             name="source_component_mapper",
             role="Source component mapper",
             goal="Summarize what the source tree appears to do and map key business/security components from deterministic evidence.",
-            model=config.models.source_discovery.component_mapper,
+            model=config.models.discovery_source.component_mapper,
             tools=[source_context_tool, component_map_tool],
         ),
         AgentDefinition(
             name="source_gap_analyst",
             role="Source discovery gap analyst",
             goal="Identify discovery blind spots and practical follow-up needed before source-backed security planning.",
-            model=config.models.source_discovery.gap_analyst,
+            model=config.models.discovery_source.gap_analyst,
             tools=[source_context_tool, gap_analysis_tool],
         ),
         AgentDefinition(
             name="reporter",
             role="Source discovery reporter",
             goal="Persist source discovery findings into a stable Markdown report.",
-            model=config.models.source_discovery.reporter,
+            model=config.models.discovery_source.reporter,
         ),
     ]
 
 
 @dataclass(frozen=True)
-class SourceDiscoveryAgents:
+class DiscoverySourceAgents:
     intake: "SourceIntakeAgent"
     mapper: "SourceMapperAgent"
     dependency_config: "DependencyConfigAgent"
-    reporter: "SourceDiscoveryReporterAgent"
+    reporter: "DiscoverySourceReporterAgent"
 
 
 class SourceIntakeAgent:
@@ -239,7 +239,7 @@ class DependencyConfigAgent:
         return configuration
 
 
-class SourceDiscoveryReporterAgent:
+class DiscoverySourceReporterAgent:
     name = "reporter"
 
     def summarize(
@@ -281,10 +281,10 @@ class SourceDiscoveryReporterAgent:
         return source_index
 
 
-def build_source_discovery_agents(config: AppConfig) -> SourceDiscoveryAgents:
-    return SourceDiscoveryAgents(
+def build_discovery_source_agents(config: AppConfig) -> DiscoverySourceAgents:
+    return DiscoverySourceAgents(
         intake=SourceIntakeAgent(),
         mapper=SourceMapperAgent(),
         dependency_config=DependencyConfigAgent(),
-        reporter=SourceDiscoveryReporterAgent(),
+        reporter=DiscoverySourceReporterAgent(),
     )

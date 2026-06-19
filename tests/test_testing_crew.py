@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.config import AppConfig
-from mosh.crews.discovery.crew import _load_crewai
+from mosh.crews.discovery_live.crew import _load_crewai
 from mosh.crews.planning.reporting import write_security_test_plan
 from mosh.docker_tools import DockerToolResult
 from mosh.engagement import write_engagement_template, write_engagement_template_mapping
@@ -668,7 +668,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 ],
             }
             engagement, source_asset = _create_source_engagement(output_root, source, plan)
-            source_discovery_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
+            discovery_source_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
             planning_runner = _CountingPlanningRunner()
 
             report_dir = SecurityTestingOrchestrator(
@@ -678,11 +678,11 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 planning_crew_runner=planning_runner,
             ).run(engagement.id)
 
-            discovery_memory = json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
+            discovery_memory = json.loads((discovery_source_dir / "memory.json").read_text(encoding="utf-8"))
             feedback_items = [item for item in discovery_memory if item["kind"] == "testing_discovery_feedback"]
             self.assertEqual(len(feedback_items), 1)
             self.assertIn("GET ${API_BASE}/team", json.dumps(feedback_items))
-            discovery_report = (source_discovery_dir / "report.md").read_text(encoding="utf-8")
+            discovery_report = (discovery_source_dir / "report.md").read_text(encoding="utf-8")
             self.assertIn("## Security Testing Feedback", discovery_report)
             self.assertIn("GET ${API_BASE}/team", discovery_report)
             self.assertIn("Cloudflare Pages", discovery_report)
@@ -729,7 +729,7 @@ class SecurityTestingCrewTests(unittest.TestCase):
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "planning_refresh_complete" for event in testing_events))
 
-    def test_engagement_combined_testing_feedback_updates_live_and_source_discovery_before_planning(self) -> None:
+    def test_engagement_combined_testing_feedback_updates_live_and_discovery_source_before_planning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target_url = "https://example.test"
             source_dir = Path(directory) / "source"
@@ -739,13 +739,13 @@ class SecurityTestingCrewTests(unittest.TestCase):
             engagement = create_engagement(output_root)
             live_asset = attach_asset(output_root, engagement.id, target_url).asset
             source_asset = attach_asset(output_root, engagement.id, str(source_dir)).asset
-            live_discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
-            source_discovery_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
+            discovery_live_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            discovery_source_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
             planning_dir = output_root / engagement.id / "plan"
-            live_discovery_dir.mkdir(parents=True)
-            source_discovery_dir.mkdir(parents=True)
+            discovery_live_dir.mkdir(parents=True)
+            discovery_source_dir.mkdir(parents=True)
             planning_dir.mkdir(parents=True)
-            for discovery_dir in (live_discovery_dir, source_discovery_dir):
+            for discovery_dir in (discovery_live_dir, discovery_source_dir):
                 (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
                 (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
                 (discovery_dir / "events.json").write_text("[]", encoding="utf-8")
@@ -780,12 +780,12 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
             live_feedback = [
                 item
-                for item in json.loads((live_discovery_dir / "memory.json").read_text(encoding="utf-8"))
+                for item in json.loads((discovery_live_dir / "memory.json").read_text(encoding="utf-8"))
                 if item["kind"] == "testing_discovery_feedback"
             ]
             source_feedback = [
                 item
-                for item in json.loads((source_discovery_dir / "memory.json").read_text(encoding="utf-8"))
+                for item in json.loads((discovery_source_dir / "memory.json").read_text(encoding="utf-8"))
                 if item["kind"] == "testing_discovery_feedback"
             ]
             self.assertEqual(len(live_feedback), 1)
@@ -2064,7 +2064,7 @@ class _DiscoveryFeedbackSecurityTestingRunner:
         self,
         target_url,
         source,
-        source_discovery_dir,
+        discovery_source_dir,
         evidence_links,
         report_dir,
         memory,
