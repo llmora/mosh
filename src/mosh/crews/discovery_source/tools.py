@@ -76,7 +76,9 @@ LOCKFILE_NAMES = {
     "cargo.lock",
     "composer.lock",
     "go.sum",
+    "manifest.lock",
     "package-lock.json",
+    "podfile.lock",
     "pnpm-lock.yaml",
     "poetry.lock",
     "uv.lock",
@@ -247,6 +249,8 @@ class DependencyInventoryTool:
         for path in _iter_manifest_files(root):
             relative_path = _relative_path(root, path)
             manifests.append({"path": relative_path, "kind": Path(path).name.lower()})
+            if _is_redundant_cocoapods_manifest_lock(path):
+                continue
             dependencies.extend(_dependencies_from_manifest(root, path))
         return {
             "schema": "mosh.source-dependencies.v1",
@@ -505,6 +509,8 @@ def _app_inventory(root: Path, files: list[dict[str, Any]]) -> list[dict[str, An
     app_roots: dict[str, dict[str, Any]] = {}
     for file in files:
         relative_path = str(file.get("path") or "")
+        if _is_cocoapods_dependency_path(relative_path):
+            continue
         name = Path(relative_path).name.lower()
         if name == "package.json":
             _merge_app(app_roots, _javascript_app(root, relative_path, file_by_path))
@@ -517,6 +523,8 @@ def _app_inventory(root: Path, files: list[dict[str, Any]]) -> list[dict[str, An
 
     for file in files:
         relative_path = str(file.get("path") or "")
+        if _is_cocoapods_dependency_path(relative_path):
+            continue
         entrypoint = _mobile_source_entrypoint(relative_path, file_by_path)
         if not entrypoint:
             continue
@@ -557,6 +565,8 @@ def _javascript_app(root: Path, relative_path: str, file_by_path: dict[str, dict
     frameworks = [name for name in ("express", "next", "react", "vue", "angular", "svelte") if name in dependencies]
     entrypoints = []
     for entrypoint_path, reason in _package_entrypoint_candidates(app_root, main, scripts):
+        if _is_cocoapods_dependency_path(entrypoint_path):
+            continue
         if entrypoint_path in file_by_path:
             entrypoints.append(_entrypoint(entrypoint_path, "application", reason, "high", file_by_path[entrypoint_path]))
     if not entrypoints:
@@ -585,6 +595,8 @@ def _python_app(root: Path, relative_path: str, file_by_path: dict[str, dict[str
         scripts = project.get("scripts") if isinstance(project.get("scripts"), dict) else {}
         for name, target in sorted(scripts.items()):
             candidate = _python_module_to_path(app_root, _text(target).split(":", 1)[0])
+            if _is_cocoapods_dependency_path(candidate):
+                continue
             if candidate in file_by_path:
                 entrypoints.append(_entrypoint(candidate, "application", f"pyproject script {name}", "high", file_by_path[candidate]))
     frameworks = _python_frameworks(root, app_root, relative_path, file_by_path)
@@ -634,6 +646,7 @@ def _ios_app(root: Path, relative_path: str, file_by_path: dict[str, dict[str, A
         path
         for path in file_by_path
         if _under_app_root(path, app_root)
+        and not _is_cocoapods_dependency_path(path)
         and (Path(path).name.lower() in {"info.plist", "podfile", "package.swift"} or path.endswith(".xcodeproj/project.pbxproj"))
     ]
     entrypoints = _ios_entrypoints(app_root, file_by_path)
@@ -701,6 +714,8 @@ def _fallback_entrypoints(app_root: str, file_by_path: dict[str, dict[str, Any]]
     for path, file in sorted(file_by_path.items()):
         if not _under_app_root(path, app_root):
             continue
+        if _is_cocoapods_dependency_path(path):
+            continue
         if Path(path).name in names:
             entrypoints.append(_entrypoint(path, "application", "conventional entrypoint filename", "medium", file))
     return entrypoints
@@ -726,6 +741,8 @@ def _ios_entrypoints(app_root: str, file_by_path: dict[str, dict[str, Any]]) -> 
     entrypoints = []
     for path, file in sorted(file_by_path.items()):
         if not _under_app_root(path, app_root):
+            continue
+        if _is_cocoapods_dependency_path(path):
             continue
         name = Path(path).name
         if (
@@ -754,7 +771,7 @@ def _languages_under_root(app_root: str, file_by_path: dict[str, dict[str, Any]]
     languages = {
         _text(file.get("language"))
         for path, file in file_by_path.items()
-        if _under_app_root(path, app_root) and _text(file.get("language"))
+        if _under_app_root(path, app_root) and not _is_cocoapods_dependency_path(path) and _text(file.get("language"))
     }
     return sorted(languages)
 
@@ -806,6 +823,18 @@ def _under_app_root(path: str, app_root: str) -> bool:
     return path == normalized_root or path.startswith(f"{normalized_root}/")
 
 
+def _is_cocoapods_dependency_path(relative_path: str) -> bool:
+    return any(part.lower() == "pods" for part in Path(relative_path).parts)
+
+
+def _is_redundant_cocoapods_manifest_lock(path: Path) -> bool:
+    return (
+        path.name.lower() == "manifest.lock"
+        and path.parent.name.lower() == "pods"
+        and (path.parent.parent / "Podfile.lock").exists()
+    )
+
+
 def _join_relative(app_root: str, value: str) -> str:
     clean = value.strip().removeprefix("./")
     root = app_root.strip("./")
@@ -838,6 +867,8 @@ def _python_frameworks(
     for relative_path in sorted(file_by_path):
         if not _under_app_root(relative_path, app_root) or not relative_path.endswith(".py"):
             continue
+        if _is_cocoapods_dependency_path(relative_path):
+            continue
         text = _read_text_file(root / relative_path) or ""
         if re.search(r"\bFastAPI\(", text):
             frameworks.add("fastapi")
@@ -852,6 +883,8 @@ def _python_entrypoints(root: Path, app_root: str, file_by_path: dict[str, dict[
     entrypoints = []
     for relative_path, file in sorted(file_by_path.items()):
         if not _under_app_root(relative_path, app_root) or not relative_path.endswith(".py"):
+            continue
+        if _is_cocoapods_dependency_path(relative_path):
             continue
         text = _read_text_file(root / relative_path) or ""
         if re.search(r"\b(FastAPI|Flask)\(", text) or "uvicorn.run" in text:
@@ -877,6 +910,8 @@ def _android_activity_to_path(app_root: str, activity: str, file_by_path: dict[s
     activity_name = activity.split(".")[-1]
     for suffix in (".kt", ".java"):
         for path in file_by_path:
+            if _is_cocoapods_dependency_path(path):
+                continue
             if _under_app_root(path, app_root) and Path(path).name == f"{activity_name}{suffix}":
                 return path
     return ""
@@ -1082,6 +1117,8 @@ def _dependencies_from_manifest(root: Path, path: Path) -> list[dict[str, Any]]:
         return _gradle_dependencies(root, path)
     if name == "podfile":
         return _podfile_dependencies(root, path)
+    if name in {"podfile.lock", "manifest.lock"}:
+        return _pod_lockfile_dependencies(root, path)
     if name == "package.swift":
         return _swift_package_dependencies(root, path)
     return []
@@ -1194,6 +1231,35 @@ def _podfile_dependencies(root: Path, path: Path) -> list[dict[str, Any]]:
                 "name": match.group(1),
                 "version": match.group(2) or "unspecified",
                 "scope": "pod",
+                "manifest": _relative_path(root, path),
+            }
+        )
+    return dependencies
+
+
+def _pod_lockfile_dependencies(root: Path, path: Path) -> list[dict[str, Any]]:
+    text = _read_text_file(path) or ""
+    dependencies: list[dict[str, Any]] = []
+    in_pods_section = False
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped == "PODS:":
+            in_pods_section = True
+            continue
+        if in_pods_section and line and not line.startswith(" "):
+            break
+        if not in_pods_section:
+            continue
+        match = re.match(r"\s{2}-\s+([^():]+(?:/[^():]+)?)\s+\(([^)]+)\)", line)
+        if not match:
+            continue
+        dependencies.append(
+            {
+                "ecosystem": "cocoapods",
+                "name": match.group(1).strip(),
+                "version": match.group(2).strip(),
+                "scope": "lockfile",
                 "manifest": _relative_path(root, path),
             }
         )
