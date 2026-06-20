@@ -22,6 +22,7 @@ from mosh.crews.discovery_source.tools import (
     MAX_INDEXED_FILES,
     RouteApiExtractorTool,
     SourceInventoryTool,
+    build_source_index,
 )
 from mosh.memory import FileMemory
 from tests.fakes import FakeRuntimeCrewAI, FakeDiscoverySourceRunner
@@ -109,6 +110,66 @@ class DiscoverySourceToolTests(unittest.TestCase):
         self.assertEqual(get_route["method"], "GET")
         self.assertEqual(get_route["path"], "app.py")
         self.assertEqual(get_route["handler"], "get_user")
+
+    def test_route_extractor_finds_rails_routes_and_updates_source_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            routes_file = source / "api" / "config" / "routes.rb"
+            routes_file.parent.mkdir(parents=True)
+            routes_file.write_text(
+                "\n".join(
+                    [
+                        "Rails.application.routes.draw do",
+                        "  get 'billing/get'",
+                        "  get 'configuration/get'",
+                        "  scope '/api' do",
+                        "    get '/ping' => 'ping#ping'",
+                        "    post '/billing/webhook', to: 'billing#stripe_webhook'",
+                        "    get '/bookings/:id' => 'bookings#read'",
+                        "    constraints(->(_request) { Rails.configuration.x.drive.expose_internal_api }) do",
+                        "      scope '/backoffice' do",
+                        "        scope '/users' do",
+                        "          get '/content' => 'backoffice#users_content'",
+                        "        end",
+                        "      end",
+                        "    end",
+                        "    namespace :driver do",
+                        "      get '/schedules' => 'schedules#list'",
+                        "    end",
+                        "  end",
+                        "end",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            routes = RouteApiExtractorTool().run(str(source))
+
+        routes_by_full_path = {route["full_route"]: route for route in routes["routes"]}
+        self.assertIn("/billing/get", routes_by_full_path)
+        self.assertIn("/configuration/get", routes_by_full_path)
+        self.assertIn("/api/ping", routes_by_full_path)
+        self.assertIn("/api/billing/webhook", routes_by_full_path)
+        self.assertIn("/api/bookings/:id", routes_by_full_path)
+        self.assertIn("/api/backoffice/users/content", routes_by_full_path)
+        self.assertIn("/api/driver/schedules", routes_by_full_path)
+        self.assertEqual(routes_by_full_path["/api/ping"]["framework"], "rails")
+        self.assertEqual(routes_by_full_path["/api/ping"]["handler"], "ping#ping")
+        self.assertEqual(routes_by_full_path["/billing/get"]["handler"], "billing#get")
+        self.assertEqual(routes_by_full_path["/api/billing/webhook"]["method"], "POST")
+        self.assertEqual(routes_by_full_path["/api/driver/schedules"]["handler"], "driver/schedules#list")
+        self.assertTrue(routes_by_full_path["/api/backoffice/users/content"]["conditional"])
+
+        source_index = build_source_index(
+            {"schema": "mosh.source-info.v1", "path": str(source)},
+            {"files": [], "apps": [], "languages": {}},
+            routes,
+            {"dependencies": []},
+            {"configuration": []},
+        )
+        self.assertEqual(source_index["summary"]["routes_identified"], len(routes["routes"]))
+        self.assertEqual(source_index["inventory"]["apis"], routes["routes"])
+        self.assertTrue(source_index["evidence_refs"])
 
     def test_dependency_and_config_inventory_extract_supported_evidence(self) -> None:
         with fixture_source_tree() as source:

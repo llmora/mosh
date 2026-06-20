@@ -216,7 +216,7 @@ class SourceInventoryTool:
 class RouteApiExtractorTool:
     definition = ToolDefinition(
         name="route_api_extractor",
-        description="Extract likely HTTP routes and API endpoints from common Python and JavaScript framework patterns.",
+        description="Extract likely HTTP routes and API endpoints from common Python, JavaScript, and Rails patterns.",
     )
 
     def run(self, source: str) -> dict[str, Any]:
@@ -1225,7 +1225,16 @@ def _extract_routes_from_file(root: Path, path: Path) -> list[dict[str, Any]]:
         return _extract_python_routes(root, path, text)
     if suffix in {".js", ".jsx", ".mjs", ".ts", ".tsx"}:
         return _extract_javascript_routes(root, path, text)
+    if suffix == ".rb" and _looks_like_rails_routes_file(path, text):
+        return _extract_rails_routes(root, path, text)
     return []
+
+
+@dataclass(frozen=True)
+class _RailsRouteContext:
+    path_prefix: str = ""
+    handler_prefix: str = ""
+    conditional: bool = False
 
 
 def _extract_python_routes(root: Path, path: Path, text: str) -> list[dict[str, Any]]:
@@ -1323,6 +1332,140 @@ def _python_registered_blueprint_prefixes(text: str) -> dict[str, str]:
 def _keyword_string_value(text: str, key: str) -> str:
     match = re.search(rf"\b{re.escape(key)}\s*=\s*['\"]([^'\"]+)['\"]", text)
     return match.group(1) if match else ""
+
+
+def _looks_like_rails_routes_file(path: Path, text: str) -> bool:
+    return path.name == "routes.rb" and "Rails.application.routes.draw" in text
+
+
+def _extract_rails_routes(root: Path, path: Path, text: str) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    context_stack: list[_RailsRouteContext] = []
+    for index, raw_line in enumerate(text.splitlines(), start=1):
+        stripped = _strip_ruby_comment(raw_line).strip()
+        if not stripped:
+            continue
+        if re.fullmatch(r"end\b.*", stripped):
+            if context_stack:
+                context_stack.pop()
+            continue
+        context = _rails_context_from_line(stripped)
+        if context:
+            context_stack.append(context)
+            continue
+        route_data = _rails_route_from_line(stripped)
+        if not route_data:
+            continue
+        method, route_path, handler = route_data
+        mount_prefix = _join_route_paths(*(context.path_prefix for context in context_stack))
+        resolved_handler = _rails_handler_with_namespace(handler or _rails_implicit_handler(route_path), context_stack)
+        route = _route(
+            root,
+            path,
+            index,
+            method,
+            route_path,
+            "rails",
+            resolved_handler,
+            stripped,
+            mount_prefix=mount_prefix,
+        )
+        if any(context.conditional for context in context_stack):
+            route["conditional"] = True
+        routes.append(route)
+    return routes
+
+
+def _strip_ruby_comment(line: str) -> str:
+    quote: str | None = None
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char == "#":
+            return line[:index]
+    return line
+
+
+def _rails_context_from_line(line: str) -> _RailsRouteContext | None:
+    scope_match = re.match(r"scope\b(.*)\bdo\b", line)
+    if scope_match:
+        return _RailsRouteContext(path_prefix=_rails_scope_path(scope_match.group(1)))
+    namespace_match = re.match(r"namespace\s+(?::([A-Za-z_][\w]*)|['\"]([^'\"]+)['\"])(?:\s*,.*)?\s+do\b", line)
+    if namespace_match:
+        namespace = namespace_match.group(1) or namespace_match.group(2) or ""
+        return _RailsRouteContext(path_prefix=f"/{namespace}", handler_prefix=namespace)
+    if re.match(r"constraints\b.*\bdo\b", line):
+        return _RailsRouteContext(conditional=True)
+    return None
+
+
+def _rails_scope_path(scope_args: str) -> str:
+    positional = _first_string_literal(scope_args)
+    if positional:
+        return positional
+    keyword = re.search(r"\bpath:\s*['\"]([^'\"]+)['\"]", scope_args)
+    return keyword.group(1) if keyword else ""
+
+
+def _rails_route_from_line(line: str) -> tuple[str, str, str | None] | None:
+    match = re.match(r"\b(get|post|put|patch|delete)\s+(.+)$", line)
+    if not match:
+        return None
+    route_path = _first_string_literal(match.group(2))
+    if not route_path:
+        return None
+    handler = _rails_explicit_handler(match.group(2), route_path)
+    return match.group(1).upper(), route_path, handler
+
+
+def _first_string_literal(text: str) -> str:
+    match = re.search(r"['\"]([^'\"]+)['\"]", text)
+    return match.group(1) if match else ""
+
+
+def _rails_explicit_handler(route_tail: str, route_path: str) -> str | None:
+    tail = route_tail
+    first_literal = re.escape(route_path)
+    tail = re.sub(rf"^\s*['\"]{first_literal}['\"]\s*,?", "", tail, count=1)
+    handler_match = re.search(r"(?:=>|to:)\s*['\"]([^'\"]+#\w+)['\"]", tail)
+    if handler_match:
+        return handler_match.group(1)
+    controller_match = re.search(r"\bcontroller:\s*['\"]([^'\"]+)['\"]", tail)
+    action_match = re.search(r"\baction:\s*['\"]([^'\"]+)['\"]", tail)
+    if controller_match and action_match:
+        return f"{controller_match.group(1)}#{action_match.group(1)}"
+    return None
+
+
+def _rails_implicit_handler(route_path: str) -> str | None:
+    parts = [part for part in _normalize_route_path(route_path).strip("/").split("/") if part and not part.startswith(":")]
+    if len(parts) < 2:
+        return None
+    return f"{'/'.join(parts[:-1])}#{parts[-1]}"
+
+
+def _rails_handler_with_namespace(handler: str | None, context_stack: list[_RailsRouteContext]) -> str | None:
+    if not handler:
+        return None
+    namespace = "/".join(context.handler_prefix for context in context_stack if context.handler_prefix)
+    if not namespace:
+        return handler
+    controller, separator, action = handler.partition("#")
+    if "/" in controller:
+        return handler
+    return f"{namespace}/{controller}{separator}{action}"
 
 
 def _extract_javascript_routes(root: Path, path: Path, text: str) -> list[dict[str, Any]]:
