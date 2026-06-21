@@ -588,12 +588,11 @@ At minimum, tests should cover:
 
 # Roadmap
 
-* Broaden engagement conversation directives so discovery crawlers and source discovery tools directly consume scope overrides, user-supplied discovery facts, and tool requests during the same stage run.
-* Add review checkpoints to a future end-to-end run command so users can chat with the engagement between stages without manually remembering the command sequence.
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
 * Move the tool execution to docker, e.g. remove local dependencies
+
 * Incorporate a RAG so that executions are remembered and the agents learn from each execution
-* Incorporate a RAG so that executions are remembered and the agents learn from each execution
+
 * Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required. The GUI would have an onboarding wizard to ask for keys or anything else that may be required.
 * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
 * We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
