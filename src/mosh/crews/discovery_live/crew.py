@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.crews.harness_improvements import build_harness_improvement_tool
 from mosh.crews.discovery_live.agents import (
     CrawlerAgent,
     DiscoveryLiveReporterAgent,
@@ -252,6 +253,24 @@ def _build_yaml_discovery_crew(
 ):
     crawler_tool = _build_crawler_tool(crewai, state, crawler_agent)
     report_tool = _build_report_tool(crewai, state, reporter_agent)
+    crawler_improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="discovery_live",
+        agent="crawler",
+    )
+    technology_improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="discovery_live",
+        agent="technology_mapper",
+    )
+    reporter_improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="discovery_live",
+        agent="reporter",
+    )
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/tasks.yaml"))
 
@@ -265,7 +284,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["crawler"],
                 llm=_llm(crewai, config, config.models.discovery_live.crawler),
-                tools=[crawler_tool],
+                tools=[crawler_tool, crawler_improvement_tool],
                 allow_delegation=False,
             )
 
@@ -274,7 +293,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["technology_mapper"],
                 llm=_llm(crewai, config, config.models.discovery_live.technology_mapper),
-                tools=[],
+                tools=[technology_improvement_tool],
                 allow_delegation=False,
             )
 
@@ -283,7 +302,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["reporter"],
                 llm=_llm(crewai, config, config.models.discovery_live.reporter),
-                tools=[report_tool],
+                tools=[report_tool, reporter_improvement_tool],
                 allow_delegation=False,
             )
 

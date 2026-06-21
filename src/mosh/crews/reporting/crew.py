@@ -9,6 +9,7 @@ from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
 from mosh.conversation import active_directives, active_directives_fingerprint
+from mosh.crews.harness_improvements import build_harness_improvement_tool
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
@@ -232,6 +233,7 @@ def build_final_report_bundle(output_root: Path, engagement_id: str) -> dict[str
 
 def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
     write_tool = _build_write_final_report_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="reporting", agent="writer")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/writer_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/writer_tasks.yaml"))
 
@@ -245,7 +247,7 @@ def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
             return crewai.Agent(
                 config=self.agents_config["writer"],
                 llm=_llm(crewai, config, config.models.reporting.writer),
-                tools=[write_tool],
+                tools=[write_tool, improvement_tool],
                 allow_delegation=False,
             )
 
@@ -275,6 +277,7 @@ def _build_writer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: FinalReportState):
     review_tool = _build_submit_final_report_review_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="reporting", agent="reviewer")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/reviewer_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("reporting/reviewer_tasks.yaml"))
 
@@ -288,7 +291,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: FinalReportState
             return crewai.Agent(
                 config=self.agents_config["reviewer"],
                 llm=_llm(crewai, config, config.models.reporting.reviewer),
-                tools=[review_tool],
+                tools=[review_tool, improvement_tool],
                 allow_delegation=False,
             )
 

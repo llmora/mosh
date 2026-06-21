@@ -22,6 +22,13 @@ draft_security_test_plan_task:
     authorization, scope, evidence, readiness, or structured output
     requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as missing execution tooling, weak prompt guidance, unsupported
+    source/live correlation, or repeated manual planning work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, ordinary missing credentials, authorization, safe test
+    data, target mappings, or deferred security test opportunities.
+
     For engagement-backed planning, review all detailed asset-scoped evidence in
     asset_evidence.live[].discovery and asset_evidence.source[].discovery, and
     use correlation.evidence_links as source/live linkage input. The top-level

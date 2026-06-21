@@ -17,6 +17,12 @@ refine_engagement_template_task:
     Apply engagement steer when they do not conflict with mosh safety,
     template schema, or preservation requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a template schema gap, weak prompt guidance, or repeated
+    manual refinement work, optionally call record_harness_improvement. Do not
+    use that tool for target vulnerabilities, credentials, safe test data, or
+    user-owned configuration values.
+
     You must call write_refined_engagement_template exactly once with a
     structured object or JSON string.
 

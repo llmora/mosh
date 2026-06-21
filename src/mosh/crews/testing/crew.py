@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from mosh.config import AppConfig
 from mosh.conversation import active_directives
+from mosh.crews.harness_improvements import build_harness_improvement_tool
 from mosh.crews.discovery_live.reporting import update_report_with_testing_feedback
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
@@ -1387,7 +1388,12 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
             ]
         )
     evidence_tool = _build_submit_execution_evidence_tool(crewai, state)
-    tools.append(evidence_tool)
+    tools.extend(
+        [
+            evidence_tool,
+            build_harness_improvement_tool(crewai, state.memory, stage="testing", agent="executor"),
+        ]
+    )
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/executor_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/executor_tasks.yaml"))
 
@@ -1440,6 +1446,7 @@ def _has_live_execution_target(state: SecurityTestExecutionState) -> bool:
 
 def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     review_tool = _build_submit_execution_review_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="testing", agent="reviewer")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reviewer_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reviewer_tasks.yaml"))
 
@@ -1453,7 +1460,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
             return crewai.Agent(
                 config=self.agents_config["reviewer"],
                 llm=_llm(crewai, config, config.models.testing.reviewer),
-                tools=[review_tool],
+                tools=[review_tool, improvement_tool],
                 allow_delegation=False,
             )
 
@@ -1483,6 +1490,7 @@ def _build_reviewer_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
 
 def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExecutionState):
     report_tool = _build_write_executed_test_report_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="testing", agent="reporter")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reporter_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("testing/reporter_tasks.yaml"))
 
@@ -1496,7 +1504,7 @@ def _build_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
             return crewai.Agent(
                 config=self.agents_config["reporter"],
                 llm=_llm(crewai, config, config.models.testing.reporter),
-                tools=[report_tool],
+                tools=[report_tool, improvement_tool],
                 allow_delegation=False,
             )
 

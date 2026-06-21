@@ -33,6 +33,13 @@ write_executed_security_test_report_task:
     scope, evidence, review decisions, effective target mappings, or structured
     output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a report schema gap, weak prompt guidance, unsupported
+    evidence rendering, or repeated manual reporting work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal preflight blockers, missing customer credentials,
+    authorization, safe test data, or target mappings.
+
     Write the report against the effective target mappings. Distinguish
     discovery evidence URLs from execution targets. Do not state that production
     remains required for this executed test when a staging/preprod alternative

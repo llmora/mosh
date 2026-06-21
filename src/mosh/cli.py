@@ -30,6 +30,7 @@ from mosh.engagements import (
     load_engagement,
     record_asset_discovery,
 )
+from mosh.harness_improvements import iter_harness_improvements
 from mosh.crews.planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.testing.crew import (
     SecurityTestPreflightResult,
@@ -121,6 +122,15 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("message", nargs="*", help="Message to send; omit for interactive chat")
     chat_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    improvements_parser = subcommands.add_parser("improvements", help="Review internal mosh harness improvements")
+    improvements_subcommands = improvements_parser.add_subparsers(dest="improvements_command", required=True)
+    improvements_list_parser = improvements_subcommands.add_parser(
+        "list",
+        help="List harness improvement suggestions for one engagement, or all engagements when omitted",
+    )
+    improvements_list_parser.add_argument("engagement_id", nargs="?", help="Engagement ID")
+    improvements_list_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+
     args = parser.parse_args(argv)
 
     if args.command == "engagement":
@@ -141,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_final_reporting(config, args)
     if args.command == "chat":
         return _run_chat(config, args)
+    if args.command == "improvements":
+        return _run_improvements(args)
     parser.error(f"Unsupported command: {args.command}")
     return 2
 
@@ -464,6 +476,92 @@ def _run_chat(config: AppConfig, args: argparse.Namespace) -> int:
             print(f"mosh failed: {exc}", file=sys.stderr)
             return 1
         print(result.response)
+
+
+def _run_improvements(args: argparse.Namespace) -> int:
+    if args.improvements_command == "list":
+        return _run_improvements_list(args)
+    print(f"mosh failed: unsupported improvements command: {args.improvements_command}", file=sys.stderr)
+    return 1
+
+
+def _run_improvements_list(args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    engagement_id = args.engagement_id
+    try:
+        if engagement_id:
+            _require_engagement(output_root, engagement_id)
+        suggestions = list(iter_harness_improvements(output_root, engagement_id))
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+
+    grouped = _group_improvements(suggestions)
+    if not grouped:
+        print("No harness improvements recorded.")
+        return 0
+
+    scope = f"for {engagement_id}" if engagement_id else "across all engagements"
+    plural = "suggestion" if len(grouped) == 1 else "suggestions"
+    print(f"Harness improvements {scope}: {len(grouped)} {plural}")
+    for index, item in enumerate(grouped, start=1):
+        if index > 1:
+            print()
+        print(f"{index}. [{item['impact']}] {item['title']}")
+        print(f"   Category: {item['category']}")
+        print(f"   Engagements: {', '.join(item['engagements'])}")
+        print(f"   Occurrences: {item['occurrences']}")
+        print(f"   Problem: {item['problem']}")
+        print(f"   Suggestion: {item['suggestion']}")
+        evidence = item.get("evidence") or []
+        if evidence:
+            print(f"   Evidence: {'; '.join(evidence[:3])}")
+    return 0
+
+
+def _group_improvements(suggestions: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for suggestion in suggestions:
+        fingerprint = str(suggestion.get("fingerprint") or suggestion.get("id") or "")
+        if not fingerprint:
+            continue
+        item = grouped.get(fingerprint)
+        occurrences = suggestion.get("occurrences") if isinstance(suggestion.get("occurrences"), list) else []
+        engagement_id = str(suggestion.get("engagement_id") or "")
+        if item is None:
+            item = {
+                "fingerprint": fingerprint,
+                "impact": str(suggestion.get("impact") or "medium"),
+                "category": str(suggestion.get("category") or "other"),
+                "title": str(suggestion.get("title") or "Untitled harness improvement"),
+                "problem": str(suggestion.get("problem") or ""),
+                "suggestion": str(suggestion.get("suggestion") or ""),
+                "evidence": suggestion.get("evidence") if isinstance(suggestion.get("evidence"), list) else [],
+                "engagements": set(),
+                "occurrences": 0,
+                "last_seen_at": str(suggestion.get("last_seen_at") or ""),
+            }
+            grouped[fingerprint] = item
+        if engagement_id:
+            item["engagements"].add(engagement_id)  # type: ignore[union-attr]
+        item["occurrences"] = int(item["occurrences"]) + len(occurrences)
+        last_seen = str(suggestion.get("last_seen_at") or "")
+        if last_seen > str(item.get("last_seen_at") or ""):
+            item["last_seen_at"] = last_seen
+
+    impact_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+    rendered = []
+    for item in grouped.values():
+        rendered.append({**item, "engagements": sorted(item["engagements"])})  # type: ignore[index]
+    return sorted(
+        rendered,
+        key=lambda item: (
+            impact_rank.get(str(item.get("impact")), 5),
+            -len(item.get("engagements") or []),
+            -int(item.get("occurrences") or 0),
+            str(item.get("title") or ""),
+        ),
+    )
 
 
 def _print_event(event: Event) -> None:

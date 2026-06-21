@@ -13,6 +13,7 @@ from unittest.mock import patch
 from mosh.cli import main
 from mosh.engagement import load_engagement_file, write_engagement_template
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_engagement
+from mosh.harness_improvements import record_harness_improvement
 from tests.fakes import (
     FakeCrewRunner,
     FakeFinalReportingRunner,
@@ -578,6 +579,53 @@ class CliTests(unittest.TestCase):
             self.assertIn("Final report written to", stdout.getvalue())
             self.assertTrue(report_path.exists())
             self.assertEqual(runner.calls[0]["target_url"], target_url)
+
+    def test_cli_improvements_list_reports_single_and_all_engagements(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            first = create_engagement(output_root)
+            second = create_engagement(output_root)
+            for engagement in [first, second]:
+                record_harness_improvement(
+                    output_root,
+                    engagement.id,
+                    stage="testing",
+                    agent="executor",
+                    category="tooling",
+                    impact="high",
+                    title="Add JWT claim diff tool",
+                    problem="JWT claims had to be decoded and compared manually.",
+                    suggestion="Add a bounded JWT decode and claim diff helper.",
+                    source_ref="AUTH-001",
+                )
+
+            single_stdout = io.StringIO()
+            with contextlib.redirect_stdout(single_stdout):
+                single_exit = main(["improvements", "list", first.id, "--output-root", str(output_root)])
+
+            all_stdout = io.StringIO()
+            with contextlib.redirect_stdout(all_stdout):
+                all_exit = main(["improvements", "list", "--output-root", str(output_root)])
+
+            self.assertEqual(single_exit, 0)
+            self.assertIn(f"Harness improvements for {first.id}: 1 suggestion", single_stdout.getvalue())
+            self.assertIn(f"Engagements: {first.id}", single_stdout.getvalue())
+            self.assertNotIn(second.id, single_stdout.getvalue())
+            self.assertEqual(all_exit, 0)
+            self.assertIn("Harness improvements across all engagements: 1 suggestion", all_stdout.getvalue())
+            self.assertIn(f"Engagements: {', '.join(sorted([first.id, second.id]))}", all_stdout.getvalue())
+            self.assertIn("Occurrences: 2", all_stdout.getvalue())
+
+    def test_cli_improvements_list_empty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["improvements", "list", "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stdout.getvalue(), "No harness improvements recorded.\n")
 
 
 if __name__ == "__main__":

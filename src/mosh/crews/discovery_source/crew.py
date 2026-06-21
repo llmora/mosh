@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.crews.harness_improvements import build_harness_improvement_tool
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
@@ -201,6 +202,18 @@ def _build_yaml_discovery_source_crew(
     component_map_tool = _build_submit_source_component_map_tool(crewai, state)
     gap_analysis_tool = _build_submit_source_gap_analysis_tool(crewai, state)
     report_tool = _build_write_discovery_source_report_tool(crewai, state, reporter_agent)
+    improvement_tools = {
+        agent: build_harness_improvement_tool(crewai, state.memory, stage="discovery_source", agent=agent)
+        for agent in [
+            "source_intake",
+            "source_mapper",
+            "source_route_resolver",
+            "dependency_config",
+            "source_component_mapper",
+            "source_gap_analyst",
+            "reporter",
+        ]
+    }
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_source/agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_source/tasks.yaml"))
 
@@ -214,7 +227,7 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["source_intake"],
                 llm=_llm(crewai, config, config.models.discovery_source.intake),
-                tools=[validate_tool],
+                tools=[validate_tool, improvement_tools["source_intake"]],
                 allow_delegation=False,
             )
 
@@ -223,7 +236,7 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["source_mapper"],
                 llm=_llm(crewai, config, config.models.discovery_source.mapper),
-                tools=[inventory_tool, route_tool, search_tool, read_slice_tool],
+                tools=[inventory_tool, route_tool, search_tool, read_slice_tool, improvement_tools["source_mapper"]],
                 allow_delegation=False,
             )
 
@@ -232,7 +245,7 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["dependency_config"],
                 llm=_llm(crewai, config, config.models.discovery_source.dependency_config),
-                tools=[dependency_tool, config_tool],
+                tools=[dependency_tool, config_tool, improvement_tools["dependency_config"]],
                 allow_delegation=False,
             )
 
@@ -241,7 +254,13 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["source_route_resolver"],
                 llm=_llm(crewai, config, config.models.discovery_source.route_resolver),
-                tools=[route_context_tool, route_search_tool, route_read_slice_tool, route_resolution_tool],
+                tools=[
+                    route_context_tool,
+                    route_search_tool,
+                    route_read_slice_tool,
+                    route_resolution_tool,
+                    improvement_tools["source_route_resolver"],
+                ],
                 allow_delegation=False,
             )
 
@@ -250,7 +269,7 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["source_component_mapper"],
                 llm=_llm(crewai, config, config.models.discovery_source.component_mapper),
-                tools=[context_tool, component_map_tool],
+                tools=[context_tool, component_map_tool, improvement_tools["source_component_mapper"]],
                 allow_delegation=False,
             )
 
@@ -259,7 +278,7 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["source_gap_analyst"],
                 llm=_llm(crewai, config, config.models.discovery_source.gap_analyst),
-                tools=[context_tool, gap_analysis_tool],
+                tools=[context_tool, gap_analysis_tool, improvement_tools["source_gap_analyst"]],
                 allow_delegation=False,
             )
 
@@ -268,7 +287,7 @@ def _build_yaml_discovery_source_crew(
             return crewai.Agent(
                 config=self.agents_config["reporter"],
                 llm=_llm(crewai, config, config.models.discovery_source.reporter),
-                tools=[report_tool],
+                tools=[report_tool, improvement_tools["reporter"]],
                 allow_delegation=False,
             )
 

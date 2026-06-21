@@ -386,6 +386,28 @@ The report is structured as a customer deliverable:
 
 Qualitative severity is taken from hypotheses results and put in the context of the business impact.
 
+### 8. Review Harness Improvement Suggestions
+
+During discovery, planning, testing, and reporting, agents can record internal suggestions for improving `mosh` itself, such as missing tools, parser gaps, prompt improvements, or repeated manual workflows. These are not customer-facing security findings.
+
+Suggestions are stored with the engagement:
+
+```text
+report/<engagement-id>/harness_improvements.json
+```
+
+List suggestions for one engagement:
+
+```bash
+uv run mosh improvements list eng_a1b2c3d4
+```
+
+Omit the engagement ID to list suggestions across all engagements under `report/`:
+
+```bash
+uv run mosh improvements list
+```
+
 ## End-To-End Example
 
 ```bash
@@ -403,6 +425,8 @@ uv run mosh test eng_a1b2c3d4
 uv run mosh test eng_a1b2c3d4
 
 uv run mosh report eng_a1b2c3d4
+
+uv run mosh improvements list eng_a1b2c3d4
 ```
 
 ## What you get
@@ -414,6 +438,7 @@ After a full run, you have:
 - An editable engagement template for permissions, targets, credentials, limits, and safe test data
 - Executed test reports, including resolution
 - A final customer-facing report
+- Internal harness improvement suggestions for human review, when agents identify useful `mosh` improvements
 
 ## Resolving vulnerabilities
 

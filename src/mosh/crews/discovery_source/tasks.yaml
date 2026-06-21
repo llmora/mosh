@@ -11,6 +11,11 @@ validate_source_task:
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, optionally call record_harness_improvement. Do not use that tool for
+    target vulnerabilities, normal engagement blockers, or missing customer
+    inputs.
+
     You must call validate_source_path exactly once with the source path. Do not
     inspect files directly.
   expected_output: >
@@ -30,6 +35,12 @@ map_source_task:
 
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
+
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as an unsupported framework pattern, missing source parser, or
+    repeated manual source-mapping work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
 
     You must call source_inventory exactly once and route_api_extractor exactly
     once. Use source_search or read_source_slice only for focused follow-up if
@@ -55,6 +66,12 @@ resolve_source_routes_task:
 
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
+
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a missing route resolver, parser gap, or repeated manual
+    route-resolution pattern, optionally call record_harness_improvement. Do
+    not use that tool for target vulnerabilities, normal engagement blockers,
+    or missing customer inputs.
 
     You must call get_route_resolution_context first. Use source_search and
     read_source_slice only for focused follow-up on router mounts, app
@@ -86,6 +103,12 @@ inspect_dependency_config_task:
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as missing dependency/config extraction, weak prompt guidance,
+    or repeated manual inventory work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
+
     You must call dependency_inventory exactly once and config_inventory exactly
     once. Preserve manifest, lockfile, deployment, environment-template, and CI
     file paths as evidence. Do not invent dependency versions, deployment
@@ -108,6 +131,12 @@ map_source_components_task:
 
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
+
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as missing component mapping support, weak prompt guidance, or
+    repeated manual correlation work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
 
     You must call get_discovery_source_context first. Then call
     submit_source_component_map exactly once with a structured object that may
@@ -143,6 +172,12 @@ analyze_discovery_source_gaps_task:
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
 
+    If a gap reflects a reusable limitation in the mosh harness itself, such as
+    missing tools, unsupported parsers, weak prompt guidance, or repeated manual
+    workflow, optionally call record_harness_improvement. Keep source discovery
+    gaps in submit_source_gap_analysis; use record_harness_improvement only for
+    internal harness improvements that should go to a human maintainer.
+
     You must call get_discovery_source_context first. Include the submitted
     component map when available. Then call submit_source_gap_analysis exactly
     once with a structured object that may include:
@@ -175,6 +210,12 @@ write_discovery_source_report_task:
 
     Apply engagement steer when they do not conflict with mosh safety,
     source access, evidence, or structured output requirements.
+
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a report schema gap, weak prompt guidance, missing source
+    discovery tool, or repeated manual workflow, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
 
     You must call write_discovery_source_report exactly once with a structured
     report object or JSON string. The report object may include:
