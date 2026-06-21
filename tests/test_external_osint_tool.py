@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from mosh.crews.discovery_live.osint import (
+    CensysOsintProvider,
     CrtShOsintProvider,
     OsintObservation,
     ShodanOsintProvider,
@@ -203,6 +205,26 @@ class ExternalOsintDiscoveryToolTests(unittest.TestCase):
         self.assertEqual(observations[0].host, "api.example.test")
         self.assertEqual(observations[0].port, 443)
         self.assertEqual(observations[0].protocol, "https")
+
+    def test_censys_provider_uses_get_search_query_parameters(self) -> None:
+        provider = CensysOsintProvider("censys-id", "censys-secret")
+        with patch(
+            "mosh.crews.discovery_live.osint._open_json",
+            return_value={"result": {"hits": []}},
+        ) as open_json:
+            observations = provider.query("example.test", timeout=5)
+
+        request = open_json.call_args.args[0]
+        query = parse_qs(urlparse(request.full_url).query)
+        self.assertEqual(request.get_method(), "GET")
+        self.assertIsNone(request.data)
+        self.assertEqual(query["per_page"], ["50"])
+        self.assertEqual(query["virtual_hosts"], ["EXCLUDE"])
+        self.assertEqual(
+            query["q"],
+            ["dns.names: *.example.test or services.tls.certificates.leaf_data.names: *.example.test"],
+        )
+        self.assertEqual(observations, [])
 
 
 if __name__ == "__main__":

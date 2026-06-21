@@ -141,21 +141,19 @@ class CensysOsintProvider:
         self.api_secret = api_secret
 
     def query(self, root_domain: str, timeout: int) -> list[OsintObservation]:
-        query_url = "https://search.censys.io/api/v2/hosts/search"
         query = f"dns.names: *.{root_domain} or services.tls.certificates.leaf_data.names: *.{root_domain}"
-        body = json.dumps({"q": query, "per_page": 50, "virtual_hosts": "EXCLUDE"}).encode("utf-8")
+        query_url = "https://search.censys.io/api/v2/hosts/search?" + urlencode(
+            {"q": query, "per_page": 50, "virtual_hosts": "EXCLUDE"}
+        )
         auth = base64.b64encode(f"{self.api_id}:{self.api_secret}".encode("utf-8")).decode("ascii")
         payload = _open_json(
             Request(
                 query_url,
-                data=body,
                 headers={
                     "Authorization": f"Basic {auth}",
-                    "Content-Type": "application/json",
                     "Accept": "application/json",
                     "User-Agent": OSINT_USER_AGENT,
                 },
-                method="POST",
             ),
             timeout,
         )
