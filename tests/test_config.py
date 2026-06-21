@@ -61,6 +61,8 @@ class AppConfigTests(unittest.TestCase):
                         "# local mosh settings",
                         'DEEPSEEK_API_KEY="dotenv-deepseek-key"',
                         "OPENROUTER_API_KEY=dotenv-openrouter-key",
+                        "MOSH_LLM_API_KEY=dotenv-custom-key",
+                        "MOSH_LLM_BASE_URL=http://localhost:11434/v1",
                         "MOSH_MAX_DEPTH=8",
                         "MOSH_SECURITY_COMMAND_TIMEOUT=45",
                         "MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM=false",
@@ -78,6 +80,8 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertEqual(config.deepseek_api_key, "dotenv-deepseek-key")
         self.assertEqual(config.openrouter_api_key, "dotenv-openrouter-key")
+        self.assertEqual(config.custom_llm_api_key, "dotenv-custom-key")
+        self.assertEqual(config.custom_llm_base_url, "http://localhost:11434/v1")
         self.assertEqual(config.max_depth, 8)
         self.assertEqual(config.security_command_timeout, 45)
         self.assertEqual(config.dirb_wordlist, "/tmp/dotenv-words.txt")
@@ -91,6 +95,7 @@ class AppConfigTests(unittest.TestCase):
                     [
                         "DEEPSEEK_API_KEY=dotenv-deepseek-key",
                         "OPENROUTER_API_KEY=dotenv-openrouter-key",
+                        "MOSH_LLM_API_KEY=dotenv-custom-key",
                         "MOSH_MAX_DEPTH=8",
                     ]
                 ),
@@ -99,11 +104,12 @@ class AppConfigTests(unittest.TestCase):
 
             with patch.dict(
                 os.environ,
-                {
-                    "DEEPSEEK_API_KEY": "shell-deepseek-key",
-                    "MOSH_MAX_DEPTH": "9",
-                },
-                clear=True,
+                    {
+                        "DEEPSEEK_API_KEY": "shell-deepseek-key",
+                        "MOSH_LLM_API_KEY": "shell-custom-key",
+                        "MOSH_MAX_DEPTH": "9",
+                    },
+                    clear=True,
             ):
                 config = AppConfig.from_env(
                     config_path=Path(directory) / "missing.yaml",
@@ -112,6 +118,7 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertEqual(config.deepseek_api_key, "shell-deepseek-key")
         self.assertEqual(config.openrouter_api_key, "dotenv-openrouter-key")
+        self.assertEqual(config.custom_llm_api_key, "shell-custom-key")
         self.assertEqual(config.max_depth, 9)
 
     def test_missing_dotenv_keeps_defaults(self) -> None:
@@ -213,6 +220,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.llm_api_key_name_for_model("deepseek/deepseek-v4-flash"), "DEEPSEEK_API_KEY")
         self.assertEqual(config.llm_provider_for_model("deepseek/deepseek-v4-flash"), "deepseek")
         self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
+        self.assertIsNone(config.llm_base_url_for_model("deepseek/deepseek-v4-flash"))
         self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
 
     def test_deepseek_models_fall_back_to_openrouter_without_deepseek_key(self) -> None:
@@ -221,6 +229,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertFalse(config.uses_direct_deepseek("deepseek/deepseek-v4-flash"))
         self.assertEqual(config.llm_api_key_for_model("deepseek/deepseek-v4-flash"), "openrouter-key")
         self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.llm_base_url_for_model("deepseek/deepseek-v4-flash"), "https://openrouter.ai/api/v1")
 
     def test_non_deepseek_models_always_use_openrouter(self) -> None:
         config = AppConfig(deepseek_api_key="deepseek-key")
@@ -234,6 +243,34 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertEqual(config.llm_model_name("openrouter/openai/gpt-5.2"), "openai/gpt-5.2")
         self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
+
+    def test_custom_llm_endpoint_routes_models_through_openai_compatible_backend(self) -> None:
+        config = AppConfig(
+            openrouter_api_key="openrouter-key",
+            deepseek_api_key="deepseek-key",
+            custom_llm_api_key="custom-key",
+            custom_llm_base_url="http://localhost:11434/v1",
+        )
+
+        self.assertTrue(config.uses_custom_llm("deepseek/deepseek-v4-flash"))
+        self.assertFalse(config.uses_direct_deepseek("deepseek/deepseek-v4-flash"))
+        self.assertEqual(config.llm_api_key_for_model("deepseek/deepseek-v4-flash"), "custom-key")
+        self.assertEqual(config.llm_api_key_name_for_model("deepseek/deepseek-v4-flash"), "MOSH_LLM_API_KEY")
+        self.assertEqual(config.llm_provider_for_model("deepseek/deepseek-v4-flash"), "openai")
+        self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.llm_base_url_for_model("deepseek/deepseek-v4-flash"), "http://localhost:11434/v1")
+        self.assertEqual(config.llm_model_name("custom/llama3.1"), "llama3.1")
+
+    def test_custom_model_prefix_requires_custom_llm_settings(self) -> None:
+        config = AppConfig(openrouter_api_key="openrouter-key")
+
+        self.assertTrue(config.uses_custom_llm("custom/llama3.1"))
+        self.assertEqual(config.llm_model_name("custom/llama3.1"), "llama3.1")
+        self.assertEqual(config.llm_api_key_for_model("custom/llama3.1"), None)
+        self.assertEqual(
+            config.missing_llm_settings_for_models(["custom/llama3.1"]),
+            ["MOSH_LLM_API_KEY", "MOSH_LLM_BASE_URL"],
+        )
 
     def test_deepseek_api_key_is_loaded_from_env(self) -> None:
         with patch.dict(

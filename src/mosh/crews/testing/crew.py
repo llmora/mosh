@@ -274,15 +274,15 @@ class CrewAISecurityTestingCrewRunner:
         preflight: SecurityTestPreflightResult,
         executable_pending: list[dict[str, Any]],
     ) -> None:
-        missing_keys = self.config.missing_llm_api_keys_for_models(
+        missing_settings = self.config.missing_llm_settings_for_models(
             [
                 self.config.models.testing.executor,
                 self.config.models.testing.reviewer,
                 self.config.models.testing.reporter,
             ]
         )
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+        if missing_settings:
+            raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
         crewai = _load_crewai()
         current_plan_revision_id = plan_revision_id(plan)
         source_root = _validated_source_root(source) if source else None

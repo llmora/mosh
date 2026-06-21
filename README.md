@@ -74,11 +74,22 @@ Or route through OpenRouter, open an account at openrouter.ai and generate an AP
 export OPENROUTER_API_KEY="your-openrouter-api-key"
 ```
 
+To use an OpenAI-compatible endpoint such as a local Ollama `/v1` API, a LiteLLM proxy, or an internal model gateway, set:
+
+```bash
+export MOSH_LLM_BASE_URL="http://localhost:11434/v1"
+export MOSH_LLM_API_KEY="your-api-key-or-local-placeholder"
+```
+
+When `MOSH_LLM_BASE_URL` is set, `mosh` sends all configured model calls to that endpoint using OpenAI-compatible request semantics. For endpoints that do not enforce API keys, use a placeholder value.
+
 Instead of exporting values every time, you can create a local `.env` file:
 
 ```dotenv
 DEEPSEEK_API_KEY=your-deepseek-api-key
 OPENROUTER_API_KEY=your-openrouter-api-key
+# MOSH_LLM_BASE_URL=http://localhost:11434/v1
+# MOSH_LLM_API_KEY=your-api-key-or-local-placeholder
 MOSH_MAX_DEPTH=5
 MOSH_SECURITY_COMMAND_TIMEOUT=300
 MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM=true
@@ -145,6 +156,16 @@ models:
 ```
 
 Use OpenRouter model IDs such as `openai/gpt-5.2` or `anthropic/claude-sonnet-4.5`. DeepSeek IDs such as `deepseek/deepseek-v4-flash` use `DEEPSEEK_API_KEY` directly when it is set; otherwise they route through OpenRouter and require `OPENROUTER_API_KEY`.
+
+For a custom OpenAI-compatible backend, configure model names exactly as that endpoint expects them. You may prefix a model with `custom/` to make the intent explicit; `mosh` strips that prefix before the call:
+
+```yaml
+models:
+  discovery_live:
+    crawler: custom/llama3.1
+    technology_mapper: custom/llama3.1
+    reporter: custom/llama3.1
+```
 
 ## Running a security scan
 

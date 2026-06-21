@@ -72,15 +72,15 @@ class CrewAIDiscoveryLiveCrewRunner:
         max_pages: int,
         max_depth: int,
     ) -> DiscoveryLiveCrewResult:
-        missing_keys = self.config.missing_llm_api_keys_for_models(
+        missing_settings = self.config.missing_llm_settings_for_models(
             [
                 self.config.models.discovery_live.crawler,
                 self.config.models.discovery_live.technology_mapper,
                 self.config.models.discovery_live.reporter,
             ]
         )
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+        if missing_settings:
+            raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
 
         crewai = _load_crewai()
         state = DiscoveryLiveCrewState(
@@ -212,14 +212,17 @@ def _llm(crewai: Any, config: AppConfig, model: str):
     api_key = config.llm_api_key_for_model(model)
     if not api_key:
         raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
+    base_url = config.llm_base_url_for_model(model)
+    if config.uses_custom_llm(model) and not base_url:
+        raise CrewAIUnavailable("MOSH_LLM_BASE_URL is not set.")
     kwargs = {
         "model": config.llm_model_name(model),
         "provider": config.llm_provider_for_model(model),
         "api_key": api_key,
         "temperature": 0,
     }
-    if not config.uses_direct_deepseek(model):
-        kwargs["base_url"] = config.openrouter_base_url
+    if base_url:
+        kwargs["base_url"] = base_url
     return crewai.LLM(**kwargs)
 
 
