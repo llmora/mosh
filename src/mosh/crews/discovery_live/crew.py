@@ -208,7 +208,7 @@ def _load_crewai():
     return crewai
 
 
-def _llm(crewai: Any, config: AppConfig, model: str):
+def _llm(crewai: Any, config: AppConfig, model: str, *, max_tokens: int | None = None):
     api_key = config.llm_api_key_for_model(model)
     if not api_key:
         raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
@@ -223,6 +223,8 @@ def _llm(crewai: Any, config: AppConfig, model: str):
     }
     if base_url:
         kwargs["base_url"] = base_url
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
     return crewai.LLM(**kwargs)
 
 

@@ -22,6 +22,12 @@ CHAT_CONTEXT_SCHEMA = "mosh.engagement-chat-context.v1"
 CONTEXT_TEXT_LIMIT = 6_000
 CONTEXT_MEMORY_ITEMS_LIMIT = 80
 CONTEXT_EXECUTED_REPORTS_LIMIT = 100
+CHAT_MAX_OUTPUT_TOKENS = 2_048
+LLM_CONTEXT_TEXT_LIMIT = 1_000
+LLM_CONTEXT_SHORT_TEXT_LIMIT = 350
+LLM_CONTEXT_ITEMS_LIMIT = 25
+LLM_CONTEXT_HYPOTHESES_LIMIT = 20
+LLM_CONTEXT_EXECUTED_TESTS_LIMIT = 12
 EXECUTION_METADATA_START = "<!-- mosh-execution"
 EXECUTION_METADATA_END = "-->"
 SEVERITY_ORDER = {
@@ -42,7 +48,7 @@ DIRECTIVE_DEFAULT_STAGES = {
     "execution_constraint": ["testing"],
     "engagement_template_update_suggestion": ["testing"],
     "report_correction": ["reporting"],
-    "engagement_context": ["planning", "reporting"],
+    "engagement_context": ["planning", "testing", "reporting"],
 }
 VALID_DIRECTIVE_KINDS = set(DIRECTIVE_DEFAULT_STAGES)
 
@@ -66,6 +72,7 @@ STAGE_DIRECTIVE_KINDS: dict[str, set[str]] = {
         "tool_request",
         "execution_constraint",
         "engagement_template_update_suggestion",
+        "engagement_context",
     },
     "reporting": {
         "scope_override",
@@ -219,19 +226,33 @@ class LLMEngagementChatRunner:
             )
 
         messages = _build_llm_chat_messages(context, user_message)
+        raw_response = ""
+        last_error: Exception | None = None
         try:
-            raw_response = self._complete(messages)
-            return _parse_llm_chat_result(raw_response, user_message, context)
+            for attempt in range(2):
+                raw_response = self._complete(messages)
+                try:
+                    result = _parse_llm_chat_result(raw_response, user_message, context)
+                    if _looks_like_incomplete_chat_answer(result.response):
+                        raise ValueError("chat model answer appears incomplete")
+                    return _merge_heuristic_directives(result, user_message)
+                except Exception as exc:
+                    last_error = exc
+                    if attempt == 0:
+                        messages = _build_llm_chat_repair_messages(messages, raw_response, exc)
+                        continue
+                    raise
         except Exception as exc:
             fallback = self.fallback_runner.respond(
                 engagement_id=engagement_id,
                 user_message=user_message,
                 context=context,
             )
+            reason = last_error or exc
             return EngagementChatResult(
                 response=(
                     "The chat model response could not be used "
-                    f"({type(exc).__name__}: {exc}). "
+                    f"({type(reason).__name__}: {reason}). "
                     "Using local engagement context fallback.\n\n"
                     f"{fallback.response}"
                 ),
@@ -245,7 +266,12 @@ class LLMEngagementChatRunner:
         from mosh.crews.discovery_live.crew import _llm, _load_crewai
 
         crewai = _load_crewai()
-        response = _llm(crewai, self.config, self.config.models.chat.assistant).call(messages)
+        response = _llm(
+            crewai,
+            self.config,
+            self.config.models.chat.assistant,
+            max_tokens=CHAT_MAX_OUTPUT_TOKENS,
+        ).call(messages)
         return _text(response)
 
 
@@ -554,13 +580,24 @@ def extract_directives(message: str, source_message_id: str) -> list[Conversatio
             )
         )
 
+    if not pure_question and _looks_like_design_clarification(lowered):
+        directives.append(
+            _directive(
+                kind="engagement_context",
+                instruction=text,
+                source_message_id=source_message_id,
+                stages=["planning", "testing", "reporting"],
+                target={"clarification": True},
+            )
+        )
+
     if not pure_question and _looks_like_engagement_context(lowered) and not directives:
         directives.append(
             _directive(
                 kind="engagement_context",
                 instruction=text,
                 source_message_id=source_message_id,
-                stages=["planning", "reporting"],
+                stages=["planning", "testing", "reporting"],
                 target={},
             )
         )
@@ -788,8 +825,42 @@ def _looks_like_report_correction(lowered: str) -> bool:
     return "report" in lowered and any(marker in lowered for marker in ("correct", "correction", "should say", "wrong", "not accurate"))
 
 
+def _looks_like_design_clarification(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in (
+            "intentional",
+            "by design",
+            "expected",
+            "supposed to",
+            "that's fine",
+            "that is fine",
+            "not a bug",
+            "not an issue",
+            "not a finding",
+            "false positive",
+            "acceptable",
+            "works without authentication",
+            "work without authentication",
+            "production users are anonymous",
+        )
+    )
+
+
 def _looks_like_engagement_context(lowered: str) -> bool:
-    return any(marker in lowered for marker in ("business", "context", "user flow", "workflow", "domain", "customer"))
+    return any(
+        marker in lowered
+        for marker in (
+            "business",
+            "context",
+            "user flow",
+            "workflow",
+            "domain",
+            "customer",
+            "intentional",
+            "by design",
+        )
+    )
 
 
 def _extract_urls(text: str) -> list[str]:
@@ -837,8 +908,13 @@ def _build_llm_chat_messages(context: dict[str, Any], user_message: Conversation
             "content": (
                 "You are the Mosh engagement chat assistant. Answer naturally and concisely using only the provided "
                 "engagement context. Do not dump raw grep-like excerpts. Cite artifact paths in artifact_refs. "
-                "If the user gives steering feedback, record it as directives. Keep credentials and permissions in "
-                "the engagement template; suggest exact fields instead of inventing secrets. "
+                "If the user gives steering feedback, record it as directives. If the user clarifies intended "
+                "application behavior, record an engagement_context directive and explain how that changes the next "
+                "steps. Keep credentials and permissions in the engagement template; suggest exact fields instead of "
+                "inventing secrets. Complete every list you introduce; do not end the answer after a colon. "
+                "Use only real mosh CLI commands: testing a specific hypothesis is "
+                "`uv run mosh test <engagement_id> --hypothesis <HYPOTHESIS_ID>`. Never suggest "
+                "`mosh test <HYPOTHESIS_ID>`. "
                 "Return only one JSON object with keys: answer, artifact_refs, directives. "
                 "directives must be a list of objects with kind, instruction, stages, and target."
             ),
@@ -863,41 +939,90 @@ def _llm_chat_context(context: dict[str, Any], question: str) -> dict[str, Any]:
         "user_message": question,
         "question_facts": facts,
         "engagement": context.get("engagement", {}),
+        "valid_cli_commands": _llm_valid_cli_commands(context),
         "recent_messages": _compact_recent_messages((context.get("conversation") or {}).get("messages")),
-        "active_directives": (context.get("conversation") or {}).get("active_directives", []),
+        "active_directives": _llm_directive_summaries((context.get("conversation") or {}).get("active_directives")),
         "stage_status": _stage_status_snapshot(context),
         "retrieved_artifact_excerpts": _llm_retrieved_artifact_excerpts(context, question),
-        "planning": {
-            "path": (context.get("planning") or {}).get("path"),
-            "structured_plan": (context.get("planning") or {}).get("structured_plan", {}),
-            "report_excerpt": _truncate(_text((context.get("planning") or {}).get("report")), 1_500),
-        },
+        "planning": _llm_planning_summary(context),
         "testing": {
             "path": (context.get("testing") or {}).get("path"),
-            "preflight_state": (context.get("testing") or {}).get("preflight_state", {}),
+            "preflight_state": _llm_preflight_summary((context.get("testing") or {}).get("preflight_state")),
             "executed_tests": _llm_executed_test_summaries(context),
         },
         "discovery": _llm_discovery_summaries(context),
         "final_report": {
             "path": (context.get("final_report") or {}).get("path"),
             "available": bool((context.get("final_report") or {}).get("content")),
-            "report_excerpt": _truncate(_text((context.get("final_report") or {}).get("content")), 1_500),
+            "report_excerpt": _truncate(_text((context.get("final_report") or {}).get("content")), LLM_CONTEXT_TEXT_LIMIT),
         },
     }
 
 
+def _build_llm_chat_repair_messages(
+    messages: list[dict[str, str]],
+    raw_response: str,
+    error: Exception,
+) -> list[dict[str, str]]:
+    return [
+        *messages,
+        {
+            "role": "assistant",
+            "content": _truncate(raw_response, 4_000) if raw_response else "",
+        },
+        {
+            "role": "user",
+            "content": (
+                f"The previous response could not be used: {type(error).__name__}: {error}. "
+                "Return one valid JSON object with a complete answer, artifact_refs, and directives. "
+                "If you introduce next steps, include the actual steps."
+            ),
+        },
+    ]
+
+
+def _llm_valid_cli_commands(context: dict[str, Any]) -> list[str]:
+    engagement = context.get("engagement") if isinstance(context.get("engagement"), dict) else {}
+    engagement_id = _text(engagement.get("id")) or "<engagement_id>"
+    return [
+        f"uv run mosh discover {engagement_id}",
+        f"uv run mosh plan {engagement_id}",
+        f"uv run mosh test {engagement_id}",
+        f"uv run mosh test {engagement_id} --hypothesis <HYPOTHESIS_ID>",
+        f"uv run mosh report {engagement_id}",
+        f"uv run mosh chat {engagement_id}",
+    ]
+
+
 def _compact_recent_messages(value: Any) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
-    for item in _list(value)[-12:]:
+    for item in _list(value)[-8:]:
         if not isinstance(item, dict):
             continue
         messages.append(
             {
                 "role": _text(item.get("role")),
-                "content": _truncate(_text(item.get("content")), 1_000),
+                "content": _truncate(_text(item.get("content")), 500),
             }
         )
     return messages
+
+
+def _llm_directive_summaries(value: Any) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for item in _list(value)[-LLM_CONTEXT_ITEMS_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+        summaries.append(
+            {
+                "id": item.get("id"),
+                "kind": item.get("kind"),
+                "instruction": _truncate(_text(item.get("instruction")), LLM_CONTEXT_SHORT_TEXT_LIMIT),
+                "stages": _string_list(item.get("stages")),
+                "target": _llm_compact_value(item.get("target"), LLM_CONTEXT_SHORT_TEXT_LIMIT),
+            }
+        )
+    return summaries
 
 
 def _stage_status_snapshot(context: dict[str, Any]) -> dict[str, Any]:
@@ -919,10 +1044,79 @@ def _llm_retrieved_artifact_excerpts(context: dict[str, Any], question: str) -> 
     ]
 
 
+def _llm_planning_summary(context: dict[str, Any]) -> dict[str, Any]:
+    planning = context.get("planning") if isinstance(context.get("planning"), dict) else {}
+    structured = planning.get("structured_plan") if isinstance(planning.get("structured_plan"), dict) else {}
+    hypotheses = _list(
+        structured.get("test_hypotheses")
+        or structured.get("hypotheses")
+        or structured.get("tests")
+    )
+    return {
+        "path": planning.get("path"),
+        "report_excerpt": _truncate(_text(planning.get("report")), LLM_CONTEXT_TEXT_LIMIT),
+        "hypotheses": [
+            _llm_hypothesis_summary(item)
+            for item in hypotheses[:LLM_CONTEXT_HYPOTHESES_LIMIT]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _llm_hypothesis_summary(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "title": _truncate(_text(item.get("title")), LLM_CONTEXT_SHORT_TEXT_LIMIT),
+        "priority": item.get("priority") or item.get("severity"),
+        "surface": item.get("surface"),
+        "execution_mode": item.get("execution_mode"),
+        "status": item.get("status"),
+        "requirements": [
+            _truncate(_text(requirement), 150)
+            for requirement in _list(item.get("requirements"))[:4]
+            if _text(requirement)
+        ],
+    }
+
+
+def _llm_preflight_summary(value: Any) -> dict[str, Any]:
+    state = value if isinstance(value, dict) else {}
+    return {
+        "ready": [
+            _llm_preflight_item(item)
+            for item in _list(state.get("ready"))[:LLM_CONTEXT_ITEMS_LIMIT]
+            if isinstance(item, dict)
+        ],
+        "blocked": [
+            _llm_preflight_item(item)
+            for item in _list(state.get("blocked"))[:LLM_CONTEXT_ITEMS_LIMIT]
+            if isinstance(item, dict)
+        ],
+        "deferred": [
+            _llm_preflight_item(item)
+            for item in _list(state.get("deferred"))[:LLM_CONTEXT_ITEMS_LIMIT]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _llm_preflight_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "title": _truncate(_text(item.get("title")), LLM_CONTEXT_SHORT_TEXT_LIMIT),
+        "priority": item.get("priority"),
+        "blockers": [
+            _truncate(_text(blocker), LLM_CONTEXT_SHORT_TEXT_LIMIT)
+            for blocker in _list(item.get("blockers"))[:8]
+            if _text(blocker)
+        ],
+    }
+
+
 def _llm_executed_test_summaries(context: dict[str, Any]) -> list[dict[str, Any]]:
     testing = context.get("testing") if isinstance(context.get("testing"), dict) else {}
     summaries: list[dict[str, Any]] = []
-    for item in _list(testing.get("executed_tests")):
+    for item in _list(testing.get("executed_tests"))[:LLM_CONTEXT_EXECUTED_TESTS_LIMIT]:
         if not isinstance(item, dict):
             continue
         summaries.append(
@@ -932,8 +1126,8 @@ def _llm_executed_test_summaries(context: dict[str, Any]) -> list[dict[str, Any]
                 "status": item.get("status"),
                 "review_accepted": item.get("review_accepted"),
                 "severity": item.get("severity"),
-                "summary": _truncate(_text(item.get("summary")), 900),
-                "result": _truncate(_text(item.get("result")), 900),
+                "summary": _truncate(_text(item.get("summary")), 220),
+                "result": _truncate(_text(item.get("result")), 220),
                 "path": item.get("path"),
             }
         )
@@ -942,7 +1136,7 @@ def _llm_executed_test_summaries(context: dict[str, Any]) -> list[dict[str, Any]
 
 def _llm_discovery_summaries(context: dict[str, Any]) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
-    for item in _list(context.get("discovery")):
+    for item in _list(context.get("discovery"))[:LLM_CONTEXT_ITEMS_LIMIT]:
         if not isinstance(item, dict):
             continue
         memory = item.get("memory") if isinstance(item.get("memory"), list) else []
@@ -959,11 +1153,22 @@ def _llm_discovery_summaries(context: dict[str, Any]) -> list[dict[str, Any]]:
                 "asset_id": item.get("asset_id"),
                 "asset_type": item.get("asset_type"),
                 "path": item.get("path"),
-                "summary": _compact_value(report),
-                "report_excerpt": _truncate(_text(item.get("report")), 1_500),
+                "summary": _llm_compact_value(report, LLM_CONTEXT_TEXT_LIMIT),
+                "report_excerpt": _truncate(_text(item.get("report")), LLM_CONTEXT_TEXT_LIMIT),
             }
         )
     return summaries
+
+
+def _llm_compact_value(value: Any, limit: int) -> Any:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        return _truncate(value, limit)
+    try:
+        return _truncate(json.dumps(value, sort_keys=True), limit)
+    except TypeError:
+        return _truncate(_text(value), limit)
 
 
 def _parse_llm_chat_result(
@@ -971,10 +1176,22 @@ def _parse_llm_chat_result(
     user_message: ConversationMessage,
     context: dict[str, Any],
 ) -> EngagementChatResult:
-    parsed = _extract_json_object(raw_response)
+    engagement_id = _context_engagement_id(context)
+    try:
+        parsed = _extract_json_object(raw_response)
+    except ValueError:
+        plain_answer = _plain_text_model_answer(raw_response)
+        if not plain_answer or _looks_jsonish(raw_response):
+            raise
+        return EngagementChatResult(
+            response=_repair_invalid_cli_commands(plain_answer, engagement_id),
+            directives=[],
+            artifact_refs=_artifact_refs_for_question(context, user_message.content),
+        )
     answer = _text(parsed.get("answer"))
     if not answer:
         raise ValueError("chat model response JSON did not contain a non-empty `answer`")
+    answer = _repair_invalid_cli_commands(answer, engagement_id)
     artifact_refs = _string_list(parsed.get("artifact_refs"))
     if not artifact_refs:
         facts = _structured_answer_from_context(context, user_message.content)
@@ -989,6 +1206,104 @@ def _parse_llm_chat_result(
         if directive is not None
     ]
     return EngagementChatResult(response=answer, directives=directives, artifact_refs=artifact_refs)
+
+
+def _context_engagement_id(context: dict[str, Any]) -> str:
+    engagement = context.get("engagement") if isinstance(context.get("engagement"), dict) else {}
+    return _text(engagement.get("id")) or "<engagement_id>"
+
+
+def _repair_invalid_cli_commands(answer: str, engagement_id: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        prefix = match.group("prefix")
+        test_id = match.group("test_id")
+        return f"{prefix}mosh test {engagement_id} --hypothesis {test_id}"
+
+    return re.sub(
+        r"(?P<prefix>(?:uv run\s+)?)mosh\s+test\s+(?P<test_id>[A-Z][A-Z0-9_]+-\d+)(?!\s+--hypothesis)",
+        replace,
+        answer,
+    )
+
+
+def _plain_text_model_answer(raw_response: str) -> str:
+    text = raw_response.strip()
+    if not text:
+        return ""
+    if text.startswith("```"):
+        text = re.sub(r"^```[A-Za-z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _looks_jsonish(raw_response: str) -> bool:
+    text = raw_response.lstrip()
+    return text.startswith("{") or text.startswith("[") or text.startswith("```json")
+
+
+def _artifact_refs_for_question(context: dict[str, Any], question: str) -> list[str]:
+    structured = _structured_answer_from_context(context, question)
+    if structured:
+        return structured[1]
+    return [snippet["ref"] for snippet in _matching_context_snippets(context, question)[:5]]
+
+
+def _looks_like_incomplete_chat_answer(answer: str) -> bool:
+    text = answer.strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered.endswith(("the next steps are:", "next steps are:", "the steps are:", "steps are:")):
+        return True
+    return bool(text.endswith(":") and re.search(r"\b(next steps|steps|actions|tasks|items|following)\b", lowered))
+
+
+def _merge_heuristic_directives(
+    result: EngagementChatResult,
+    user_message: ConversationMessage,
+) -> EngagementChatResult:
+    heuristic = [directive.to_dict() for directive in extract_directives(user_message.content, user_message.id)]
+    if not heuristic:
+        return result
+    model_keys = {_directive_intent_key(directive) for directive in result.directives}
+    heuristic = [
+        directive
+        for directive in heuristic
+        if _directive_intent_key(directive) not in model_keys
+    ]
+    if not heuristic:
+        return result
+    return EngagementChatResult(
+        response=result.response,
+        directives=_dedupe_directive_dicts([*result.directives, *heuristic]),
+        artifact_refs=result.artifact_refs,
+    )
+
+
+def _directive_intent_key(directive: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "kind": directive.get("kind"),
+            "instruction": directive.get("instruction"),
+            "source_message_id": directive.get("source_message_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _dedupe_directive_dicts(directives: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for item in directives:
+        if not isinstance(item, dict):
+            continue
+        fingerprint = _directive_duplicate_fingerprint(item)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        result.append(item)
+    return result
 
 
 def _extract_json_object(raw_response: str) -> dict[str, Any]:

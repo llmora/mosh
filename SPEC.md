@@ -304,7 +304,9 @@ report/<engagement-id>/conversation/directives.json
 
 `messages.jsonl` is the canonical conversation transcript. `directives.json` is derived state extracted from chat messages and must reference the source message ID instead of duplicating the original user intent.
 
-The default chat path is LLM-backed through `models.chat.assistant`. The application must build a compact structured engagement context, include deterministic facts for common questions such as highest finding or blocked tests, and ask the model to return a JSON envelope with `answer`, `artifact_refs`, and `directives`. If the required model settings are missing or the model response cannot be parsed, the chat must fall back to local structured answers and heuristic directive extraction rather than failing the conversation.
+The default chat path is LLM-backed through `models.chat.assistant`. The application must build a compact structured engagement context, include deterministic facts for common questions such as highest finding or blocked tests, and ask the model to return a JSON envelope with `answer`, `artifact_refs`, and `directives`. The chat must not send unbounded raw plan memory, executed-test reports, or discovery memory to the model. If the model returns a useful plain-text answer instead of JSON, the application may use that answer and apply heuristic directive extraction. If a JSON answer is incomplete, the application should retry once with repair instructions. If the required model settings are missing or the model response cannot be used, the chat must fall back to local structured answers and heuristic directive extraction rather than failing the conversation.
+
+User clarifications about intended behavior, accepted risk, false positives, or design assumptions must be recorded as `engagement_context` directives for planning, testing, and reporting so later execution can take the feedback into account.
 
 Supported directive classes include:
 

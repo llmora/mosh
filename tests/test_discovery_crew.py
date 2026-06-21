@@ -120,6 +120,16 @@ class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
         self.assertEqual(llm.kwargs["base_url"], "https://openrouter.ai/api/v1")
         self.assertEqual(llm.kwargs["api_key"], "openrouter-key")
 
+    def test_llm_accepts_optional_max_tokens(self) -> None:
+        llm = _llm(
+            FakeLLMCrewAI,
+            AppConfig(openrouter_api_key="openrouter-key"),
+            "openai/gpt-5.2",
+            max_tokens=2048,
+        )
+
+        self.assertEqual(llm.kwargs["max_tokens"], 2048)
+
     def test_llm_uses_custom_openai_compatible_endpoint_when_configured(self) -> None:
         llm = _llm(
             FakeLLMCrewAI,

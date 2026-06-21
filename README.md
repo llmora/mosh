@@ -253,7 +253,7 @@ report/<engagement-id>/conversation/
 
 When chat contains actionable steering, `mosh` records a directive that later stages include in their model context. Planning reruns when planning-relevant directives change. Testing directives are attached to matching hypotheses so a new instruction can trigger a focused rerun instead of being skipped as already current.
 
-When LLM settings are configured, chat uses `models.chat.assistant` to answer from a structured engagement context and to extract directives. If the required key is missing or the model response is unusable, `mosh` falls back to local structured context answers and heuristic directive extraction.
+When LLM settings are configured, chat uses `models.chat.assistant` to answer from a compact structured engagement context and to extract directives. Clarifications that describe intended behavior are recorded as engagement context for later planning, testing, and reporting. If the required key is missing or the model response is unusable, `mosh` falls back to local structured context answers and heuristic directive extraction.
 
 ### 5. Review The Engagement File
 

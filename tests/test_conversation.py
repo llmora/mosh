@@ -110,6 +110,98 @@ class ConversationTests(unittest.TestCase):
             self.assertEqual(directives[0]["target"], {"area": "enterprise_accounts"})
             self.assertEqual(result.artifact_refs, ["report/test-eng/plan/plan.md"])
 
+    def test_llm_chat_accepts_plain_text_model_response(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, "https://app.example.test")
+            runner = LLMEngagementChatRunner(
+                AppConfig(openrouter_api_key="test-key"),
+                completion=lambda _messages: "Use the clarification to re-run planning, then re-run affected tests.",
+            )
+
+            result = EngagementChatOrchestrator(output_root=output_root, runner=runner).ask(
+                engagement.id,
+                "What should I do next?",
+            )
+
+            self.assertEqual(result.response, "Use the clarification to re-run planning, then re-run affected tests.")
+            self.assertNotIn("Relevant engagement context", result.response)
+            self.assertNotIn("chat model response could not be used", result.response)
+
+    def test_llm_chat_repairs_invalid_hypothesis_test_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, "https://app.example.test")
+
+            def completion(messages: list[dict[str, str]]) -> str:
+                self.assertIn("Never suggest `mosh test <HYPOTHESIS_ID>`", messages[0]["content"])
+                payload = json.loads(messages[1]["content"])
+                self.assertIn(
+                    f"uv run mosh test {engagement.id} --hypothesis <HYPOTHESIS_ID>",
+                    payload["valid_cli_commands"],
+                )
+                return json.dumps(
+                    {
+                        "answer": "Run `mosh test SPA-001` to execute that hypothesis.",
+                        "artifact_refs": [],
+                        "directives": [],
+                    }
+                )
+
+            runner = LLMEngagementChatRunner(AppConfig(openrouter_api_key="test-key"), completion=completion)
+
+            result = EngagementChatOrchestrator(output_root=output_root, runner=runner).ask(
+                engagement.id,
+                "Which command should I run for SPA-001?",
+            )
+
+            self.assertIn(f"`mosh test {engagement.id} --hypothesis SPA-001`", result.response)
+            self.assertNotIn("`mosh test SPA-001`", result.response)
+
+    def test_llm_chat_retries_incomplete_json_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, "https://app.example.test")
+            calls: list[list[dict[str, str]]] = []
+
+            def completion(messages: list[dict[str, str]]) -> str:
+                calls.append(messages)
+                if len(calls) == 1:
+                    return json.dumps(
+                        {
+                            "answer": "Now that you have clarified this aspect, the next steps are:",
+                            "artifact_refs": [],
+                            "directives": [],
+                        }
+                    )
+                self.assertIn("previous response could not be used", messages[-1]["content"])
+                return json.dumps(
+                    {
+                        "answer": (
+                            "Now that you have clarified this aspect, the next steps are:\n\n"
+                            "1. Record the intended anonymous-user behavior.\n"
+                            "2. Re-run planning so affected hypotheses are updated.\n"
+                            "3. Re-run only the affected tests and regenerate the report."
+                        ),
+                        "artifact_refs": ["report/test-eng/plan/plan.md"],
+                        "directives": [],
+                    }
+                )
+
+            runner = LLMEngagementChatRunner(AppConfig(openrouter_api_key="test-key"), completion=completion)
+
+            result = EngagementChatOrchestrator(output_root=output_root, runner=runner).ask(
+                engagement.id,
+                "Waht are the steps I need to take now that I have clarified this aspect?",
+            )
+
+            self.assertEqual(len(calls), 2)
+            self.assertIn("1. Record the intended anonymous-user behavior.", result.response)
+            self.assertEqual(result.artifact_refs, ["report/test-eng/plan/plan.md"])
+
     def test_llm_chat_payload_includes_structured_question_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
@@ -190,6 +282,66 @@ class ConversationTests(unittest.TestCase):
             self.assertEqual(result.response, "Discovery identified login and password reset authentication flows.")
             self.assertEqual(result.artifact_refs, [str(report_path)])
 
+    def test_llm_chat_payload_stays_compact_for_large_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, "https://app.example.test")
+            planning_dir = output_root / engagement.id / "plan"
+            planning_dir.mkdir(parents=True)
+            long_text = "x" * 2_000
+            hypotheses = [
+                {
+                    "id": f"AUTH-{index:03d}",
+                    "title": f"Authentication hypothesis {index} {long_text}",
+                    "priority": "high",
+                    "surface": "api",
+                    "requirements": [long_text for _ in range(8)],
+                }
+                for index in range(80)
+            ]
+            (planning_dir / "memory.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "kind": "security_test_plan_final",
+                            "content": {"structured": {"test_hypotheses": hypotheses}},
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (planning_dir / "plan.md").write_text(long_text * 5, encoding="utf-8")
+            executed_dir = output_root / engagement.id / "security-testing" / "executed_tests"
+            executed_dir.mkdir(parents=True)
+            for index in range(40):
+                (executed_dir / f"AUTH-{index:03d}.md").write_text(
+                    _executed_report(
+                        f"AUTH-{index:03d}",
+                        f"Authentication test {index}",
+                        status="finding",
+                        priority="high",
+                        summary=long_text,
+                    ),
+                    encoding="utf-8",
+                )
+
+            def completion(messages: list[dict[str, str]]) -> str:
+                self.assertLess(len(messages[1]["content"]), 45_000)
+                payload = json.loads(messages[1]["content"])
+                self.assertEqual(len(payload["planning"]["hypotheses"]), 20)
+                self.assertEqual(len(payload["testing"]["executed_tests"]), 12)
+                return json.dumps({"answer": "The context is compact.", "artifact_refs": [], "directives": []})
+
+            runner = LLMEngagementChatRunner(AppConfig(openrouter_api_key="test-key"), completion=completion)
+
+            result = EngagementChatOrchestrator(output_root=output_root, runner=runner).ask(
+                engagement.id,
+                "What is the current engagement status?",
+            )
+
+            self.assertEqual(result.response, "The context is compact.")
+
     def test_llm_chat_falls_back_when_model_response_is_unusable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
@@ -209,7 +361,7 @@ class ConversationTests(unittest.TestCase):
             )
             runner = LLMEngagementChatRunner(
                 AppConfig(openrouter_api_key="test-key"),
-                completion=lambda _messages: "not json",
+                completion=lambda _messages: "{not json",
             )
 
             result = EngagementChatOrchestrator(output_root=output_root, runner=runner).ask(
@@ -220,6 +372,23 @@ class ConversationTests(unittest.TestCase):
             self.assertIn("The chat model response could not be used", result.response)
             self.assertIn("Highest confirmed finding: `HIGH-001` (high).", result.response)
             self.assertNotIn("Relevant engagement context", result.response)
+
+    def test_design_clarification_records_testing_context_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, "https://app.example.test")
+
+            EngagementChatOrchestrator(output_root=output_root).ask(
+                engagement.id,
+                "That's fine - production users are anonymous until they link an email, not test accounts.",
+            )
+
+            directives = load_directives(output_root, engagement.id)
+            self.assertEqual(len(directives), 1)
+            self.assertEqual(directives[0]["kind"], "engagement_context")
+            self.assertEqual(directives[0]["target"], {"clarification": True})
+            self.assertEqual(active_directives(output_root, engagement.id, stage="testing")[0]["id"], directives[0]["id"])
 
     def test_chat_answers_highest_finding_from_executed_test_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
