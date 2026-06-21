@@ -12,7 +12,7 @@ Using LLMs to test the security of an application is a lot more than just pointi
 
 `mosh` simulates the core tasks a security researcher performs when testing an application:
 
-- **Discovery:** map the application surface, routes, links, forms, JavaScript assets, third-party services, source code and observable technologies.
+- **Discovery:** map the application surface, passive external OSINT, routes, links, forms, JavaScript assets, third-party services, source code and observable technologies.
 - **Security planning:** turn discovery evidence into scoped, testable security hypotheses that may combine live testing and source code review.
 - **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
 - **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
@@ -93,6 +93,11 @@ OPENROUTER_API_KEY=your-openrouter-api-key
 MOSH_MAX_DEPTH=5
 MOSH_SECURITY_COMMAND_TIMEOUT=300
 MOSH_REFINE_ENGAGEMENT_TEMPLATE_WITH_LLM=true
+MOSH_EXTERNAL_OSINT_TIMEOUT=10
+# SHODAN_API_KEY=your-shodan-api-key
+# SECURITYTRAILS_API_KEY=your-securitytrails-api-key
+# CENSYS_API_ID=your-censys-api-id
+# CENSYS_API_SECRET=your-censys-api-secret
 ```
 
 Do not commit `.env`; it is ignored by git.
@@ -231,6 +236,8 @@ Discovery writes the result of the discovery of each asset in a markdown report:
 ```text
 report/<engagement-id>/assets/<asset-id>/discovery/report.md
 ```
+
+Live URL discovery also performs passive external OSINT. `mosh` queries crt.sh by default and uses Shodan, Censys, and SecurityTrails when their API credentials are configured. These lookups are generated only from the authorized root domain for the live URL, and every returned host or service is filtered through normal scope rules before it can become a discovery candidate or be crawled.
 
 ### 3. Create a security test plan
 
@@ -460,7 +467,7 @@ The orchestrator coordinates the run. Agents own specialist work. Tools are invo
 
 Current crews:
 
-- **Live discovery crew:** crawls and summarizes live application surfaces, identifies business context and correlated assets for more effective planning.
+- **Live discovery crew:** crawls and summarizes live application surfaces, enriches discovery with passive external OSINT, identifies business context and correlated assets for more effective planning.
 - **Planning crew:** turns discovery evidence and business context into testable security hypotheses.
 - **Testing crew:** checks ready hypotheses using the engagement file and security testing tools.
 

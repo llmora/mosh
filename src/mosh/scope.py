@@ -54,12 +54,20 @@ class ScopePolicy:
         parsed = urlparse(url)
         if parsed.scheme and parsed.scheme not in {"http", "https"}:
             return False
-        host = (parsed.hostname or "").lower().rstrip(".")
+        return self.host_in_scope(parsed.hostname or "")
+
+    def host_in_scope(self, host: str) -> bool:
+        host = host.lower().rstrip(".")
         if not host:
             return False
         if _is_ip_or_local(self.root):
             return host == self.root
         return host == self.root or host.endswith(f".{self.root}")
+
+    def passive_query_root(self) -> str | None:
+        if _is_ip_or_local(self.root):
+            return None
+        return self.root
 
 
 def _normalized_netloc(parsed: ParseResult) -> str:

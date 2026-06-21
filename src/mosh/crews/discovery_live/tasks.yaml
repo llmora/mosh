@@ -4,7 +4,8 @@ crawl_application_task:
     Crawl the target website to discover the visible application structure and surface area.
     The crawler should identify publicly reachable pages, routes, forms, query parameters,
     JavaScript files, CSS files, static assets, API endpoints, redirects, linked domains,
-    cookies, response headers, authentication-related pages, and other observable behaviours.
+    passive external OSINT candidates, cookies, response headers, authentication-related
+    pages, and other observable behaviours.
     The crawl must remain within the authorised scope provided by the orchestrator. It must not
     attempt exploitation, brute forcing, destructive actions, credential attacks, bypasses, or
     intrusive testing. The purpose of this task is discovery and mapping only.
@@ -28,6 +29,7 @@ crawl_application_task:
     - Target URL and crawl timestamp
     - Discovered pages and routes
     - Discovered candidates and candidate follow-up crawl decisions
+    - Passive external OSINT hosts or services and whether they were eligible for active follow-up
     - Discovered API endpoints
     - HTTP methods observed or inferred
     - Forms and input fields
@@ -38,6 +40,7 @@ crawl_application_task:
     - Authentication, login, registration, password reset, or account-related paths
     - Redirects and error pages
     - Notes on crawl limitations, blocked areas, or assumptions
+    - Notes on provider failures or external OSINT limitations
     
   agent: crawler
 

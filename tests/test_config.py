@@ -45,6 +45,26 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.candidate_follow_up_limit, 2)
         self.assertEqual(config.planning_max_revisions, 4)
 
+    def test_external_osint_settings_can_be_loaded_from_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "MOSH_EXTERNAL_OSINT_TIMEOUT": "6",
+                "SHODAN_API_KEY": "shodan-key",
+                "SECURITYTRAILS_API_KEY": "securitytrails-key",
+                "CENSYS_API_ID": "censys-id",
+                "CENSYS_API_SECRET": "censys-secret",
+            },
+            clear=True,
+        ):
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
+
+        self.assertEqual(config.external_osint_timeout, 6)
+        self.assertEqual(config.shodan_api_key, "shodan-key")
+        self.assertEqual(config.securitytrails_api_key, "securitytrails-key")
+        self.assertEqual(config.censys_api_id, "censys-id")
+        self.assertEqual(config.censys_api_secret, "censys-secret")
+
     def test_engagement_template_refinement_defaults_to_enabled(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())

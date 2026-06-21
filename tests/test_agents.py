@@ -62,6 +62,11 @@ class FakeDirbTool(StaticCrawlTool):
         name = "dirb_docker_discovery"
 
 
+class FakeExternalOsintTool(StaticCrawlTool):
+    class definition:
+        name = "external_osint_discovery"
+
+
 class FakeExtractifyTool:
     class definition:
         name = "extractify_js_endpoint_discovery"
@@ -320,6 +325,110 @@ class AgentToolBoundaryTests(unittest.TestCase):
 
             memory_items = json.loads((Path(directory) / "memory.json").read_text(encoding="utf-8"))
             self.assertTrue(any(item["kind"] == "discovery_candidate" for item in memory_items))
+
+    def test_crawler_agent_runs_external_osint_and_follows_scoped_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = SequenceCrawlTool(
+                [
+                    CrawlResult(
+                        start_url="https://example.test/",
+                        pages=[
+                            CrawledPage(
+                                url="https://example.test/",
+                                status=200,
+                                content_type="text/html",
+                                title="Home",
+                                headers={},
+                                links=[],
+                                references=[],
+                                forms=[],
+                            )
+                        ],
+                        out_of_scope=[],
+                        failed=[],
+                        robots=None,
+                    ),
+                    CrawlResult(
+                        start_url="https://api.example.test/",
+                        pages=[
+                            CrawledPage(
+                                url="https://api.example.test/",
+                                status=200,
+                                content_type="text/html",
+                                title="API",
+                                headers={},
+                                links=[],
+                                references=[],
+                                forms=[],
+                            )
+                        ],
+                        out_of_scope=[],
+                        failed=[],
+                        robots=None,
+                    ),
+                ]
+            )
+            osint = FakeExternalOsintTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[],
+                    out_of_scope=["https://outside.test/"],
+                    failed=[],
+                    robots=None,
+                    candidates=[
+                        DiscoveryCandidate(
+                            url="https://api.example.test/",
+                            status=0,
+                            source_tool="external_osint_discovery",
+                            kind="host",
+                            confidence="observed",
+                            reason="Passive OSINT found an in-scope host.",
+                            evidence=["crt.sh"],
+                            should_crawl=True,
+                        ),
+                        DiscoveryCandidate(
+                            url="tcp://ssh.example.test:22",
+                            status=0,
+                            source_tool="external_osint_discovery",
+                            kind="service",
+                            confidence="observed",
+                            reason="Passive OSINT found an in-scope service.",
+                            evidence=["shodan"],
+                            should_crawl=False,
+                        ),
+                    ],
+                )
+            )
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[osint])
+
+            result = agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+
+            self.assertEqual(osint.calls, 1)
+            self.assertEqual(
+                [call["url"] for call in primary.calls],
+                ["https://example.test", "https://api.example.test/"],
+            )
+            self.assertIn("https://api.example.test/", {page.url for page in result.pages})
+            self.assertIn("tcp://ssh.example.test:22", {candidate.url for candidate in result.candidates})
+            self.assertEqual(result.out_of_scope, ["https://outside.test/"])
+
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(
+                any(
+                    event["action"] == "tool_call"
+                    and event["data"].get("tool") == "external_osint_discovery"
+                    for event in events
+                )
+            )
+            self.assertTrue(
+                any(
+                    event["action"] == "candidate_skipped"
+                    and event["data"]["url"] == "tcp://ssh.example.test:22"
+                    and event["data"]["reason"] == "not_crawlable"
+                    for event in events
+                )
+            )
 
     def test_crawler_agent_respects_candidate_follow_up_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -657,6 +766,7 @@ class AgentToolBoundaryTests(unittest.TestCase):
                 "crawl_application",
                 "katana_docker_crawler",
                 "dirb_docker_discovery",
+                "external_osint_discovery",
                 "extractify_js_endpoint_discovery",
                 "js_static_endpoint_discovery",
             ],
