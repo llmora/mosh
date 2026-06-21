@@ -321,8 +321,11 @@ class FakeSecurityPlanningRunner:
         report_dir: Path,
         memory: FileMemory,
     ):
+        from mosh.engagement import load_engagement_steer
+        from mosh.engagements import engagement_dir
         from mosh.evidence_links import build_evidence_links, load_evidence_links_if_current
 
+        engagement_steer = load_engagement_steer(engagement_dir(output_root, engagement_id) / "engagement_template.yaml")
         self.calls.append(
             {
                 "output_root": str(output_root),
@@ -330,7 +333,15 @@ class FakeSecurityPlanningRunner:
                 "engagement_id": engagement_id,
             }
         )
-        links = load_evidence_links_if_current(output_root, engagement_id) or build_evidence_links(output_root, engagement_id)
+        links = load_evidence_links_if_current(
+            output_root,
+            engagement_id,
+            engagement_steer=engagement_steer,
+        ) or build_evidence_links(
+            output_root,
+            engagement_id,
+            engagement_steer=engagement_steer,
+        )
         memory.add_item(
             "evidence_links",
             {

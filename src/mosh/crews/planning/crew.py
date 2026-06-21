@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,7 +33,12 @@ from mosh.engagements import (
     engagement_plan_dir,
     load_engagement,
 )
-from mosh.evidence_links import EvidenceLinkResult, build_evidence_links, load_evidence_links_if_current
+from mosh.evidence_links import (
+    EvidenceLinkResult,
+    build_evidence_links,
+    engagement_steer_fingerprint,
+    load_evidence_links_if_current,
+)
 from mosh.memory import FileMemory
 from mosh.models import Event, utc_now
 from mosh.crews.planning.evidence_linker import build_model_assisted_linker
@@ -386,7 +390,6 @@ class SecurityTestPlanningOrchestrator:
                     engagement.id,
                     stage="planning",
                 ),
-                "engagement_steer_chars": len(steer),
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
@@ -424,7 +427,7 @@ class SecurityTestPlanningOrchestrator:
                 "planned_at": utc_now(),
                 "plan_path": str(report_dir / "plan.md"),
                 "links_path": str(report_dir / "links.json"),
-                "engagement_steer_fingerprint": _engagement_steer_fingerprint(steer),
+                "engagement_steer_fingerprint": engagement_steer_fingerprint(steer),
             },
             "orchestrator",
         )
@@ -813,7 +816,7 @@ def run_planning_evidence_linking(
     memory: FileMemory | None = None,
     engagement_steer: str = "",
 ) -> EvidenceLinkResult:
-    current = load_evidence_links_if_current(output_root, engagement_id)
+    current = load_evidence_links_if_current(output_root, engagement_id, engagement_steer=engagement_steer)
     if current is not None:
         if memory is not None:
             memory.add_item(
@@ -846,6 +849,7 @@ def run_planning_evidence_linking(
     result = build_evidence_links(
         output_root,
         engagement_id,
+        engagement_steer=engagement_steer,
         model_assisted_linker=build_model_assisted_linker(
             config,
             memory=memory,
@@ -893,7 +897,8 @@ def _engagement_plan_is_current(output_root: Path, engagement: Engagement, repor
         or not (engagement_dir(output_root, engagement.id) / "engagement_template.yaml").exists()
     ):
         return False
-    if load_evidence_links_if_current(output_root, engagement.id) is None:
+    current_steer = load_engagement_steer(engagement_dir(output_root, engagement.id) / "engagement_template.yaml")
+    if load_evidence_links_if_current(output_root, engagement.id, engagement_steer=current_steer) is None:
         return False
     latest_discovered = _parse_timestamp(latest_discovered_at)
     previous_discovered = _parse_timestamp(_latest_plan_discovery_timestamp(report_dir))
@@ -905,14 +910,12 @@ def _engagement_plan_is_current(output_root: Path, engagement: Engagement, repor
         previous_directives_fingerprint = directives_fingerprint([])
     if previous_discovered < latest_discovered:
         return False
-    current_steer = load_engagement_steer(engagement_dir(output_root, engagement.id) / "engagement_template.yaml")
     previous_steer_fingerprint = _latest_plan_engagement_steer_fingerprint(report_dir)
     if current_steer and not previous_steer_fingerprint:
         return False
-    return (
-        previous_directives_fingerprint == current_directives_fingerprint
-        and previous_steer_fingerprint in {None, _engagement_steer_fingerprint(current_steer)}
-    )
+    if previous_directives_fingerprint != current_directives_fingerprint:
+        return False
+    return previous_steer_fingerprint in {None, engagement_steer_fingerprint(current_steer)}
 
 
 def _engagement_template_dir(state: SecurityTestPlanningState) -> Path:
@@ -932,19 +935,6 @@ def _latest_plan_discovery_timestamp(report_dir: Path) -> str | None:
     return None
 
 
-def _latest_plan_directives_fingerprint(report_dir: Path) -> str | None:
-    memory = _read_json(report_dir / "memory.json", [])
-    if not isinstance(memory, list):
-        return None
-    for item in reversed(memory):
-        if not isinstance(item, dict) or item.get("kind") != "plan_run":
-            continue
-        content = item.get("content")
-        if isinstance(content, dict) and isinstance(content.get("conversation_directives_fingerprint"), str):
-            return content["conversation_directives_fingerprint"]
-    return None
-
-
 def _latest_plan_engagement_steer_fingerprint(report_dir: Path) -> str | None:
     memory = _read_json(report_dir / "memory.json", [])
     if not isinstance(memory, list):
@@ -958,9 +948,17 @@ def _latest_plan_engagement_steer_fingerprint(report_dir: Path) -> str | None:
     return None
 
 
-def _engagement_steer_fingerprint(steer: str) -> str:
-    return "sha256:" + hashlib.sha256(steer.encode("utf-8")).hexdigest()
-
+def _latest_plan_directives_fingerprint(report_dir: Path) -> str | None:
+    memory = _read_json(report_dir / "memory.json", [])
+    if not isinstance(memory, list):
+        return None
+    for item in reversed(memory):
+        if not isinstance(item, dict) or item.get("kind") != "plan_run":
+            continue
+        content = item.get("content")
+        if isinstance(content, dict) and isinstance(content.get("conversation_directives_fingerprint"), str):
+            return content["conversation_directives_fingerprint"]
+    return None
 
 def _latest_engagement_discovery_timestamp(output_root: Path, engagement: Engagement) -> str | None:
     timestamps: list[datetime] = []

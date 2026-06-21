@@ -795,6 +795,45 @@ class SecurityTestPlanningTests(unittest.TestCase):
             events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertEqual(events[-1]["action"], "skipped_current")
 
+    def test_planning_evidence_linking_rebuilds_when_engagement_steer_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            source = Path(directory) / "source"
+            source.mkdir()
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+            _write_engagement_discovery_pair(output_root, engagement.id, live_asset.id, source_asset.id)
+            seen_steer: list[str] = []
+
+            def build_linker(config: AppConfig, *, memory: FileMemory | None = None, engagement_steer: str = ""):
+                seen_steer.append(engagement_steer)
+                return _NoopModelAssistedLinker()
+
+            with patch("mosh.crews.planning.crew.build_model_assisted_linker", side_effect=build_linker):
+                first = run_planning_evidence_linking(
+                    AppConfig(openrouter_api_key="test-key"),
+                    output_root,
+                    engagement.id,
+                    engagement_steer="Focus on authorization.",
+                )
+                second = run_planning_evidence_linking(
+                    AppConfig(),
+                    output_root,
+                    engagement.id,
+                    engagement_steer="Focus on authorization.",
+                )
+                third = run_planning_evidence_linking(
+                    AppConfig(openrouter_api_key="test-key"),
+                    output_root,
+                    engagement.id,
+                    engagement_steer="Focus on tenant isolation.",
+                )
+
+            self.assertEqual(seen_steer, ["Focus on authorization.", "Focus on tenant isolation."])
+            self.assertEqual(second.payload["engagement_steer_fingerprint"], first.payload["engagement_steer_fingerprint"])
+            self.assertNotEqual(third.payload["engagement_steer_fingerprint"], first.payload["engagement_steer_fingerprint"])
+
     def test_planning_evidence_linking_passes_memory_to_model_linker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
