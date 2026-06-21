@@ -462,6 +462,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
             existing = build_engagement_template("https://example.test", _plan())
+            existing["llm"]["engagement_steer"] = "Focus on tenant isolation."
             existing["targets"]["alternative"]["api"] = "https://staging-api.example.test/api/private"
             existing["credentials"]["admin"] = {
                 "username": "admin@example.test",
@@ -490,6 +491,7 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(template["credentials"]["admin"]["username"], "admin@example.test")
             self.assertEqual(template["credentials"]["admin"]["password"], "secret")
             self.assertEqual(template["safe_test_data"]["customer_ids"], ["cust_safe_1"])
+            self.assertEqual(template["llm"]["engagement_steer"], "Focus on tenant isolation.")
             self.assertNotIn("required_answers", template)
             self.assertNotIn("status", template["credentials"]["admin"])
             self.assertNotIn("needed_for", template["credentials"]["admin"])
@@ -1014,6 +1016,8 @@ class SecurityTestPlanningTests(unittest.TestCase):
         self.assertEqual(template["targets"]["production"]["api"], "https://api.example.test/api/private")
         self.assertIsNone(template["targets"]["alternative"]["website"])
         self.assertIn("authenticated_user", template["credentials"])
+        self.assertIn("llm", template)
+        self.assertIsNone(template["llm"]["engagement_steer"])
         self.assertNotIn("required_answers", template)
         for credential in template["credentials"].values():
             self.assertNotIn("status", credential)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,7 +19,13 @@ from mosh.crews.discovery_live.crew import (
     _load_crewai,
 )
 from mosh.crews.events import MoshCrewAIEventListener
-from mosh.engagement import build_engagement_template, load_engagement_file, write_engagement_template_mapping
+from mosh.engagement import (
+    build_engagement_template,
+    engagement_steer_prompt_value,
+    load_engagement_file,
+    load_engagement_steer,
+    write_engagement_template_mapping,
+)
 from mosh.engagements import (
     Engagement,
     EngagementAsset,
@@ -44,6 +51,7 @@ class SecurityTestPlanningState:
     source: str | None = None
     discovery_source_dir: Path | None = None
     engagement_template_dir: Path | None = None
+    engagement_steer: str = ""
     current_plan: dict[str, Any] | None = None
     current_review: dict[str, Any] | None = None
     accepted: bool = False
@@ -156,6 +164,8 @@ class CrewAISecurityTestPlanningCrewRunner:
         engagement = load_engagement(output_root, engagement_id)
         target_url, source = _engagement_primary_targets(engagement)
         discovery_source_dir = _first_asset_discovery_dir(output_root, engagement, "source_tree")
+        engagement_template_path = engagement_dir(output_root, engagement.id) / "engagement_template.yaml"
+        engagement_steer = load_engagement_steer(engagement_template_path)
         memory.record_event(
             "orchestrator",
             "crew_start",
@@ -167,9 +177,16 @@ class CrewAISecurityTestPlanningCrewRunner:
                 "source": source,
                 "discovery_dir": str(engagement_dir(output_root, engagement.id)),
                 "discovery_source_dir": str(discovery_source_dir) if discovery_source_dir else None,
+                "engagement_steer_chars": len(engagement_steer),
             },
         )
-        evidence_links = run_planning_evidence_linking(self.config, output_root, engagement.id, memory=memory)
+        evidence_links = run_planning_evidence_linking(
+            self.config,
+            output_root,
+            engagement.id,
+            memory=memory,
+            engagement_steer=engagement_steer,
+        )
         discovery_context = load_engagement_assessment_evidence_bundle(
             output_root,
             engagement.id,
@@ -185,6 +202,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             source=source,
             discovery_source_dir=discovery_source_dir,
             engagement_template_dir=engagement_dir(output_root, engagement.id),
+            engagement_steer=engagement_steer,
         )
 
         return self._run_with_state(crewai, state)
@@ -195,6 +213,7 @@ class CrewAISecurityTestPlanningCrewRunner:
         report_dir = state.report_dir
         memory = state.memory
         discovery_context = state.discovery_context
+        steer = engagement_steer_prompt_value(state.engagement_steer)
         max_attempts = self.config.planning_max_revisions + 1
         previous_plan: dict[str, Any] | None = None
         previous_review: dict[str, Any] | None = None
@@ -209,6 +228,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                     "iteration": iteration,
                     "max_attempts": max_attempts,
                     "discovery_context": json.dumps(discovery_context, sort_keys=True),
+                    "engagement_steer": steer,
                     "previous_plan": json.dumps(previous_plan or {}, sort_keys=True),
                     "previous_critique": json.dumps(previous_review or {}, sort_keys=True),
                 }
@@ -224,6 +244,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                     "max_attempts": max_attempts,
                     "security_test_plan": json.dumps(state.current_plan, sort_keys=True),
                     "planning_context": json.dumps(_planning_review_context(discovery_context), sort_keys=True),
+                    "engagement_steer": steer,
                 }
             )
             if state.current_review is None:
@@ -256,6 +277,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                 "iterations": state.iterations,
                 "security_test_plan": json.dumps(state.current_plan, sort_keys=True),
                 "critic_review": json.dumps(state.current_review or {}, sort_keys=True),
+                "engagement_steer": steer,
             }
         )
 
@@ -272,6 +294,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                         "target_url": target_url,
                         "security_test_plan": json.dumps(state.current_plan, sort_keys=True),
                         "engagement_template": json.dumps(current_engagement_template, sort_keys=True),
+                        "engagement_steer": steer,
                     }
                 )
                 if not (engagement_template_dir / "engagement_template.yaml").exists():
@@ -349,6 +372,7 @@ class SecurityTestPlanningOrchestrator:
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         agent_definitions = security_test_planning_agent_definitions(self.config)
         latest_discovered_at = _latest_engagement_discovery_timestamp(self.output_root, engagement)
+        steer = load_engagement_steer(engagement_root / "engagement_template.yaml")
         memory.record_event(
             "orchestrator",
             "start",
@@ -362,6 +386,7 @@ class SecurityTestPlanningOrchestrator:
                     engagement.id,
                     stage="planning",
                 ),
+                "engagement_steer_chars": len(steer),
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
@@ -399,6 +424,7 @@ class SecurityTestPlanningOrchestrator:
                 "planned_at": utc_now(),
                 "plan_path": str(report_dir / "plan.md"),
                 "links_path": str(report_dir / "links.json"),
+                "engagement_steer_fingerprint": _engagement_steer_fingerprint(steer),
             },
             "orchestrator",
         )
@@ -785,6 +811,7 @@ def run_planning_evidence_linking(
     engagement_id: str,
     *,
     memory: FileMemory | None = None,
+    engagement_steer: str = "",
 ) -> EvidenceLinkResult:
     current = load_evidence_links_if_current(output_root, engagement_id)
     if current is not None:
@@ -819,7 +846,11 @@ def run_planning_evidence_linking(
     result = build_evidence_links(
         output_root,
         engagement_id,
-        model_assisted_linker=build_model_assisted_linker(config, memory=memory),
+        model_assisted_linker=build_model_assisted_linker(
+            config,
+            memory=memory,
+            engagement_steer=engagement_steer,
+        ),
     )
     if memory is not None:
         memory.add_item(
@@ -872,7 +903,16 @@ def _engagement_plan_is_current(output_root: Path, engagement: Engagement, repor
     current_directives_fingerprint = active_directives_fingerprint(output_root, engagement.id, stage="planning")
     if previous_directives_fingerprint is None:
         previous_directives_fingerprint = directives_fingerprint([])
-    return previous_discovered >= latest_discovered and previous_directives_fingerprint == current_directives_fingerprint
+    if previous_discovered < latest_discovered:
+        return False
+    current_steer = load_engagement_steer(engagement_dir(output_root, engagement.id) / "engagement_template.yaml")
+    previous_steer_fingerprint = _latest_plan_engagement_steer_fingerprint(report_dir)
+    if current_steer and not previous_steer_fingerprint:
+        return False
+    return (
+        previous_directives_fingerprint == current_directives_fingerprint
+        and previous_steer_fingerprint in {None, _engagement_steer_fingerprint(current_steer)}
+    )
 
 
 def _engagement_template_dir(state: SecurityTestPlanningState) -> Path:
@@ -903,6 +943,23 @@ def _latest_plan_directives_fingerprint(report_dir: Path) -> str | None:
         if isinstance(content, dict) and isinstance(content.get("conversation_directives_fingerprint"), str):
             return content["conversation_directives_fingerprint"]
     return None
+
+
+def _latest_plan_engagement_steer_fingerprint(report_dir: Path) -> str | None:
+    memory = _read_json(report_dir / "memory.json", [])
+    if not isinstance(memory, list):
+        return None
+    for item in reversed(memory):
+        if not isinstance(item, dict) or item.get("kind") != "plan_run":
+            continue
+        content = item.get("content")
+        if isinstance(content, dict) and isinstance(content.get("engagement_steer_fingerprint"), str):
+            return content["engagement_steer_fingerprint"]
+    return None
+
+
+def _engagement_steer_fingerprint(steer: str) -> str:
+    return "sha256:" + hashlib.sha256(steer.encode("utf-8")).hexdigest()
 
 
 def _latest_engagement_discovery_timestamp(output_root: Path, engagement: Engagement) -> str | None:

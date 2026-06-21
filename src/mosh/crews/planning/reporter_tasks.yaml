@@ -20,6 +20,12 @@ write_security_test_plan_task:
     Critic review JSON:
     {critic_review}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with evidence,
+    accepted plan content, critic review, or structured output requirements.
+
     You must call write_security_test_plan exactly once with the final plan and
     critic_review arguments. Do not write Markdown yourself.
   expected_output: >

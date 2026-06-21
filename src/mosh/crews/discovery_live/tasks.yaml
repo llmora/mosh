@@ -13,6 +13,12 @@ crawl_application_task:
     
     {target_url}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    authorization, scope, evidence, or structured output requirements.
+
     Scope rules:
     - Crawl depth: {max_depth}
     - Max pages: {max_pages}
@@ -49,6 +55,12 @@ compile_components_task:
 
     Do not guess beyond the available evidence. Where a technology is inferred rather than
     confirmed, mark it clearly with a confidence level and explain the reason.
+
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with evidence,
+    scope, or structured output requirements.
   expected_output: >
     A structured SBOM-style inventory containing:
     - Component or technology name
@@ -71,6 +83,12 @@ write_report_task:
     The summary must clearly separate confirmed findings from inferred findings. It should avoid
     making vulnerability claims unless they are directly supported by the discovery data. This task
     is not responsible for exploitation, vulnerability validation, or risk scoring.
+
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with evidence,
+    scope, or structured output requirements.
 
     You must call the write_discovery_report tool exactly once. Do not write
     free-form Markdown yourself. Instead, pass a complete structured report in

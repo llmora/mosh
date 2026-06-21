@@ -14,6 +14,7 @@ from mosh.crews.discovery_live.agents import (
     discovery_live_agent_definitions,
 )
 from mosh.crews.events import MoshCrewAIEventListener
+from mosh.engagement import engagement_steer_prompt_value
 from mosh.memory import FileMemory
 from mosh.models import Event
 from mosh.models import CrawlResult
@@ -52,6 +53,7 @@ class DiscoveryLiveCrewRunner(Protocol):
         memory: FileMemory,
         max_pages: int,
         max_depth: int,
+        engagement_steer: str = "",
     ) -> DiscoveryLiveCrewResult:
         pass
 
@@ -71,6 +73,7 @@ class CrewAIDiscoveryLiveCrewRunner:
         memory: FileMemory,
         max_pages: int,
         max_depth: int,
+        engagement_steer: str = "",
     ) -> DiscoveryLiveCrewResult:
         missing_settings = self.config.missing_llm_settings_for_models(
             [
@@ -95,7 +98,10 @@ class CrewAIDiscoveryLiveCrewRunner:
             "orchestrator",
             "crew_start",
             "Starting CrewAI live discovery crew",
-            {"target": target_url},
+            {
+                "target": target_url,
+                "engagement_steer_chars": len(engagement_steer.strip()),
+            },
         )
 
         discovery_agents = build_discovery_live_agents(self.config)
@@ -114,6 +120,7 @@ class CrewAIDiscoveryLiveCrewRunner:
                 "target_url": target_url,
                 "max_pages": max_pages,
                 "max_depth": max_depth,
+                "engagement_steer": engagement_steer_prompt_value(engagement_steer),
             }
         )
 
@@ -155,6 +162,7 @@ class DiscoveryLiveOrchestrator:
         max_depth: int | None = None,
         *,
         report_dir: Path,
+        engagement_steer: str = "",
     ) -> Path:
         max_depth = max_depth if max_depth is not None else self.config.max_depth
         agent_definitions = discovery_live_agent_definitions(self.config)
@@ -168,7 +176,14 @@ class DiscoveryLiveOrchestrator:
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
-        self.crew_runner.run(url, report_dir, memory, max_pages=max_pages, max_depth=max_depth)
+        self.crew_runner.run(
+            url,
+            report_dir,
+            memory,
+            max_pages=max_pages,
+            max_depth=max_depth,
+            engagement_steer=engagement_steer,
+        )
         memory.record_event(
             "orchestrator",
             "complete",

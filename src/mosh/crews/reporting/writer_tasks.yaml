@@ -8,6 +8,12 @@ write_final_report_task:
     Final report bundle JSON:
     {report_bundle}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    the final report bundle, evidence, or structured output requirements.
+
     The tool renders the Markdown report and enforces the final structure. Your
     job is to provide concise customer-facing narrative fields that make the
     report easier to read for engineering leads, product owners, and security

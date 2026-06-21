@@ -22,6 +22,7 @@ from mosh.crews.reporting.reporting import (
     validate_final_report_content,
     validate_rendered_report,
 )
+from mosh.engagement import engagement_steer_prompt_value, load_engagement_steer
 from mosh.engagements import Engagement, asset_discovery_dir, engagement_dir, load_engagement
 from mosh.memory import FileMemory
 from mosh.models import Event
@@ -44,7 +45,14 @@ class FinalReportState:
 
 
 class FinalReportingCrewRunner(Protocol):
-    def run(self, target_url: str, report_dir: Path, memory: FileMemory, bundle: dict[str, Any]) -> Path:
+    def run(
+        self,
+        target_url: str,
+        report_dir: Path,
+        memory: FileMemory,
+        bundle: dict[str, Any],
+        engagement_steer: str = "",
+    ) -> Path:
         pass
 
 
@@ -74,7 +82,20 @@ class FinalReportingOrchestrator:
             {"target": target, "engagement": engagement.id},
         )
         bundle = build_final_report_bundle(self.output_root, engagement.id)
-        report_path = self.crew_runner.run(target, report_dir, memory, bundle)
+        steer = load_engagement_steer(engagement_root / "engagement_template.yaml")
+        memory.record_event(
+            "orchestrator",
+            "engagement_steer_loaded",
+            "Loaded engagement steer for final reporting",
+            {"chars": len(steer)},
+        )
+        report_path = self.crew_runner.run(
+            target,
+            report_dir,
+            memory,
+            bundle,
+            engagement_steer=steer,
+        )
         memory.record_event(
             "orchestrator",
             "complete",
@@ -92,7 +113,14 @@ class CrewAIFinalReportingCrewRunner:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def run(self, target_url: str, report_dir: Path, memory: FileMemory, bundle: dict[str, Any]) -> Path:
+    def run(
+        self,
+        target_url: str,
+        report_dir: Path,
+        memory: FileMemory,
+        bundle: dict[str, Any],
+        engagement_steer: str = "",
+    ) -> Path:
         missing_settings = self.config.missing_llm_settings_for_models(
             [self.config.models.reporting.writer, self.config.models.reporting.reviewer]
         )
@@ -100,11 +128,13 @@ class CrewAIFinalReportingCrewRunner:
             raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
         crewai = _load_crewai()
         state = FinalReportState(target_url=target_url, report_dir=report_dir, memory=memory, bundle=bundle)
+        steer = engagement_steer_prompt_value(engagement_steer)
         writer_crew = _build_writer_crew(crewai, self.config, state)
         writer_crew.crew().kickoff(
             inputs={
                 "target_url": target_url,
                 "report_bundle": json.dumps(bundle, sort_keys=True),
+                "engagement_steer": steer,
             }
         )
         if not state.report_path or not state.report_path.exists():
@@ -115,6 +145,7 @@ class CrewAIFinalReportingCrewRunner:
             inputs={
                 "target_url": target_url,
                 "report_bundle": json.dumps(bundle, sort_keys=True),
+                "engagement_steer": steer,
                 "generated_report": json.dumps(
                     {
                         "path": str(state.report_path),

@@ -4,6 +4,12 @@ suggest_evidence_link_candidates_task:
 
     {link_context}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    scope, evidence, linkage, or structured output requirements.
+
     The context contains existing source route refs and live endpoint refs. Some
     deterministic links may already be present. Identify only additional
     plausible candidate links that are useful for planning and are not already

@@ -23,6 +23,13 @@ execute_security_test_task:
     Effective target mappings JSON:
     {targets}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    authorization, scope, effective target mappings, evidence, tool-use, or
+    structured output requirements.
+
     Source discovery context JSON:
     {source_context}
 

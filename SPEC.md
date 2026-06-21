@@ -368,8 +368,21 @@ The engagement file should stay small and directly editable. It should include:
 - execution limits
 - credential placeholders by role
 - safe test data placeholders
+- optional `llm.engagement_steer` text for engagement-scoped model guidance
 
 It should not include explanatory readiness metadata such as `status`, `needed_for`, `required_answers`, or long generated notes. Missing inputs, blocked tests, and questions belong in `plan.md`, `security_test_plan.md`, `preflight.md`, `events.json`, or `memory.json`.
+
+The CLI supports a small steering-management surface:
+
+```bash
+mosh engagement steer set <engagement-id> --file steer.md
+mosh engagement steer set <engagement-id> --file -
+mosh engagement steer set <engagement-id> --text "Focus on tenant isolation."
+mosh engagement steer show <engagement-id>
+mosh engagement steer clear <engagement-id>
+```
+
+The `set` command creates `engagement_template.yaml` with a minimal valid template shape when the file does not exist yet. Steering text is user-owned configuration and must be preserved exactly by planning regeneration and engagement-template refinement. It is supplied to LLM-backed discovery, planning, evidence-linking, testing, and reporting calls as engagement steer. Built-in mosh safety, authorization, scope, evidence, tool-use, and structured output requirements take precedence over engagement steer. Changing the steering text makes the existing security plan stale so the next planning run can incorporate the new guidance.
 
 Repeated planning runs must not overwrite non-empty values that the user has already added to `engagement_template.yaml`. Generated or refined templates should merge into the existing file, preserving filled credentials, tokens, alternative targets, safe test data, contact details, limits, and notes unless the user explicitly changes them. The LLM refiner must not invent secret values; if it proposes credentials or tokens, the generated candidate is rejected
 and the preserved existing configuration remains in place.
@@ -578,8 +591,6 @@ At minimum, tests should cover:
 * Broaden engagement conversation directives so discovery crawlers and source discovery tools directly consume scope overrides, user-supplied discovery facts, and tool requests during the same stage run.
 * Add review checkpoints to a future end-to-end run command so users can chat with the engagement between stages without manually remembering the command sequence.
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
-
-* We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies
 * Incorporate a RAG so that executions are remembered and the agents learn from each execution
 * Incorporate a RAG so that executions are remembered and the agents learn from each execution

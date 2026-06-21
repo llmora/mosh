@@ -194,6 +194,24 @@ Attached: asset_source_1 (source_tree)
 
 `mosh` infers the asset type from the locator. Use `--type` when a URL is ambiguous, for example when a GitHub URL should be treated as a live web target instead of a source repository.
 
+#### Steering
+
+You can optionally set steering text that is provided as input to all agents during the engagement. Use this to provide specific focus, guidance and anything you want the agents to know during their execution.
+
+This steering text guides discovery, planning, testing, and reporting, but it does not override mosh safety, authorization, scope, evidence, or output-schema requirements.
+
+```bash
+uv run mosh engagement steer set eng_a1b2c3d4 --file steer.md
+uv run mosh engagement steer show eng_a1b2c3d4
+uv run mosh engagement steer clear eng_a1b2c3d4
+```
+
+You can also set short inline steering text:
+
+```bash
+uv run mosh engagement steer set eng_a1b2c3d4 --text "Focus on tenant isolation and authorization bypass."
+```
+
 ### 2. Run discovery
 
 Run discovery for every attached asset that does not already have discovery output:
@@ -270,6 +288,7 @@ This file is deliberately small. It is where you confirm:
 - Execution limits
 - Credentials by role
 - Safe test data
+- Engagement-scoped LLM steering under `llm.engagement_steer`
 - ... and anything else you believe is interesting for the tests execution
 
 You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing (for instance if your preprod instance requires SASE credentials or headers, just drop them in the file).

@@ -15,6 +15,13 @@ draft_security_test_plan_task:
     Discovery context JSON:
     {discovery_context}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    authorization, scope, evidence, readiness, or structured output
+    requirements.
+
     For engagement-backed planning, review all detailed asset-scoped evidence in
     asset_evidence.live[].discovery and asset_evidence.source[].discovery, and
     use correlation.evidence_links as source/live linkage input. The top-level

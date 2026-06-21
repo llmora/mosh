@@ -11,6 +11,14 @@ from mosh.models import Event
 from mosh.crews.discovery_live.crew import DiscoveryLiveOrchestrator
 from mosh.crews.reporting.crew import FinalReportingOrchestrator
 from mosh.crews.discovery_source.crew import DiscoverySourceOrchestrator
+from mosh.engagement import (
+    ENGAGEMENT_STEER_MAX_CHARS,
+    build_minimal_engagement_template,
+    engagement_steer,
+    load_engagement_steer,
+    load_engagement_file,
+    write_engagement_template_mapping,
+)
 from mosh.engagements import (
     Engagement,
     EngagementAsset,
@@ -50,6 +58,35 @@ def main(argv: list[str] | None = None) -> int:
     engagement_attach_parser.add_argument("--type", help="Override inferred asset type")
     engagement_attach_parser.add_argument("--label", help="Human-readable asset label")
     engagement_attach_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+    engagement_steer_parser = engagement_subcommands.add_parser(
+        "steer",
+        help="Manage engagement-scoped LLM steering",
+    )
+    engagement_steer_subcommands = engagement_steer_parser.add_subparsers(
+        dest="steer_command",
+        required=True,
+    )
+    engagement_steer_set_parser = engagement_steer_subcommands.add_parser(
+        "set",
+        help="Set engagement-scoped LLM steering",
+    )
+    engagement_steer_set_parser.add_argument("engagement_id", help="Engagement ID")
+    steer_source = engagement_steer_set_parser.add_mutually_exclusive_group(required=True)
+    steer_source.add_argument("--file", help="Read steering text from a file path, or '-' for stdin")
+    steer_source.add_argument("--text", help="Set steering text from an inline string")
+    engagement_steer_set_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+    engagement_steer_show_parser = engagement_steer_subcommands.add_parser(
+        "show",
+        help="Print engagement-scoped LLM steering",
+    )
+    engagement_steer_show_parser.add_argument("engagement_id", help="Engagement ID")
+    engagement_steer_show_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+    engagement_steer_clear_parser = engagement_steer_subcommands.add_parser(
+        "clear",
+        help="Clear engagement-scoped LLM steering",
+    )
+    engagement_steer_clear_parser.add_argument("engagement_id", help="Engagement ID")
+    engagement_steer_clear_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
     discover_parser = subcommands.add_parser("discover", help="Run the live/source discovery crew")
     discover_parser.add_argument("engagement_id", help="Engagement ID to discover")
@@ -91,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_engagement_create(args)
         if args.engagement_command == "attach":
             return _run_engagement_attach(args)
+        if args.engagement_command == "steer":
+            return _run_engagement_steer(args)
         parser.error(f"Unsupported engagement command: {args.engagement_command}")
     if args.command == "discover":
         return _run_discovery(config, args)
@@ -141,6 +180,93 @@ def _run_engagement_attach(args: argparse.Namespace) -> int:
     print(f"{action}: {result.asset.id} ({result.asset.type})")
     print(f"Engagement: {result.engagement.id}")
     return 0
+
+
+def _run_engagement_steer(args: argparse.Namespace) -> int:
+    if args.steer_command == "set":
+        return _run_engagement_steer_set(args)
+    if args.steer_command == "show":
+        return _run_engagement_steer_show(args)
+    if args.steer_command == "clear":
+        return _run_engagement_steer_clear(args)
+    print(f"mosh failed: unsupported engagement steer command: {args.steer_command}", file=sys.stderr)
+    return 1
+
+
+def _run_engagement_steer_set(args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    try:
+        steer = _read_steer_input(args)
+        _validate_steer_text(steer)
+        path = _write_engagement_steer(output_root, args.engagement_id, steer)
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Engagement steer written to {path}")
+    return 0
+
+
+def _run_engagement_steer_show(args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    try:
+        _require_engagement(output_root, args.engagement_id)
+        template_path = engagement_dir(output_root, args.engagement_id) / "engagement_template.yaml"
+        steer = engagement_steer(load_engagement_file(template_path)) if template_path.exists() else ""
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+    if steer:
+        sys.stdout.write(steer)
+        if not steer.endswith("\n"):
+            sys.stdout.write("\n")
+    return 0
+
+
+def _run_engagement_steer_clear(args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    try:
+        path = _write_engagement_steer(output_root, args.engagement_id, None)
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Engagement steer cleared in {path}")
+    return 0
+
+
+def _read_steer_input(args: argparse.Namespace) -> str:
+    if args.file is not None:
+        if args.file == "-":
+            return sys.stdin.read().rstrip("\n")
+        return Path(args.file).read_text(encoding="utf-8").rstrip("\n")
+    return str(args.text).strip()
+
+
+def _validate_steer_text(steer: str) -> None:
+    if not steer.strip():
+        raise ValueError("Engagement steer text must not be empty; use `clear` to remove it.")
+    if len(steer) > ENGAGEMENT_STEER_MAX_CHARS:
+        raise ValueError(f"Engagement steer text must be {ENGAGEMENT_STEER_MAX_CHARS} characters or fewer.")
+
+
+def _write_engagement_steer(output_root: Path, engagement_id: str, steer: str | None) -> Path:
+    _require_engagement(output_root, engagement_id)
+    template_dir = engagement_dir(output_root, engagement_id)
+    template_path = template_dir / "engagement_template.yaml"
+    template = load_engagement_file(template_path) if template_path.exists() else build_minimal_engagement_template()
+    llm = template.get("llm") if isinstance(template.get("llm"), dict) else {}
+    template["llm"] = {**llm, "engagement_steer": steer.strip() if isinstance(steer, str) else None}
+    write_engagement_template_mapping(
+        template_dir,
+        template,
+        preserve_existing=False,
+        reject_candidate_credentials=False,
+    )
+    return template_path
+
+
+def _require_engagement(output_root: Path, engagement_id: str) -> None:
+    if not engagement_exists(output_root, engagement_id):
+        raise ValueError(f"engagement not found: {engagement_id}")
 
 
 def _run_engagement_discovery(config: AppConfig, args: argparse.Namespace) -> int:
@@ -199,6 +325,7 @@ def _run_asset_discovery(
     args: argparse.Namespace,
 ) -> Path:
     report_dir = asset_discovery_dir(output_root, engagement.id, asset.id)
+    steer = load_engagement_steer(engagement_dir(output_root, engagement.id) / "engagement_template.yaml")
     if asset.type == "live_url":
         return DiscoveryLiveOrchestrator(
             config,
@@ -209,13 +336,14 @@ def _run_asset_discovery(
             max_pages=args.max_pages,
             max_depth=args.max_depth,
             report_dir=report_dir,
+            engagement_steer=steer,
         )
     if asset.type == "source_tree":
         return DiscoverySourceOrchestrator(
             config,
             output_root=output_root,
             event_sink=_print_event,
-        ).run(asset.locator, report_dir=report_dir)
+        ).run(asset.locator, report_dir=report_dir, engagement_steer=steer)
     raise ValueError(f"Discovery is not implemented for {asset.type} assets yet.")
 
 

@@ -26,6 +26,13 @@ write_executed_security_test_report_task:
     Effective target mappings JSON:
     {targets}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    scope, evidence, review decisions, effective target mappings, or structured
+    output requirements.
+
     Write the report against the effective target mappings. Distinguish
     discovery evidence URLs from execution targets. Do not state that production
     remains required for this executed test when a staging/preprod alternative

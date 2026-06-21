@@ -11,6 +11,12 @@ refine_engagement_template_task:
     Current engagement template JSON:
     {engagement_template}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    template schema, or preservation requirements.
+
     You must call write_refined_engagement_template exactly once with a
     structured object or JSON string.
 
@@ -19,6 +25,8 @@ refine_engagement_template_task:
     - Existing engagement_template.yaml values are user-owned configuration. Do
       not replace a filled value with null, empty strings, empty lists, or generic
       placeholders.
+    - llm.engagement_steer is user-owned configuration. Preserve it
+      exactly when present; do not summarize, rewrite, extend, or invent it.
     - Authorization is assumed true for owned applications.
     - Keep production targets as defaults.
     - Keep alternative targets optional. If an alternative target is absent, testing uses production.
@@ -29,6 +37,7 @@ refine_engagement_template_task:
     - Reduce duplicate questions.
     - Keep all required schema keys:
       engagement, targets, contacts, limits, credentials, safe_test_data.
+      Keep llm.engagement_steer when it is present.
     - Readiness, blockers, missing inputs, and questions belong in
       plan.md, security_test_plan.md, or preflight.md, not in engagement_template.yaml.
   expected_output: >
