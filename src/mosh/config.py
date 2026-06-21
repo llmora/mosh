@@ -80,6 +80,11 @@ class AppConfig:
     katana_docker_timeout: int = 300
     dirb_wordlist: str = "/usr/share/dirb/wordlists/small.txt"
     dirb_docker_timeout: int = 300
+    external_osint_timeout: int = 10
+    shodan_api_key: str | None = None
+    securitytrails_api_key: str | None = None
+    censys_api_id: str | None = None
+    censys_api_secret: str | None = None
     candidate_follow_up_limit: int = 5
     max_depth: int = 5
     planning_max_revisions: int = 1
@@ -109,6 +114,11 @@ class AppConfig:
             katana_docker_timeout=int(_env_value("MOSH_KATANA_DOCKER_TIMEOUT", dotenv, "300")),
             dirb_wordlist=_env_value("MOSH_DIRB_WORDLIST", dotenv, "/usr/share/dirb/wordlists/small.txt"),
             dirb_docker_timeout=int(_env_value("MOSH_DIRB_DOCKER_TIMEOUT", dotenv, "300")),
+            external_osint_timeout=int(_env_value("MOSH_EXTERNAL_OSINT_TIMEOUT", dotenv, "10")),
+            shodan_api_key=_env_value("SHODAN_API_KEY", dotenv),
+            securitytrails_api_key=_env_value("SECURITYTRAILS_API_KEY", dotenv),
+            censys_api_id=_env_value("CENSYS_API_ID", dotenv),
+            censys_api_secret=_env_value("CENSYS_API_SECRET", dotenv),
             candidate_follow_up_limit=int(_env_value("MOSH_CANDIDATE_FOLLOW_UP_LIMIT", dotenv, "5")),
             max_depth=int(_env_value("MOSH_MAX_DEPTH", dotenv, "5")),
             planning_max_revisions=int(_env_value("MOSH_PLANNING_MAX_REVISIONS", dotenv, "1")),

@@ -11,11 +11,13 @@ from mosh.scope import ScopePolicy, normalize_url
 from mosh.crews.discovery_live.tools import (
     CrawlApplicationTool,
     DirbDockerDiscoveryTool,
+    ExternalOsintDiscoveryTool,
     ExtractifyDockerTool,
     JsStaticEndpointDockerTool,
     KatanaDockerCrawlerTool,
     ToolDefinition,
 )
+from mosh.crews.discovery_live.osint import build_default_osint_providers
 
 
 JS_SURFACE_MARKERS = (
@@ -58,6 +60,7 @@ def discovery_live_agent_definitions(config: AppConfig) -> list[AgentDefinition]
                 CrawlApplicationTool.definition,
                 KatanaDockerCrawlerTool.definition,
                 DirbDockerDiscoveryTool.definition,
+                ExternalOsintDiscoveryTool.definition,
                 ExtractifyDockerTool.definition,
                 JsStaticEndpointDockerTool.definition,
             ],
@@ -91,7 +94,11 @@ class CrawlerAgent:
         self,
         crawl_tool: CrawlApplicationTool | None = None,
         additional_tools: list[
-            KatanaDockerCrawlerTool | DirbDockerDiscoveryTool | ExtractifyDockerTool | JsStaticEndpointDockerTool
+            KatanaDockerCrawlerTool
+            | DirbDockerDiscoveryTool
+            | ExternalOsintDiscoveryTool
+            | ExtractifyDockerTool
+            | JsStaticEndpointDockerTool
         ]
         | None = None,
         candidate_follow_up_limit: int = 5,
@@ -128,6 +135,10 @@ class CrawlerAgent:
         dirb_crawl = self._run_optional_tool("dirb_docker_discovery", url, memory, max_pages, max_depth)
         if dirb_crawl:
             crawl = self._merge_crawls(crawl, dirb_crawl)
+        external_osint_crawl = self._run_optional_tool("external_osint_discovery", url, memory, max_pages, max_depth)
+        if external_osint_crawl:
+            crawl = self._merge_crawls(crawl, external_osint_crawl)
+        if dirb_crawl or external_osint_crawl:
             crawl = self._follow_up_discovery_candidates(crawl, memory, max_pages, max_depth)
         extractify_crawl = self._run_extractify_tool(crawl, memory)
         if extractify_crawl:
@@ -143,7 +154,7 @@ class CrawlerAgent:
 
     def _run_crawl_tool(
         self,
-        tool: CrawlApplicationTool | KatanaDockerCrawlerTool | DirbDockerDiscoveryTool,
+        tool: CrawlApplicationTool | KatanaDockerCrawlerTool | DirbDockerDiscoveryTool | ExternalOsintDiscoveryTool,
         url: str,
         memory: FileMemory,
         max_pages: int,
@@ -565,6 +576,15 @@ def build_discovery_live_agents(config: AppConfig | None = None) -> DiscoveryLiv
                     config.tool_image,
                     wordlist=config.dirb_wordlist,
                     docker_timeout=config.dirb_docker_timeout,
+                ),
+                ExternalOsintDiscoveryTool(
+                    build_default_osint_providers(
+                        shodan_api_key=config.shodan_api_key,
+                        securitytrails_api_key=config.securitytrails_api_key,
+                        censys_api_id=config.censys_api_id,
+                        censys_api_secret=config.censys_api_secret,
+                    ),
+                    provider_timeout=config.external_osint_timeout,
                 ),
                 ExtractifyDockerTool(config.tool_image),
                 JsStaticEndpointDockerTool(config.tool_image),

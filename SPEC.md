@@ -274,6 +274,30 @@ The crawler is a tool owned by the crawler agent. The orchestrator must not call
 
 The crawler agent may have multiple crawler tools.
 
+### Passive External OSINT
+
+Live URL discovery includes passive external OSINT. External OSINT tools query
+third-party indexes such as crt.sh, Shodan, Censys, and SecurityTrails by using
+only the authorized root domain derived from the selected live URL asset. The
+tooling must not accept free-form provider queries from an agent or user during
+discovery.
+
+Scope restrictions apply differently to passive lookup and active target
+interaction:
+
+- Passive provider queries may use the authorized root domain, such as
+  `example.com`, to ask third-party indexes for matching hostnames and services.
+- Provider results must be normalized and filtered through the live asset's
+  scope policy before they are persisted as discovery candidates.
+- Only HTTP(S) candidates that remain in scope may be selected for active
+  follow-up crawling. Non-HTTP service observations may be recorded as passive
+  candidates, but must not be actively contacted by crawler follow-up.
+- Provider failures are non-blocking and should be recorded with discovery
+  failures or events.
+- OSINT observations are discovery evidence for the asset that produced them.
+  They must not be duplicated into `engagement.json` or promoted to canonical
+  assets unless the user explicitly attaches a discovered URL or host later.
+
 The technology mapper agent currently performs its analysis through the CrewAI task context and its LLM output. It should read crawler findings and produce an evidence-based SBOM-style analysis as agent output. There is no deterministic component inventory tool in the current implementation.
 
 The discovery reporter agent owns summarization behavior and the report-writing tool. The orchestrator may request reporting, but it must not synthesize the final report by calling reporting helpers directly.
@@ -587,19 +611,18 @@ At minimum, tests should cover:
 - security test rerun decisions from embedded report metadata and preserved history
 
 # Roadmap
+* External OSINT services (crt.sh, Shodan, Censys, SecurityTrails) were blocked by security 
 
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
 * Move the tool execution to docker, e.g. remove local dependencies
 
 * Incorporate a RAG so that executions are remembered and the agents learn from each execution
 
-* Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required. The GUI would have an onboarding wizard to ask for keys or anything else that may be required.
-* We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
-* We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
+* Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required. * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
 * We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
 * As targets grow, we will run out of context very quickly during planning phase - check if planning can be done per asset + links, and what is the difference in output.
 * Incorporate OWASP testing guide
-* External OSINT services (crt.sh, Shodan, Censys, SecurityTrails) were blocked by security container restrictions and could not be queried directly — this limitation is documented.
+container restrictions and could not be queried directly — this limitation is documented.
 * CLOUDFLARE BLOG: Adversarial validation tries to disprove each finding
 * CLOUDFLARE BLOG: A fresh agent validates the list of findings against fresh code - can't find their own issues
 * CLOUDFLARE BLOG: Wishlist - our tool improver

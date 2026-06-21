@@ -3,8 +3,8 @@ crawler:
   goal: >
     Discover and map the publicly reachable structure of the target website,
     including pages, routes, forms, parameters, JavaScript files, API endpoints,
-    linked assets, and observable application behaviours, while staying within
-    the authorised discovery scope.
+    passive external OSINT candidates, linked assets, and observable application
+    behaviours, while staying within the authorised discovery scope.
   backstory: >
     You are a methodical application reconnaissance specialist with deep
     experience in mapping modern web applications. You focus on understanding

@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from mosh.crews.discovery_live.crawler import Crawler
+from mosh.crews.discovery_live.osint import ExternalOsintProvider, build_default_osint_providers, normalize_osint_host
 from mosh.docker_tools import DockerToolRunner
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
 from mosh.scope import ScopePolicy, normalize_url, strip_fragment
@@ -230,6 +231,81 @@ class JsStaticEndpointDockerTool:
                 robots=None,
             )
         return crawl
+
+
+class ExternalOsintDiscoveryTool:
+    definition = ToolDefinition(
+        name="external_osint_discovery",
+        description=(
+            "Query passive external OSINT indexes using only the authorized root domain, then return scoped host "
+            "and service discovery candidates."
+        ),
+    )
+
+    def __init__(
+        self,
+        providers: list[ExternalOsintProvider] | None = None,
+        provider_timeout: int = 10,
+    ) -> None:
+        self.providers = providers if providers is not None else build_default_osint_providers()
+        self.provider_timeout = provider_timeout
+
+    def run(self, url: str, max_pages: int, max_depth: int) -> CrawlResult:
+        normalized_start_url = normalize_url(url)
+        scope = ScopePolicy.from_url(normalized_start_url)
+        query_root = scope.passive_query_root()
+        if not query_root:
+            return CrawlResult(normalized_start_url, [], [], [], None)
+
+        candidates_by_key: dict[tuple[str, str], DiscoveryCandidate] = {}
+        out_of_scope: set[str] = set()
+        failed: list[dict[str, str]] = []
+        for provider in self.providers:
+            try:
+                observations = provider.query(query_root, self.provider_timeout)
+            except Exception as exc:
+                failed.append(
+                    {
+                        "url": normalized_start_url,
+                        "error": f"{provider.name} failed: {exc}",
+                    }
+                )
+                continue
+            for observation in observations:
+                host = normalize_osint_host(observation.host)
+                if not host:
+                    continue
+                if not scope.host_in_scope(host):
+                    out_of_scope.add(f"https://{host}/")
+                    continue
+                candidate_url = _osint_candidate_url(host, observation.protocol, observation.port)
+                should_crawl = candidate_url.startswith(("http://", "https://"))
+                kind = "host" if observation.port is None else "service"
+                candidates_by_key.setdefault(
+                    (candidate_url, observation.source_tool),
+                    DiscoveryCandidate(
+                        url=candidate_url,
+                        source_tool=observation.source_tool,
+                        status=0,
+                        kind=kind,
+                        confidence=observation.confidence,
+                        reason=(
+                            "Passive external OSINT provider returned an in-scope "
+                            f"{'host' if observation.port is None else 'service'}."
+                        ),
+                        evidence=observation.evidence or [query_root],
+                        should_crawl=should_crawl,
+                    ),
+                )
+
+        return CrawlResult(
+            start_url=normalized_start_url,
+            pages=[],
+            out_of_scope=sorted(out_of_scope),
+            failed=failed,
+            robots=None,
+            candidates=sorted(candidates_by_key.values(), key=lambda candidate: (candidate.url, candidate.source_tool)),
+        )
 
 
 def _js_static_input(unique_js_urls: list[str], contexts: list[dict[str, object]] | None) -> str:
@@ -479,6 +555,24 @@ def _is_static_asset_path(path: str) -> bool:
             ".gz",
         )
     )
+
+
+def _osint_candidate_url(host: str, protocol: str | None, port: int | None) -> str:
+    scheme = protocol if protocol in {"http", "https"} else _osint_scheme_for_port(port)
+    if not scheme:
+        return f"tcp://{host}:{port}" if port else f"https://{host}/"
+    netloc = host
+    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+        netloc = f"{host}:{port}"
+    return f"{scheme}://{netloc}/"
+
+
+def _osint_scheme_for_port(port: int | None) -> str | None:
+    if port in {443, 8443, 9443}:
+        return "https"
+    if port in {80, 3000, 5000, 8000, 8080, 9000}:
+        return "http"
+    return None
 
 
 def _parse_katana_stream(output: str) -> list[dict[str, Any]]:

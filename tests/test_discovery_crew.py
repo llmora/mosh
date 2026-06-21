@@ -171,6 +171,7 @@ class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
             tool_names = [tool.name for tool in agents.crawler.available_tool_definitions]
             self.assertIn("katana_docker_crawler", tool_names)
             self.assertIn("dirb_docker_discovery", tool_names)
+            self.assertIn("external_osint_discovery", tool_names)
             self.assertIn("extractify_js_endpoint_discovery", tool_names)
             self.assertIn("js_static_endpoint_discovery", tool_names)
 
