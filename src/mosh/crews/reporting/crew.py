@@ -92,11 +92,11 @@ class CrewAIFinalReportingCrewRunner:
         self.config = config
 
     def run(self, target_url: str, report_dir: Path, memory: FileMemory, bundle: dict[str, Any]) -> Path:
-        missing_keys = self.config.missing_llm_api_keys_for_models(
+        missing_settings = self.config.missing_llm_settings_for_models(
             [self.config.models.reporting.writer, self.config.models.reporting.reviewer]
         )
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+        if missing_settings:
+            raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
         crewai = _load_crewai()
         state = FinalReportState(target_url=target_url, report_dir=report_dir, memory=memory, bundle=bundle)
         writer_crew = _build_writer_crew(crewai, self.config, state)

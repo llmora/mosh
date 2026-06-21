@@ -141,7 +141,7 @@ class CrewAISecurityTestPlanningCrewRunner:
         report_dir: Path,
         memory: FileMemory,
     ) -> SecurityTestPlanningResult:
-        missing_keys = self.config.missing_llm_api_keys_for_models(
+        missing_settings = self.config.missing_llm_settings_for_models(
             [
                 self.config.models.planning.planner,
                 self.config.models.planning.reviewer,
@@ -149,8 +149,8 @@ class CrewAISecurityTestPlanningCrewRunner:
                 self.config.models.planning.engagement_refiner,
             ]
         )
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+        if missing_settings:
+            raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
 
         engagement = load_engagement(output_root, engagement_id)
         target_url, source = _engagement_primary_targets(engagement)

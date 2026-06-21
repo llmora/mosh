@@ -63,7 +63,7 @@ class CrewAIDiscoverySourceCrewRunner:
         self.config = config
 
     def run(self, source: str, report_dir: Path, memory: FileMemory) -> DiscoverySourceCrewResult:
-        missing_keys = self.config.missing_llm_api_keys_for_models(
+        missing_settings = self.config.missing_llm_settings_for_models(
             [
                 self.config.models.discovery_source.intake,
                 self.config.models.discovery_source.mapper,
@@ -74,8 +74,8 @@ class CrewAIDiscoverySourceCrewRunner:
                 self.config.models.discovery_source.reporter,
             ]
         )
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+        if missing_settings:
+            raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
 
         crewai = _load_crewai()
         state = DiscoverySourceCrewState(source=source, report_dir=report_dir, memory=memory)

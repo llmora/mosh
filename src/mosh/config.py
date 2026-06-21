@@ -62,6 +62,8 @@ class AgentModelConfig:
 class AppConfig:
     openrouter_api_key: str | None = None
     deepseek_api_key: str | None = None
+    custom_llm_api_key: str | None = None
+    custom_llm_base_url: str | None = None
     models: AgentModelConfig = field(default_factory=AgentModelConfig)
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     tool_image: str = "mosh-discovery-tools:latest"
@@ -84,6 +86,8 @@ class AppConfig:
         return cls(
             openrouter_api_key=_env_value("OPENROUTER_API_KEY", dotenv),
             deepseek_api_key=_env_value("DEEPSEEK_API_KEY", dotenv),
+            custom_llm_api_key=_env_value("MOSH_LLM_API_KEY", dotenv),
+            custom_llm_base_url=_env_value("MOSH_LLM_BASE_URL", dotenv),
             models=models,
             openrouter_base_url=_env_value(
                 "MOSH_OPENROUTER_BASE_URL",
@@ -110,35 +114,68 @@ class AppConfig:
         )
 
     def llm_api_key_for_model(self, model: str) -> str | None:
+        if self.uses_custom_llm(model):
+            return self.custom_llm_api_key
         if self.uses_direct_deepseek(model):
             return self.deepseek_api_key
         return self.openrouter_api_key
 
     def llm_api_key_name_for_model(self, model: str) -> str:
+        if self.uses_custom_llm(model):
+            return "MOSH_LLM_API_KEY"
         if self.uses_direct_deepseek(model):
             return "DEEPSEEK_API_KEY"
         return "OPENROUTER_API_KEY"
 
     def llm_provider_for_model(self, model: str) -> str:
+        if self.uses_custom_llm(model):
+            return "openai"
         if self.uses_direct_deepseek(model):
             return "deepseek"
         return "openai"
 
     def llm_model_name(self, model: str) -> str:
+        if self.uses_custom_llm(model):
+            return _custom_model(model)
         if self.uses_direct_deepseek(model):
             return _direct_deepseek_model(model)
         return _openrouter_model(model)
 
+    def llm_base_url_for_model(self, model: str) -> str | None:
+        if self.uses_custom_llm(model):
+            return self.custom_llm_base_url
+        if self.uses_direct_deepseek(model):
+            return None
+        return self.openrouter_base_url
+
+    def uses_custom_llm(self, model: str) -> bool:
+        return bool(self.custom_llm_base_url or _is_custom_model(model))
+
     def uses_direct_deepseek(self, model: str) -> bool:
-        return bool(self.deepseek_api_key and _is_deepseek_model(model))
+        return bool(not self.uses_custom_llm(model) and self.deepseek_api_key and _is_deepseek_model(model))
 
     def missing_llm_api_keys_for_models(self, models: list[str]) -> list[str]:
+        return self.missing_llm_settings_for_models(models)
+
+    def missing_llm_settings_for_models(self, models: list[str]) -> list[str]:
         missing = {
-            self.llm_api_key_name_for_model(model)
+            setting
             for model in models
-            if not self.llm_api_key_for_model(model)
+            for setting in self._missing_llm_settings_for_model(model)
         }
         return sorted(missing)
+
+    def _missing_llm_settings_for_model(self, model: str) -> list[str]:
+        if self.uses_custom_llm(model):
+            missing = []
+            if not self.custom_llm_api_key:
+                missing.append("MOSH_LLM_API_KEY")
+            if not self.custom_llm_base_url:
+                missing.append("MOSH_LLM_BASE_URL")
+            return missing
+        if self.uses_direct_deepseek(model):
+            return [] if self.deepseek_api_key else ["DEEPSEEK_API_KEY"]
+        return [] if self.openrouter_api_key else ["OPENROUTER_API_KEY"]
 
 
 def _is_deepseek_model(model: str) -> bool:
@@ -148,6 +185,17 @@ def _is_deepseek_model(model: str) -> bool:
         or normalized.startswith("openrouter/deepseek/")
         or normalized.startswith("deepseek-")
     )
+
+
+def _is_custom_model(model: str) -> bool:
+    return model.strip().lower().startswith("custom/")
+
+
+def _custom_model(model: str) -> str:
+    normalized = model.strip()
+    if normalized.lower().startswith("custom/"):
+        return normalized[len("custom/") :]
+    return normalized
 
 
 def _direct_deepseek_model(model: str) -> str:

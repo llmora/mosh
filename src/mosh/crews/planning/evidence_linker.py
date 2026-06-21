@@ -48,9 +48,9 @@ class CrewAIModelAssistedEvidenceLinker:
         if not context.get("pairs"):
             return {"links": []}
         model = self.config.models.planning.evidence_linker
-        missing_keys = self.config.missing_llm_api_keys_for_models([model])
-        if missing_keys:
-            raise CrewAIUnavailable(f"Missing LLM API key(s): {', '.join(missing_keys)}.")
+        missing_settings = self.config.missing_llm_settings_for_models([model])
+        if missing_settings:
+            raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
 
         crewai = _load_crewai()
         state = EvidenceLinkerState(context=context, tool_context=tool_context, memory=self.memory)

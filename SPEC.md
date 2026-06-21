@@ -82,7 +82,7 @@ The intended Docker interaction is:
 
 Use CrewAI for the agent implementation.
 
-Use OpenRouter and optional direct DeepSeek API access for LLM calls.
+Use OpenRouter, optional direct DeepSeek API access, and optional user-provided OpenAI-compatible endpoints for LLM calls.
 
 Runtime settings are read from exported environment variables and from an optional `.env` file in the directory where the CLI is run. Exported environment variables take precedence over `.env` values. The `.env` file is local-only and must not be committed. The optional `mosh.yaml` file remains the place for model selection.
 
@@ -91,6 +91,15 @@ OpenRouter is the default and is always used for non-DeepSeek models. Its API ke
 ```text
 OPENROUTER_API_KEY
 ```
+
+Users can route all model calls through their own OpenAI-compatible endpoint by setting both:
+
+```text
+MOSH_LLM_BASE_URL
+MOSH_LLM_API_KEY
+```
+
+When `MOSH_LLM_BASE_URL` is set, the runtime should pass the configured model name to CrewAI's LiteLLM-backed LLM integration with provider `openai`, `base_url` set to `MOSH_LLM_BASE_URL`, and `api_key` set to `MOSH_LLM_API_KEY`. This custom endpoint mode takes precedence over both direct DeepSeek and OpenRouter routing. For local endpoints that do not enforce authentication, users should provide a placeholder API key value.
 
 When a selected model is a DeepSeek model and `DEEPSEEK_API_KEY` is present, the application should call the DeepSeek API directly through CrewAI's LiteLLM-backed LLM integration rather than using raw HTTP calls:
 
@@ -102,6 +111,8 @@ Configured model names may use existing provider-style names such as
 `deepseek/deepseek-v4-flash` or `openrouter/deepseek/deepseek-v4-flash`. When direct DeepSeek is selected, the runtime must normalize these names to the bare DeepSeek API model name, such as `deepseek-v4-flash` or `deepseek-v4-pro`, before passing them to CrewAI's LiteLLM-backed LLM integration. The default package provider configuration should be used.
 
 When OpenRouter is selected, the runtime should pass the OpenRouter model ID without an extra routing prefix, such as `openai/gpt-5.2` or `deepseek/deepseek-v4-flash`. A leading `openrouter/` in local configuration is allowed as a convenience but must be stripped before the LLM call.
+
+When a custom endpoint is selected, the runtime should pass the model ID exactly as configured except for a leading `custom/` convenience prefix, which must be stripped before the LLM call. This allows local model names such as `custom/llama3.1` to be sent as `llama3.1`.
 
 If a selected model is a DeepSeek model but `DEEPSEEK_API_KEY` is not present, the application should use OpenRouter for that model. If a crew uses any non-DeepSeek model `OPENROUTER_API_KEY` is required for that model.
 
@@ -528,8 +539,6 @@ At minimum, tests should cover:
 - security test rerun decisions from embedded report metadata and preserved history
 
 # Roadmap
-
-* Implement abiity to use arbitraty openai-like API backends (custom), for companies that do not have openrouter or deepseek access (maybe those using internal AI API endpoints)
 
 * We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).

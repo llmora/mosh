@@ -120,6 +120,31 @@ class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
         self.assertEqual(llm.kwargs["base_url"], "https://openrouter.ai/api/v1")
         self.assertEqual(llm.kwargs["api_key"], "openrouter-key")
 
+    def test_llm_uses_custom_openai_compatible_endpoint_when_configured(self) -> None:
+        llm = _llm(
+            FakeLLMCrewAI,
+            AppConfig(
+                custom_llm_api_key="custom-key",
+                custom_llm_base_url="http://localhost:11434/v1",
+                deepseek_api_key="deepseek-key",
+                openrouter_api_key="openrouter-key",
+            ),
+            "custom/llama3.1",
+        )
+
+        self.assertEqual(llm.kwargs["model"], "llama3.1")
+        self.assertEqual(llm.kwargs["provider"], "openai")
+        self.assertEqual(llm.kwargs["base_url"], "http://localhost:11434/v1")
+        self.assertEqual(llm.kwargs["api_key"], "custom-key")
+
+    def test_llm_requires_custom_base_url_for_custom_model_prefix(self) -> None:
+        with self.assertRaisesRegex(CrewAIUnavailable, "MOSH_LLM_BASE_URL"):
+            _llm(
+                FakeLLMCrewAI,
+                AppConfig(custom_llm_api_key="custom-key", openrouter_api_key="openrouter-key"),
+                "custom/llama3.1",
+            )
+
     def test_builds_crawler_agent_with_configured_discovery_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))
