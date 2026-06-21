@@ -960,6 +960,7 @@ def _latest_plan_directives_fingerprint(report_dir: Path) -> str | None:
             return content["conversation_directives_fingerprint"]
     return None
 
+
 def _latest_engagement_discovery_timestamp(output_root: Path, engagement: Engagement) -> str | None:
     timestamps: list[datetime] = []
     for asset in engagement.assets:
