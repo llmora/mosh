@@ -24,6 +24,7 @@ from mosh.crews.testing.crew import (
     _build_reporter_crew,
     _build_reviewer_crew,
     _build_submit_execution_evidence_tool,
+    _apply_testing_conversation_directives,
     _kickoff_capturing_tool_state,
     _build_run_security_command_tool,
     _run_one_security_test,
@@ -214,6 +215,28 @@ class SecurityTestingCrewTests(unittest.TestCase):
             plan = load_security_test_plan(planning_dir)
 
             self.assertEqual(plan["test_hypotheses"][0]["id"], "API-001")
+
+    def test_testing_conversation_directives_attach_to_matching_hypothesis(self) -> None:
+        plan = _plan()
+        original_api_001_fingerprint = hypothesis_fingerprint(plan["test_hypotheses"][0])
+        original_api_002_fingerprint = hypothesis_fingerprint(plan["test_hypotheses"][1])
+        directive = {
+            "id": "dir_test",
+            "kind": "tool_request",
+            "instruction": "Run dirb for API-001 against admin paths.",
+            "source_message_id": "msg_test",
+            "stages": ["testing"],
+            "target": {"tool": "dirb", "hypothesis_ids": ["API-001"]},
+            "status": "active",
+        }
+
+        updated = _apply_testing_conversation_directives(plan, [directive])
+
+        self.assertIn("conversation_directives", updated)
+        self.assertEqual(updated["test_hypotheses"][0]["conversation_directives"], [directive])
+        self.assertNotIn("conversation_directives", updated["test_hypotheses"][1])
+        self.assertNotEqual(hypothesis_fingerprint(updated["test_hypotheses"][0]), original_api_001_fingerprint)
+        self.assertEqual(hypothesis_fingerprint(updated["test_hypotheses"][1]), original_api_002_fingerprint)
 
     def test_testing_preflight_routes_by_execution_mode(self) -> None:
         plan = {

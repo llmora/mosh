@@ -222,6 +222,31 @@ This writes the engagement security plan under:
 report/<engagement-id>/plan/plan.md
 ```
 
+### 4. Chat With The Engagement
+
+You can ask questions about the accumulated engagement context or steer future stages with chat:
+
+```bash
+uv run mosh chat eng_a1b2c3d4 "What did discovery find around authentication?"
+uv run mosh chat eng_a1b2c3d4 "The /admin-dev URL is out of scope."
+uv run mosh chat eng_a1b2c3d4 "Focus testing on billing approval workflows."
+uv run mosh chat eng_a1b2c3d4 "Run dirb for AUTH-001 against admin paths."
+```
+
+Omit the message to open an interactive prompt:
+
+```bash
+uv run mosh chat eng_a1b2c3d4
+```
+
+Chat history is stored under:
+
+```text
+report/<engagement-id>/conversation/
+```
+
+When chat contains actionable steering, `mosh` records a directive that later stages include in their model context. Planning reruns when planning-relevant directives change. Testing directives are attached to matching hypotheses so a new instruction can trigger a focused rerun instead of being skipped as already current.
+
 ### 5. Review The Engagement File
 
 Planning also identifies any pre-requisites to test the hypothesis, such as credentials, test records, etc. Before running security testing, review and edit the engagement template:

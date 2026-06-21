@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.conversation import active_directives, active_directives_fingerprint
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
@@ -189,6 +190,10 @@ def build_final_report_bundle(output_root: Path, engagement_id: str) -> dict[str
         "planned_tests": _hypotheses(plan),
         "blocked_tests": preflight.get("blocked", []) if isinstance(preflight, dict) else [],
         "executed_tests": executed_tests,
+        "conversation": {
+            "active_directives": active_directives(output_root, engagement.id, stage="reporting"),
+            "directives_fingerprint": active_directives_fingerprint(output_root, engagement.id, stage="reporting"),
+        },
         "timeline": timeline,
         "source_artifacts": source_artifacts,
     }
