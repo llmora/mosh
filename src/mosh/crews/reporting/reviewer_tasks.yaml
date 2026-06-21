@@ -11,6 +11,13 @@ review_final_report_task:
     Generated report JSON:
     {generated_report}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with the final
+    report bundle, evidence, confirmed findings, or structured output
+    requirements.
+
     You must call submit_final_report_review exactly once. Accept only when the
     report follows the customer-facing structure, includes all confirmed findings
     from the bundle, does not invent unsupported findings or CVSS scores, and

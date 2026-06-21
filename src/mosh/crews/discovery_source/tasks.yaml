@@ -5,6 +5,12 @@ validate_source_task:
     Source:
     {source}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
+
     You must call validate_source_path exactly once with the source path. Do not
     inspect files directly.
   expected_output: >
@@ -18,6 +24,12 @@ map_source_task:
 
     Source:
     {source}
+
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
 
     You must call source_inventory exactly once and route_api_extractor exactly
     once. Use source_search or read_source_slice only for focused follow-up if
@@ -37,6 +49,12 @@ resolve_source_routes_task:
 
     Source:
     {source}
+
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
 
     You must call get_route_resolution_context first. Use source_search and
     read_source_slice only for focused follow-up on router mounts, app
@@ -62,6 +80,12 @@ inspect_dependency_config_task:
     Source:
     {source}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
+
     You must call dependency_inventory exactly once and config_inventory exactly
     once. Preserve manifest, lockfile, deployment, environment-template, and CI
     file paths as evidence. Do not invent dependency versions, deployment
@@ -78,6 +102,12 @@ map_source_components_task:
 
     Source:
     {source}
+
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
 
     You must call get_discovery_source_context first. Then call
     submit_source_component_map exactly once with a structured object that may
@@ -107,6 +137,12 @@ analyze_discovery_source_gaps_task:
     Source:
     {source}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
+
     You must call get_discovery_source_context first. Include the submitted
     component map when available. Then call submit_source_gap_analysis exactly
     once with a structured object that may include:
@@ -133,6 +169,12 @@ write_discovery_source_report_task:
 
     Source:
     {source}
+
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    source access, evidence, or structured output requirements.
 
     You must call write_discovery_source_report exactly once with a structured
     report object or JSON string. The report object may include:

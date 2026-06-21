@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from mosh.config import AppConfig
 from mosh.crews.discovery_live.crew import CREW_CONFIG_PACKAGE, CrewAIUnavailable, _llm, _load_crewai
 from mosh.crews.events import MoshCrewAIEventListener
+from mosh.engagement import engagement_steer_prompt_value
 from mosh.evidence_links import EvidenceLinkerToolContext, LiveEndpoint, SourceRoute
 from mosh.memory import FileMemory
 from mosh.scope import ScopePolicy
@@ -29,9 +30,15 @@ class EvidenceLinkerState:
 
 
 class CrewAIModelAssistedEvidenceLinker:
-    def __init__(self, config: AppConfig, memory: FileMemory | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        memory: FileMemory | None = None,
+        engagement_steer: str = "",
+    ) -> None:
         self.config = config
         self.memory = memory
+        self.engagement_steer = engagement_steer
         model = config.models.planning.evidence_linker
         self.model_metadata = {
             "crew": "planning",
@@ -55,7 +62,12 @@ class CrewAIModelAssistedEvidenceLinker:
         crewai = _load_crewai()
         state = EvidenceLinkerState(context=context, tool_context=tool_context, memory=self.memory)
         crew = _build_planning_evidence_linker_crew(crewai, self.config, state)
-        crew.crew().kickoff(inputs={"link_context": json.dumps(context, sort_keys=True)})
+        crew.crew().kickoff(
+            inputs={
+                "link_context": json.dumps(context, sort_keys=True),
+                "engagement_steer": engagement_steer_prompt_value(self.engagement_steer),
+            }
+        )
         if state.candidates is None:
             raise RuntimeError("Evidence linker did not submit candidate links.")
         return state.candidates
@@ -64,8 +76,13 @@ class CrewAIModelAssistedEvidenceLinker:
 def build_model_assisted_linker(
     config: AppConfig,
     memory: FileMemory | None = None,
+    engagement_steer: str = "",
 ) -> CrewAIModelAssistedEvidenceLinker:
-    return CrewAIModelAssistedEvidenceLinker(config, memory=memory)
+    return CrewAIModelAssistedEvidenceLinker(
+        config,
+        memory=memory,
+        engagement_steer=engagement_steer,
+    )
 
 
 def _build_planning_evidence_linker_crew(crewai: Any, config: AppConfig, state: EvidenceLinkerState):

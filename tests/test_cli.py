@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.cli import main
-from mosh.engagement import write_engagement_template
+from mosh.engagement import load_engagement_file, write_engagement_template
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_engagement
 from tests.fakes import (
     FakeCrewRunner,
@@ -216,6 +216,75 @@ class CliTests(unittest.TestCase):
             self.assertEqual(directives["directives"][0]["target"]["action"], "exclude")
             self.assertEqual(len([line for line in messages.splitlines() if line.strip()]), 2)
 
+    def test_cli_engagement_steer_set_show_and_clear(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            steer_path = Path(directory) / "steer.md"
+            steer_path.write_text(
+                "Focus on tenant isolation.\nPrioritize authorization bypass.\n",
+                encoding="utf-8",
+            )
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "engagement",
+                        "steer",
+                        "set",
+                        engagement.id,
+                        "--file",
+                        str(steer_path),
+                        "--output-root",
+                        str(output_root),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Engagement steer written", stdout.getvalue())
+            template_path = output_root / engagement.id / "engagement_template.yaml"
+            template = load_engagement_file(template_path)
+            self.assertEqual(
+                template["llm"]["engagement_steer"],
+                "Focus on tenant isolation.\nPrioritize authorization bypass.",
+            )
+            self.assertIn("engagement_steer: |-", template_path.read_text(encoding="utf-8"))
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "engagement",
+                        "steer",
+                        "show",
+                        engagement.id,
+                        "--output-root",
+                        str(output_root),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stdout.getvalue(), "Focus on tenant isolation.\nPrioritize authorization bypass.\n")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "engagement",
+                        "steer",
+                        "clear",
+                        engagement.id,
+                        "--output-root",
+                        str(output_root),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Engagement steer cleared", stdout.getvalue())
+            template = load_engagement_file(template_path)
+            self.assertIsNone(template["llm"]["engagement_steer"])
+
     def test_cli_discover_engagement_dispatches_missing_assets_and_skips_current_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
@@ -224,6 +293,19 @@ class CliTests(unittest.TestCase):
                     engagement = create_engagement(output_root)
                     live_asset = attach_asset(output_root, engagement.id, url).asset
                     source_asset = attach_asset(output_root, engagement.id, str(source)).asset
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        main(
+                            [
+                                "engagement",
+                                "steer",
+                                "set",
+                                engagement.id,
+                                "--text",
+                                "Focus discovery on authorization surfaces.",
+                                "--output-root",
+                                str(output_root),
+                            ]
+                        )
                     live_runner = FakeCrewRunner()
                     source_runner = FakeDiscoverySourceRunner()
                     stdout = io.StringIO()
@@ -255,6 +337,14 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(refresh_exit_code, 0)
                     self.assertEqual(len(live_runner.calls), 2)
                     self.assertEqual(len(source_runner.calls), 1)
+                    self.assertEqual(
+                        live_runner.calls[0]["engagement_steer"],
+                        "Focus discovery on authorization surfaces.",
+                    )
+                    self.assertEqual(
+                        source_runner.calls[0]["engagement_steer"],
+                        "Focus discovery on authorization surfaces.",
+                    )
                     self.assertTrue((asset_discovery_dir(output_root, engagement.id, live_asset.id) / "report.md").exists())
                     self.assertTrue((asset_discovery_dir(output_root, engagement.id, source_asset.id) / "report.md").exists())
                     self.assertIn("Discovery report for asset_live_1 written to", stdout.getvalue())

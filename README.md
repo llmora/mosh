@@ -194,6 +194,24 @@ Attached: asset_source_1 (source_tree)
 
 `mosh` infers the asset type from the locator. Use `--type` when a URL is ambiguous, for example when a GitHub URL should be treated as a live web target instead of a source repository.
 
+#### Steering
+
+You can optionally set steering text that is provided as input to all agents during the engagement. Use this to provide specific focus, guidance and anything you want the agents to know during their execution.
+
+This steering text guides discovery, planning, testing, and reporting, but it does not override mosh safety, authorization, scope, evidence, or output-schema requirements.
+
+```bash
+uv run mosh engagement steer set eng_a1b2c3d4 --file steer.md
+uv run mosh engagement steer show eng_a1b2c3d4
+uv run mosh engagement steer clear eng_a1b2c3d4
+```
+
+You can also set short inline steering text:
+
+```bash
+uv run mosh engagement steer set eng_a1b2c3d4 --text "Focus on tenant isolation and authorization bypass."
+```
+
 ### 2. Run discovery
 
 Run discovery for every attached asset that does not already have discovery output:
@@ -245,15 +263,7 @@ Omit the message to open an interactive prompt:
 uv run mosh chat eng_a1b2c3d4
 ```
 
-Chat history is stored under:
-
-```text
-report/<engagement-id>/conversation/
-```
-
-When chat contains actionable steering, `mosh` records a directive that later stages include in their model context. Planning reruns when planning-relevant directives change. Testing directives are attached to matching hypotheses so a new instruction can trigger a focused rerun instead of being skipped as already current.
-
-When LLM settings are configured, chat uses `models.chat.assistant` to answer from a compact structured engagement context and to extract directives. Clarifications that describe intended behavior are recorded as engagement context for later planning, testing, and reporting. If the required key is missing or the model response is unusable, `mosh` falls back to local structured context answers and heuristic directive extraction.
+When the chat steers the engagement, `mosh` records the directives so that future runs take them into account. After the changes, run the relevant stage(s) so that the new input you have incorporated is taken into account.
 
 ### 5. Review The Engagement File
 
@@ -270,6 +280,7 @@ This file is deliberately small. It is where you confirm:
 - Execution limits
 - Credentials by role
 - Safe test data
+- Engagement-scoped LLM steering under `llm.engagement_steer`
 - ... and anything else you believe is interesting for the tests execution
 
 You can also add other information that you may think will be useful to the testing, the model inspects and automatically uses anything you have provided to improve its testing (for instance if your preprod instance requires SASE credentials or headers, just drop them in the file).

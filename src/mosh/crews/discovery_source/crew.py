@@ -25,6 +25,7 @@ from mosh.crews.discovery_source.agents import (
 )
 from mosh.crews.discovery_source.reporting import write_discovery_source_report
 from mosh.crews.discovery_source.tools import build_source_index
+from mosh.engagement import engagement_steer_prompt_value
 from mosh.memory import FileMemory
 from mosh.models import Event
 
@@ -54,7 +55,13 @@ class DiscoverySourceCrewResult:
 
 
 class DiscoverySourceCrewRunner(Protocol):
-    def run(self, source: str, report_dir: Path, memory: FileMemory) -> DiscoverySourceCrewResult:
+    def run(
+        self,
+        source: str,
+        report_dir: Path,
+        memory: FileMemory,
+        engagement_steer: str = "",
+    ) -> DiscoverySourceCrewResult:
         pass
 
 
@@ -62,7 +69,13 @@ class CrewAIDiscoverySourceCrewRunner:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def run(self, source: str, report_dir: Path, memory: FileMemory) -> DiscoverySourceCrewResult:
+    def run(
+        self,
+        source: str,
+        report_dir: Path,
+        memory: FileMemory,
+        engagement_steer: str = "",
+    ) -> DiscoverySourceCrewResult:
         missing_settings = self.config.missing_llm_settings_for_models(
             [
                 self.config.models.discovery_source.intake,
@@ -85,7 +98,10 @@ class CrewAIDiscoverySourceCrewRunner:
             "orchestrator",
             "crew_start",
             "Starting CrewAI source discovery crew",
-            {"source": source},
+            {
+                "source": source,
+                "engagement_steer_chars": len(engagement_steer.strip()),
+            },
         )
         crew = _build_yaml_discovery_source_crew(
             crewai=crewai,
@@ -96,7 +112,12 @@ class CrewAIDiscoverySourceCrewRunner:
             dependency_config_agent=agents.dependency_config,
             reporter_agent=agents.reporter,
         )
-        crew.crew().kickoff(inputs={"source": source})
+        crew.crew().kickoff(
+            inputs={
+                "source": source,
+                "engagement_steer": engagement_steer_prompt_value(engagement_steer),
+            }
+        )
 
         if not state.source_index:
             raise RuntimeError("CrewAI source discovery reporter did not write a source index.")
@@ -128,7 +149,7 @@ class DiscoverySourceOrchestrator:
         self.event_sink = event_sink
         self.crew_runner = crew_runner or build_discovery_source_crew_runner(config)
 
-    def run(self, source: str, *, report_dir: Path) -> Path:
+    def run(self, source: str, *, report_dir: Path, engagement_steer: str = "") -> Path:
         memory = FileMemory(report_dir, event_sink=self.event_sink)
         agent_definitions = discovery_source_agent_definitions(self.config)
         memory.record_event(
@@ -140,7 +161,7 @@ class DiscoverySourceOrchestrator:
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
-        self.crew_runner.run(source, report_dir, memory)
+        self.crew_runner.run(source, report_dir, memory, engagement_steer=engagement_steer)
         memory.record_event(
             "orchestrator",
             "complete",

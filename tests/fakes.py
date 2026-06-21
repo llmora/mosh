@@ -108,6 +108,7 @@ class FakeCrewRunner:
         memory: FileMemory,
         max_pages: int,
         max_depth: int,
+        engagement_steer: str = "",
     ):
         self.calls.append(
             {
@@ -115,6 +116,7 @@ class FakeCrewRunner:
                 "report_dir": str(report_dir),
                 "max_pages": max_pages,
                 "max_depth": max_depth,
+                "engagement_steer": engagement_steer,
             }
         )
         from mosh.crews.discovery_live.crawler import Crawler
@@ -181,8 +183,20 @@ class FakeDiscoverySourceRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def run(self, source: str, report_dir: Path, memory: FileMemory):
-        self.calls.append({"source": source, "report_dir": str(report_dir)})
+    def run(
+        self,
+        source: str,
+        report_dir: Path,
+        memory: FileMemory,
+        engagement_steer: str = "",
+    ):
+        self.calls.append(
+            {
+                "source": source,
+                "report_dir": str(report_dir),
+                "engagement_steer": engagement_steer,
+            }
+        )
         intake = SourceIntakeAgent()
         mapper = SourceMapperAgent()
         dependency_config = DependencyConfigAgent()
@@ -307,8 +321,11 @@ class FakeSecurityPlanningRunner:
         report_dir: Path,
         memory: FileMemory,
     ):
+        from mosh.engagement import load_engagement_steer
+        from mosh.engagements import engagement_dir
         from mosh.evidence_links import build_evidence_links, load_evidence_links_if_current
 
+        engagement_steer = load_engagement_steer(engagement_dir(output_root, engagement_id) / "engagement_template.yaml")
         self.calls.append(
             {
                 "output_root": str(output_root),
@@ -316,7 +333,15 @@ class FakeSecurityPlanningRunner:
                 "engagement_id": engagement_id,
             }
         )
-        links = load_evidence_links_if_current(output_root, engagement_id) or build_evidence_links(output_root, engagement_id)
+        links = load_evidence_links_if_current(
+            output_root,
+            engagement_id,
+            engagement_steer=engagement_steer,
+        ) or build_evidence_links(
+            output_root,
+            engagement_id,
+            engagement_steer=engagement_steer,
+        )
         memory.add_item(
             "evidence_links",
             {
@@ -453,12 +478,20 @@ class FakeFinalReportingRunner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def run(self, target_url: str, report_dir: Path, memory: FileMemory, bundle: dict[str, object]) -> Path:
+    def run(
+        self,
+        target_url: str,
+        report_dir: Path,
+        memory: FileMemory,
+        bundle: dict[str, object],
+        engagement_steer: str = "",
+    ) -> Path:
         self.calls.append(
             {
                 "target_url": target_url,
                 "report_dir": str(report_dir),
                 "executed_tests": len(bundle.get("executed_tests", [])),
+                "engagement_steer": engagement_steer,
             }
         )
         report_dir.mkdir(parents=True, exist_ok=True)

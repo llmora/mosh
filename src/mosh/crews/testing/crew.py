@@ -21,7 +21,12 @@ from mosh.crews.discovery_live.crew import (
 )
 from mosh.crews.events import MoshCrewAIEventListener
 from mosh.docker_tools import DockerToolResult, DockerToolRunner
-from mosh.engagement import load_engagement_file, resolve_target_mapping
+from mosh.engagement import (
+    engagement_steer,
+    engagement_steer_prompt_value,
+    load_engagement_file,
+    resolve_target_mapping,
+)
 from mosh.engagements import (
     asset_discovery_dir,
     engagement_dir,
@@ -58,6 +63,7 @@ class SecurityTestExecutionState:
     engagement: dict[str, Any]
     targets: dict[str, str]
     executed_report_path: Path
+    engagement_steer: str = ""
     source: str | None = None
     source_root: Path | None = None
     source_context: dict[str, Any] = field(default_factory=dict)
@@ -167,6 +173,13 @@ class SecurityTestingOrchestrator:
                 },
                 "orchestrator",
             )
+        steer = engagement_steer(engagement_config)
+        memory.record_event(
+            "orchestrator",
+            "engagement_steer_loaded",
+            "Loaded engagement steer for security testing",
+            {"chars": len(steer)},
+        )
         evidence_links = _load_testing_evidence_links(planning_dir)
         result = run_testing_preflight(
             plan,
@@ -300,6 +313,7 @@ class CrewAISecurityTestingCrewRunner:
         current_plan_revision_id = plan_revision_id(plan)
         source_root = _validated_source_root(source) if source else None
         source_context = _load_unified_source_context(discovery_source_dir)
+        steer = engagement_steer(engagement)
         for hypothesis in executable_pending:
             _run_one_security_test(
                 crewai=crewai,
@@ -313,6 +327,7 @@ class CrewAISecurityTestingCrewRunner:
                 memory=memory,
                 hypothesis=hypothesis,
                 engagement=engagement,
+                engagement_steer=steer,
                 targets=preflight.targets,
                 plan_revision_id=current_plan_revision_id,
             )
@@ -332,6 +347,7 @@ def _run_one_security_test(
     engagement: dict[str, Any],
     targets: dict[str, str],
     plan_revision_id: str,
+    engagement_steer: str = "",
 ) -> None:
     test_id = _hypothesis_id(hypothesis)
     current_hypothesis_fingerprint = hypothesis_fingerprint(hypothesis)
@@ -350,6 +366,7 @@ def _run_one_security_test(
         memory=memory,
         hypothesis=hypothesis,
         engagement=engagement,
+        engagement_steer=engagement_steer,
         targets=targets,
         executed_report_path=executed_report_path,
         plan_revision_id=plan_revision_id,
@@ -370,6 +387,7 @@ def _run_one_security_test(
         local_process_start = len(state.local_processes)
         local_request_start = len(state.local_requests)
         executor_crew = _build_executor_crew(crewai, config, state)
+        steer_prompt = engagement_steer_prompt_value(state.engagement_steer)
         _kickoff_capturing_tool_state(
             executor_crew,
             state,
@@ -393,6 +411,7 @@ def _run_one_security_test(
                 "hypothesis": json.dumps(hypothesis, sort_keys=True),
                 "engagement": json.dumps(engagement, sort_keys=True),
                 "targets": json.dumps(targets, sort_keys=True),
+                "engagement_steer": steer_prompt,
                 "source_context": json.dumps(_compact_unified_source_context(source_context), sort_keys=True),
                 "evidence_links": json.dumps(evidence_links, sort_keys=True),
                 "previous_review": json.dumps(previous_review or {}, sort_keys=True),
@@ -425,6 +444,7 @@ def _run_one_security_test(
                     "max_attempts": max_attempts,
                     "hypothesis": json.dumps(hypothesis, sort_keys=True),
                     "targets": json.dumps(targets, sort_keys=True),
+                    "engagement_steer": steer_prompt,
                     "evidence": json.dumps(state.evidence or {}, sort_keys=True),
                 },
             )
@@ -477,6 +497,7 @@ def _run_one_security_test(
             "test_id": test_id,
             "hypothesis": json.dumps(hypothesis, sort_keys=True),
             "targets": json.dumps(targets, sort_keys=True),
+            "engagement_steer": engagement_steer_prompt_value(state.engagement_steer),
             "evidence": json.dumps(state.evidence or {}, sort_keys=True),
             "review": json.dumps(state.review or {}, sort_keys=True),
             "commands": json.dumps(state.commands, sort_keys=True),

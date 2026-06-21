@@ -10,6 +10,7 @@ from mosh.evidence_links import (
     EVIDENCE_LINKS_SCHEMA,
     build_evidence_links,
     discovery_fingerprint,
+    engagement_steer_fingerprint,
     links_path,
     load_evidence_links_if_current,
 )
@@ -80,6 +81,7 @@ class EvidenceLinksTests(unittest.TestCase):
             payload = json.loads(result.links_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema"], EVIDENCE_LINKS_SCHEMA)
             self.assertTrue(payload["discovery_fingerprint"].startswith("sha256:"))
+            self.assertEqual(payload["engagement_steer_fingerprint"], engagement_steer_fingerprint(""))
             self.assertNotIn("engagement_id", payload)
             self.assertNotIn("assets", payload)
             self.assertNotIn("discovered_at", json.dumps(payload))
@@ -226,6 +228,35 @@ class EvidenceLinksTests(unittest.TestCase):
 
             self.assertNotEqual(discovery_fingerprint(output_root, engagement.id), original_fingerprint)
             self.assertIsNone(load_evidence_links_if_current(output_root, engagement.id))
+
+    def test_load_evidence_links_if_current_invalidates_when_engagement_steer_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+
+            result = build_evidence_links(
+                output_root,
+                engagement.id,
+                engagement_steer="Focus on tenant isolation.",
+            )
+
+            self.assertEqual(
+                result.payload["engagement_steer_fingerprint"],
+                engagement_steer_fingerprint("Focus on tenant isolation."),
+            )
+            current = load_evidence_links_if_current(
+                output_root,
+                engagement.id,
+                engagement_steer="Focus on tenant isolation.",
+            )
+            self.assertIsNotNone(current)
+            self.assertIsNone(
+                load_evidence_links_if_current(
+                    output_root,
+                    engagement.id,
+                    engagement_steer="Focus on payment authorization.",
+                )
+            )
 
     def test_build_evidence_links_links_every_live_source_pair_and_caps_each_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

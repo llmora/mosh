@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 from mosh.scope import normalize_url
 
 
+ENGAGEMENT_STEER_MAX_CHARS = 8192
+
+
 def write_engagement_template(report_dir: Path, target_url: str, plan: dict[str, Any]) -> str:
     return write_engagement_template_mapping(report_dir, build_engagement_template(target_url, plan))
 
@@ -23,8 +26,9 @@ def write_engagement_template_mapping(
 ) -> str:
     path = report_dir / "engagement_template.yaml"
     existing_template = _simplify_engagement_template(load_engagement_file(path)) if preserve_existing and path.exists() else {}
-    validate_engagement_template(template)
-    final_template = _simplify_engagement_template(template)
+    candidate_template = _preserve_existing_engagement_steer(template, existing_template) if existing_template else template
+    validate_engagement_template(candidate_template)
+    final_template = _simplify_engagement_template(candidate_template)
     if reject_candidate_credentials:
         _validate_no_new_secret_values(final_template, existing_template)
     if existing_template:
@@ -52,6 +56,18 @@ def validate_engagement_template(template: dict[str, Any]) -> None:
     for key in ("engagement", "targets", "contacts", "limits", "credentials", "safe_test_data"):
         if not isinstance(template.get(key), dict):
             raise ValueError(f"Engagement template field {key} must be a mapping")
+    llm = template.get("llm")
+    if llm is not None and not isinstance(llm, dict):
+        raise ValueError("Engagement template field llm must be a mapping")
+    if isinstance(llm, dict):
+        steer = llm.get("engagement_steer")
+        if steer is not None and not isinstance(steer, str):
+            raise ValueError("Engagement template field llm.engagement_steer must be a string or null")
+        if isinstance(steer, str) and len(steer) > ENGAGEMENT_STEER_MAX_CHARS:
+            raise ValueError(
+                "Engagement template field llm.engagement_steer "
+                f"must be {ENGAGEMENT_STEER_MAX_CHARS} characters or fewer"
+            )
 
 
 def _backup_existing_engagement_template(path: Path) -> Path:
@@ -132,7 +148,60 @@ def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str
             "activation_codes": [],
             "callback_listener_url": None,
         },
+        "llm": {
+            "engagement_steer": None,
+        },
     }
+
+
+def build_minimal_engagement_template() -> dict[str, Any]:
+    return {
+        "engagement": {
+            "authorization_confirmed": None,
+            "active_testing_allowed": None,
+            "state_changing_tests_allowed": None,
+            "notes": None,
+        },
+        "targets": {
+            "production": {},
+            "alternative": {},
+        },
+        "contacts": {
+            "escalation": {
+                "name": None,
+                "email": None,
+                "phone": None,
+            }
+        },
+        "limits": {},
+        "credentials": {},
+        "safe_test_data": {},
+        "llm": {
+            "engagement_steer": None,
+        },
+    }
+
+
+def engagement_steer(template: dict[str, Any]) -> str:
+    llm = template.get("llm") if isinstance(template.get("llm"), dict) else {}
+    value = llm.get("engagement_steer") if isinstance(llm, dict) else None
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def engagement_steer_prompt_value(steer: str | None) -> str:
+    value = steer.strip() if isinstance(steer, str) else ""
+    if not value:
+        return "None provided."
+    return value
+
+
+def load_engagement_steer(path: Path) -> str:
+    try:
+        return engagement_steer(load_engagement_file(path))
+    except FileNotFoundError:
+        return ""
 
 
 def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
@@ -143,6 +212,7 @@ def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
         "limits": _simplify_mapping(template.get("limits")),
         "credentials": _simplify_credentials(template.get("credentials")),
         "safe_test_data": _simplify_safe_test_data(template.get("safe_test_data")),
+        "llm": _simplify_llm(template.get("llm")),
     }
 
 
@@ -186,6 +256,25 @@ def _simplify_safe_test_data(value: Any) -> dict[str, Any]:
             continue
         safe_data[str(key)] = _unwrap_config_value(item)
     return safe_data
+
+
+def _simplify_llm(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "engagement_steer": _unwrap_config_value(source.get("engagement_steer")),
+    }
+
+
+def _preserve_existing_engagement_steer(candidate: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    preserved = dict(candidate)
+    candidate_llm = candidate.get("llm") if isinstance(candidate.get("llm"), dict) else {}
+    existing_llm = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
+    existing_steer = existing_llm.get("engagement_steer")
+    preserved["llm"] = {
+        **candidate_llm,
+        "engagement_steer": existing_steer if isinstance(existing_steer, str) else None,
+    }
+    return preserved
 
 
 def _simplify_mapping(value: Any) -> dict[str, Any]:
@@ -398,7 +487,10 @@ def _yaml_lines(value: Any, indent: int = 0) -> list[str]:
     if isinstance(value, dict):
         lines: list[str] = []
         for key, item in value.items():
-            if _is_scalar(item):
+            if _is_block_string(item):
+                lines.append(f"{pad}{key}: |-")
+                lines.extend(_yaml_block_lines(item, indent + 2))
+            elif _is_scalar(item):
                 lines.append(f"{pad}{key}: {_yaml_scalar(item)}")
             else:
                 lines.append(f"{pad}{key}:")
@@ -418,16 +510,71 @@ def _yaml_lines(value: Any, indent: int = 0) -> list[str]:
     return [f"{pad}{_yaml_scalar(value)}"]
 
 
+def _is_block_string(value: Any) -> bool:
+    return isinstance(value, str) and "\n" in value
+
+
+def _yaml_block_lines(value: str, indent: int) -> list[str]:
+    pad = " " * indent
+    return [f"{pad}{line}" if line else pad for line in value.splitlines()]
+
+
 def _parse_simple_yaml(text: str) -> Any:
-    rows = [
-        (len(line) - len(line.lstrip(" ")), line.strip())
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    rows = _yaml_rows(text)
     value, index = _parse_yaml_block(rows, 0, 0)
     if index != len(rows):
         raise ValueError("Unexpected trailing YAML content")
     return value
+
+
+def _yaml_rows(text: str) -> list[tuple[int, str]]:
+    raw_lines = text.splitlines()
+    rows: list[tuple[int, str]] = []
+    index = 0
+    while index < len(raw_lines):
+        line = raw_lines[index]
+        stripped = line.strip()
+        if not stripped or line.lstrip().startswith("#"):
+            index += 1
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        key, sep, value = stripped.partition(":")
+        if sep and value.strip() in {"|", "|-", "|+"}:
+            block_value, index = _parse_yaml_block_scalar(raw_lines, index + 1, indent, value.strip())
+            rows.append((indent, f"{key.strip()}: {json.dumps(block_value)}"))
+            continue
+        rows.append((indent, stripped))
+        index += 1
+    return rows
+
+
+def _parse_yaml_block_scalar(
+    raw_lines: list[str],
+    index: int,
+    parent_indent: int,
+    marker: str,
+) -> tuple[str, int]:
+    block_lines: list[str] = []
+    content_indent: int | None = None
+    while index < len(raw_lines):
+        line = raw_lines[index]
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+        if stripped and indent <= parent_indent:
+            break
+        if stripped and content_indent is None:
+            content_indent = indent
+        if content_indent is None:
+            block_lines.append("")
+        elif not stripped:
+            block_lines.append("")
+        else:
+            block_lines.append(line[content_indent:])
+        index += 1
+    text = "\n".join(block_lines)
+    if marker == "|":
+        text += "\n"
+    return text, index
 
 
 def _parse_yaml_block(rows: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:

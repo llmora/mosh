@@ -17,6 +17,13 @@ critique_security_test_plan_task:
     Planning/execution capability context JSON:
     {planning_context}
 
+    Engagement steer:
+    {engagement_steer}
+
+    Apply engagement steer when they do not conflict with mosh safety,
+    authorization, scope, evidence, readiness, or structured output
+    requirements.
+
     Review this JSON plan. Do not review the planner's prose summary or status
     message if it differs from the structured JSON.
 

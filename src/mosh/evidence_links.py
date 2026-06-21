@@ -82,7 +82,16 @@ def discovery_fingerprint(output_root: Path, engagement_id: str) -> str:
     return _discovery_fingerprint_for_engagement(output_root, engagement)
 
 
-def load_evidence_links_if_current(output_root: Path, engagement_id: str) -> EvidenceLinkResult | None:
+def engagement_steer_fingerprint(engagement_steer: str) -> str:
+    return "sha256:" + hashlib.sha256(engagement_steer.encode("utf-8")).hexdigest()
+
+
+def load_evidence_links_if_current(
+    output_root: Path,
+    engagement_id: str,
+    *,
+    engagement_steer: str | None = None,
+) -> EvidenceLinkResult | None:
     path = links_path(output_root, engagement_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -94,6 +103,9 @@ def load_evidence_links_if_current(output_root: Path, engagement_id: str) -> Evi
         return None
     if payload.get("discovery_fingerprint") != discovery_fingerprint(output_root, engagement_id):
         return None
+    if engagement_steer is not None:
+        if payload.get("engagement_steer_fingerprint") != engagement_steer_fingerprint(engagement_steer):
+            return None
     return EvidenceLinkResult(links_path=path, payload=payload)
 
 
@@ -103,6 +115,7 @@ def build_evidence_links(
     *,
     max_links_per_asset_pair: int = DEFAULT_MAX_LINKS_PER_ASSET_PAIR,
     model_assisted_linker: ModelAssistedEvidenceLinker | None = None,
+    engagement_steer: str = "",
 ) -> EvidenceLinkResult:
     engagement = load_engagement(output_root, engagement_id)
     live_assets = [asset for asset in engagement.assets if asset.type == "live_url"]
@@ -189,6 +202,7 @@ def build_evidence_links(
     payload = {
         "schema": EVIDENCE_LINKS_SCHEMA,
         "discovery_fingerprint": _discovery_fingerprint_for_engagement(output_root, engagement),
+        "engagement_steer_fingerprint": engagement_steer_fingerprint(engagement_steer),
         "generated_at": utc_now(),
         "pairs": pair_summaries,
         "links": _dedupe_and_sort_links(link_records),
