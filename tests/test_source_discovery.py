@@ -22,6 +22,7 @@ from mosh.crews.discovery_source.tools import (
     MAX_INDEXED_FILES,
     RouteApiExtractorTool,
     SourceInventoryTool,
+    build_source_index,
 )
 from mosh.memory import FileMemory
 from tests.fakes import FakeRuntimeCrewAI, FakeDiscoverySourceRunner
@@ -44,6 +45,9 @@ class DiscoverySourceToolTests(unittest.TestCase):
         self.assertIn("services/classifier/requirements.txt", paths)
         self.assertIn("apps/android/src/main/AndroidManifest.xml", paths)
         self.assertIn("apps/ios/Info.plist", paths)
+        self.assertIn("apps/ios/Podfile.lock", paths)
+        self.assertIn("apps/ios/Pods/Manifest.lock", paths)
+        self.assertIn("apps/ios/Pods/Stripe/Stripe/StripeiOS/Source/STPAddPaymentPassViewController.swift", paths)
         self.assertNotIn(".github/.DS_Store", paths)
         self.assertNotIn("node_modules/ignored/index.js", paths)
         self.assertNotIn(".gradle/caches/generated.py", paths)
@@ -75,6 +79,11 @@ class DiscoverySourceToolTests(unittest.TestCase):
         self.assertIn("apps/ios/AppDelegate.swift", entrypoint_paths)
         self.assertIn("apps/ios-share/ShareViewController.swift", entrypoint_paths)
         self.assertIn("services/classifier/main.py", entrypoint_paths)
+        for app in inventory["apps"]:
+            self.assertNotIn("Pods", Path(app["root"]).parts)
+            self.assertFalse(any("Pods" in Path(manifest).parts for manifest in app.get("manifests", [])))
+            self.assertFalse(any("Pods" in Path(entrypoint["path"]).parts for entrypoint in app.get("entrypoints", [])))
+        self.assertFalse(any("Pods" in Path(entrypoint_path).parts for entrypoint_path in entrypoint_paths))
 
     def test_route_extractor_finds_framework_routes_without_vendor_routes(self) -> None:
         with fixture_source_tree() as source:
@@ -110,12 +119,73 @@ class DiscoverySourceToolTests(unittest.TestCase):
         self.assertEqual(get_route["path"], "app.py")
         self.assertEqual(get_route["handler"], "get_user")
 
+    def test_route_extractor_finds_rails_routes_and_updates_source_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            routes_file = source / "api" / "config" / "routes.rb"
+            routes_file.parent.mkdir(parents=True)
+            routes_file.write_text(
+                "\n".join(
+                    [
+                        "Rails.application.routes.draw do",
+                        "  get 'billing/get'",
+                        "  get 'configuration/get'",
+                        "  scope '/api' do",
+                        "    get '/ping' => 'ping#ping'",
+                        "    post '/billing/webhook', to: 'billing#stripe_webhook'",
+                        "    get '/bookings/:id' => 'bookings#read'",
+                        "    constraints(->(_request) { Rails.configuration.x.drive.expose_internal_api }) do",
+                        "      scope '/backoffice' do",
+                        "        scope '/users' do",
+                        "          get '/content' => 'backoffice#users_content'",
+                        "        end",
+                        "      end",
+                        "    end",
+                        "    namespace :driver do",
+                        "      get '/schedules' => 'schedules#list'",
+                        "    end",
+                        "  end",
+                        "end",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            routes = RouteApiExtractorTool().run(str(source))
+
+        routes_by_full_path = {route["full_route"]: route for route in routes["routes"]}
+        self.assertIn("/billing/get", routes_by_full_path)
+        self.assertIn("/configuration/get", routes_by_full_path)
+        self.assertIn("/api/ping", routes_by_full_path)
+        self.assertIn("/api/billing/webhook", routes_by_full_path)
+        self.assertIn("/api/bookings/:id", routes_by_full_path)
+        self.assertIn("/api/backoffice/users/content", routes_by_full_path)
+        self.assertIn("/api/driver/schedules", routes_by_full_path)
+        self.assertEqual(routes_by_full_path["/api/ping"]["framework"], "rails")
+        self.assertEqual(routes_by_full_path["/api/ping"]["handler"], "ping#ping")
+        self.assertEqual(routes_by_full_path["/billing/get"]["handler"], "billing#get")
+        self.assertEqual(routes_by_full_path["/api/billing/webhook"]["method"], "POST")
+        self.assertEqual(routes_by_full_path["/api/driver/schedules"]["handler"], "driver/schedules#list")
+        self.assertTrue(routes_by_full_path["/api/backoffice/users/content"]["conditional"])
+
+        source_index = build_source_index(
+            {"schema": "mosh.source-info.v1", "path": str(source)},
+            {"files": [], "apps": [], "languages": {}},
+            routes,
+            {"dependencies": []},
+            {"configuration": []},
+        )
+        self.assertEqual(source_index["summary"]["routes_identified"], len(routes["routes"]))
+        self.assertEqual(source_index["inventory"]["apis"], routes["routes"])
+        self.assertTrue(source_index["evidence_refs"])
+
     def test_dependency_and_config_inventory_extract_supported_evidence(self) -> None:
         with fixture_source_tree() as source:
             dependencies = DependencyInventoryTool().run(str(source))
             configuration = ConfigInventoryTool().run(str(source))
 
         dependency_names = {dependency["name"] for dependency in dependencies["dependencies"]}
+        dependency_manifests = {manifest["path"] for manifest in dependencies["manifests"]}
         config_paths = {item["path"] for item in configuration["configuration"]}
         self.assertIn("express", dependency_names)
         self.assertIn("fastapi", dependency_names)
@@ -123,6 +193,16 @@ class DiscoverySourceToolTests(unittest.TestCase):
         self.assertIn("sqlalchemy", dependency_names)
         self.assertIn("androidx.core:core-ktx", dependency_names)
         self.assertIn("Alamofire", dependency_names)
+        cocoapods_dependencies = {
+            (dependency["name"], dependency["version"], dependency["manifest"])
+            for dependency in dependencies["dependencies"]
+            if dependency["ecosystem"] == "cocoapods"
+        }
+        self.assertIn(("Alamofire", "~> 5.9", "apps/ios/Podfile"), cocoapods_dependencies)
+        self.assertIn(("Alamofire", "5.9.1", "apps/ios/Podfile.lock"), cocoapods_dependencies)
+        self.assertIn(("Stripe/Core", "24.0.0", "apps/ios/Podfile.lock"), cocoapods_dependencies)
+        self.assertNotIn(("Stripe/Core", "24.0.0", "apps/ios/Pods/Manifest.lock"), cocoapods_dependencies)
+        self.assertIn("apps/ios/Pods/Manifest.lock", dependency_manifests)
         self.assertIn("Dockerfile", config_paths)
         self.assertIn(".env.example", config_paths)
         self.assertNotIn(".github/.DS_Store", config_paths)
@@ -136,6 +216,35 @@ class DiscoverySourceToolTests(unittest.TestCase):
         }
         self.assertIn("api", compose_services)
         self.assertIn("classifier", compose_services)
+
+    def test_dependency_inventory_reads_cocoapods_manifest_lock_without_podfile_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            pods = source / "Pods"
+            pods.mkdir()
+            (pods / "Manifest.lock").write_text(
+                "\n".join(
+                    [
+                        "PODS:",
+                        "  - Stripe/Core (24.0.0):",
+                        "    - Stripe/Payments (= 24.0.0)",
+                        "",
+                        "DEPENDENCIES:",
+                        "  - Stripe/Core",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            dependencies = DependencyInventoryTool().run(str(source))
+
+        cocoapods_dependencies = {
+            (dependency["name"], dependency["version"], dependency["manifest"])
+            for dependency in dependencies["dependencies"]
+            if dependency["ecosystem"] == "cocoapods"
+        }
+        self.assertIn(("Stripe/Core", "24.0.0", "Pods/Manifest.lock"), cocoapods_dependencies)
 
     def test_route_resolution_only_updates_existing_route_ids(self) -> None:
         routes = {

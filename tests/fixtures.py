@@ -243,8 +243,34 @@ def fixture_source_tree() -> Iterator[Path]:
         ios_root = root / "apps" / "ios"
         ios_root.mkdir(parents=True)
         (ios_root / "Podfile").write_text("pod 'Alamofire', '~> 5.9'\n", encoding="utf-8")
+        pod_lock = "\n".join(
+            [
+                "PODS:",
+                "  - Alamofire (5.9.1)",
+                "  - Stripe/Core (24.0.0):",
+                "    - Stripe/Payments (= 24.0.0)",
+                "  - Stripe/Payments (24.0.0)",
+                "",
+                "DEPENDENCIES:",
+                "  - Alamofire (~> 5.9)",
+                "  - Stripe/Core",
+                "",
+                "COCOAPODS: 1.15.2",
+                "",
+            ]
+        )
+        (ios_root / "Podfile.lock").write_text(pod_lock, encoding="utf-8")
         (ios_root / "Info.plist").write_text("<plist><dict></dict></plist>\n", encoding="utf-8")
         (ios_root / "AppDelegate.swift").write_text("import UIKit\nclass AppDelegate {}\n", encoding="utf-8")
+        pods_root = ios_root / "Pods"
+        stripe_root = pods_root / "Stripe" / "Stripe" / "StripeiOS"
+        (stripe_root / "Source").mkdir(parents=True)
+        (pods_root / "Manifest.lock").write_text(pod_lock, encoding="utf-8")
+        (stripe_root / "Info.plist").write_text("<plist><dict></dict></plist>\n", encoding="utf-8")
+        (stripe_root / "Source" / "STPAddPaymentPassViewController.swift").write_text(
+            "import UIKit\nclass STPAddPaymentPassViewController {}\n",
+            encoding="utf-8",
+        )
         extension_root = root / "apps" / "ios-share"
         extension_root.mkdir(parents=True)
         (extension_root / "Info.plist").write_text("<plist><dict><key>NSExtension</key><dict></dict></dict></plist>\n", encoding="utf-8")
