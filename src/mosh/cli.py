@@ -310,8 +310,7 @@ def _run_final_reporting(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def _run_chat(config: AppConfig, args: argparse.Namespace) -> int:
-    del config
-    orchestrator = EngagementChatOrchestrator(output_root=Path(args.output_root))
+    orchestrator = EngagementChatOrchestrator(output_root=Path(args.output_root), config=config)
     message = " ".join(args.message).strip()
     if message:
         try:

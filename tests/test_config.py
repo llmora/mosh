@@ -166,6 +166,8 @@ class AppConfigTests(unittest.TestCase):
                         "    reviewer: 'anthropic/claude-sonnet-4.5'",
                         "  reporting:",
                         "    writer: openai/gpt-5.2-mini",
+                        "  chat:",
+                        "    assistant: openai/gpt-5.2-mini",
                     ]
                 ),
                 encoding="utf-8",
@@ -183,6 +185,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.models.planning.reviewer, "openai/gpt-5.2")
         self.assertEqual(config.models.testing.reviewer, "anthropic/claude-sonnet-4.5")
         self.assertEqual(config.models.reporting.writer, "openai/gpt-5.2-mini")
+        self.assertEqual(config.models.chat.assistant, "openai/gpt-5.2-mini")
         self.assertEqual(config.models.discovery_live.reporter, "deepseek/deepseek-v4-flash")
         self.assertEqual(config.models.discovery_source.reporter, "deepseek/deepseek-v4-flash")
 
@@ -195,6 +198,7 @@ class AppConfigTests(unittest.TestCase):
                 )
 
         self.assertEqual(config.models.discovery_live.crawler, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.chat.assistant, "deepseek/deepseek-v4-flash")
 
     def test_unknown_model_key_in_mosh_yaml_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

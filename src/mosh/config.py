@@ -50,12 +50,18 @@ class ReportingModelConfig:
 
 
 @dataclass(frozen=True)
+class ChatModelConfig:
+    assistant: str = "deepseek/deepseek-v4-flash"
+
+
+@dataclass(frozen=True)
 class AgentModelConfig:
     discovery_live: DiscoveryLiveModelConfig = field(default_factory=DiscoveryLiveModelConfig)
     planning: SecurityPlanningModelConfig = field(default_factory=SecurityPlanningModelConfig)
     testing: SecurityTestingModelConfig = field(default_factory=SecurityTestingModelConfig)
     discovery_source: DiscoverySourceModelConfig = field(default_factory=DiscoverySourceModelConfig)
     reporting: ReportingModelConfig = field(default_factory=ReportingModelConfig)
+    chat: ChatModelConfig = field(default_factory=ChatModelConfig)
 
 
 @dataclass(frozen=True)
@@ -234,6 +240,7 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
         "planning": defaults.planning,
         "testing": defaults.testing,
         "discovery_source": defaults.discovery_source,
+        "chat": defaults.chat,
     }
     overrides: dict[str, object] = {}
     for crew_name, crew_values in raw_models.items():

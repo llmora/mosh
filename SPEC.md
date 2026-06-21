@@ -149,6 +149,9 @@ models:
   reporting:
     writer: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
+
+  chat:
+    assistant: openai/gpt-5.2-mini
 ```
 
 Omitted model keys keep their built-in defaults. Unknown model keys should fail clearly so misspelled crew or agent names do not silently select the wrong model. The user-facing model configuration should not expose a generic `orchestrator` model unless a crew has an explicit LLM-backed coordinator role.
@@ -300,6 +303,8 @@ report/<engagement-id>/conversation/directives.json
 ```
 
 `messages.jsonl` is the canonical conversation transcript. `directives.json` is derived state extracted from chat messages and must reference the source message ID instead of duplicating the original user intent.
+
+The default chat path is LLM-backed through `models.chat.assistant`. The application must build a compact structured engagement context, include deterministic facts for common questions such as highest finding or blocked tests, and ask the model to return a JSON envelope with `answer`, `artifact_refs`, and `directives`. If the required model settings are missing or the model response cannot be parsed, the chat must fall back to local structured answers and heuristic directive extraction rather than failing the conversation.
 
 Supported directive classes include:
 

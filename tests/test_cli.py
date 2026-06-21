@@ -186,7 +186,16 @@ class CliTests(unittest.TestCase):
             attach_asset(output_root, engagement.id, "https://app.example.test")
             stdout = io.StringIO()
 
-            with contextlib.redirect_stdout(stdout):
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENROUTER_API_KEY": "",
+                    "DEEPSEEK_API_KEY": "",
+                    "MOSH_LLM_API_KEY": "",
+                    "MOSH_LLM_BASE_URL": "",
+                },
+                clear=True,
+            ), contextlib.redirect_stdout(stdout):
                 exit_code = main(
                     [
                         "chat",
