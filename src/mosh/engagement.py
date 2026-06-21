@@ -26,8 +26,9 @@ def write_engagement_template_mapping(
 ) -> str:
     path = report_dir / "engagement_template.yaml"
     existing_template = _simplify_engagement_template(load_engagement_file(path)) if preserve_existing and path.exists() else {}
-    validate_engagement_template(template)
-    final_template = _simplify_engagement_template(template)
+    candidate_template = _preserve_existing_engagement_steer(template, existing_template) if existing_template else template
+    validate_engagement_template(candidate_template)
+    final_template = _simplify_engagement_template(candidate_template)
     if reject_candidate_credentials:
         _validate_no_new_secret_values(final_template, existing_template)
     if existing_template:
@@ -262,6 +263,18 @@ def _simplify_llm(value: Any) -> dict[str, Any]:
     return {
         "engagement_steer": _unwrap_config_value(source.get("engagement_steer")),
     }
+
+
+def _preserve_existing_engagement_steer(candidate: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    preserved = dict(candidate)
+    candidate_llm = candidate.get("llm") if isinstance(candidate.get("llm"), dict) else {}
+    existing_llm = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
+    existing_steer = existing_llm.get("engagement_steer")
+    preserved["llm"] = {
+        **candidate_llm,
+        "engagement_steer": existing_steer if isinstance(existing_steer, str) else None,
+    }
+    return preserved
 
 
 def _simplify_mapping(value: Any) -> dict[str, Any]:

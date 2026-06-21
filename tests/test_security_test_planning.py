@@ -481,7 +481,9 @@ class SecurityTestPlanningTests(unittest.TestCase):
             write_engagement_template_mapping(report_dir, existing, preserve_existing=False, reject_candidate_credentials=False)
             original_text = (report_dir / "engagement_template.yaml").read_text(encoding="utf-8")
 
-            write_engagement_template_mapping(report_dir, build_engagement_template("https://example.test", _plan()))
+            generated = build_engagement_template("https://example.test", _plan())
+            generated["llm"]["engagement_steer"] = "Model-proposed replacement steer."
+            write_engagement_template_mapping(report_dir, generated)
 
             template = load_engagement_file(report_dir / "engagement_template.yaml")
             backups = sorted((report_dir / "engagement_template.backups").glob("engagement_template-*.yaml"))
@@ -496,6 +498,20 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertNotIn("status", template["credentials"]["admin"])
             self.assertNotIn("needed_for", template["credentials"]["admin"])
             self.assertNotIn("notes", template["credentials"]["admin"])
+
+    def test_engagement_template_regeneration_rejects_invented_steer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            existing = build_engagement_template("https://example.test", _plan())
+            self.assertIsNone(existing["llm"]["engagement_steer"])
+            write_engagement_template_mapping(report_dir, existing, preserve_existing=False)
+
+            candidate = build_engagement_template("https://example.test", _plan())
+            candidate["llm"]["engagement_steer"] = "Invented steering from the model."
+            write_engagement_template_mapping(report_dir, candidate)
+
+            template = load_engagement_file(report_dir / "engagement_template.yaml")
+            self.assertIsNone(template["llm"]["engagement_steer"])
 
     def test_load_discovery_context_reads_discovery_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
