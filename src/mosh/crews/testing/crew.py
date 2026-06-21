@@ -10,6 +10,7 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 from mosh.config import AppConfig
+from mosh.conversation import active_directives
 from mosh.crews.discovery_live.reporting import update_report_with_testing_feedback
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
@@ -154,6 +155,18 @@ class SecurityTestingOrchestrator:
         )
         plan = load_security_test_plan(planning_dir)
         engagement_config = load_engagement_file(engagement_path)
+        testing_directives = active_directives(self.output_root, engagement.id, stage="testing")
+        if testing_directives:
+            plan = _apply_testing_conversation_directives(plan, testing_directives)
+            engagement_config = {**engagement_config, "conversation_directives": testing_directives}
+            memory.add_item(
+                "conversation_directives",
+                {
+                    "stage": "testing",
+                    "active_directives": testing_directives,
+                },
+                "orchestrator",
+            )
         evidence_links = _load_testing_evidence_links(planning_dir)
         result = run_testing_preflight(
             plan,
@@ -2536,6 +2549,38 @@ def _contains_word(text: str, word: str) -> bool:
 
 def _hypotheses(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in _list(plan.get("test_hypotheses")) if isinstance(item, dict)]
+
+
+def _apply_testing_conversation_directives(
+    plan: dict[str, Any],
+    directives: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not directives:
+        return plan
+    updated = dict(plan)
+    updated_hypotheses: list[dict[str, Any]] = []
+    for hypothesis in _hypotheses(plan):
+        relevant = _testing_directives_for_hypothesis(directives, _hypothesis_id(hypothesis))
+        if relevant:
+            updated_hypothesis = dict(hypothesis)
+            updated_hypothesis["conversation_directives"] = relevant
+            updated_hypotheses.append(updated_hypothesis)
+        else:
+            updated_hypotheses.append(hypothesis)
+    updated["test_hypotheses"] = updated_hypotheses
+    updated["conversation_directives"] = directives
+    return updated
+
+
+def _testing_directives_for_hypothesis(directives: list[dict[str, Any]], hypothesis_id: str) -> list[dict[str, Any]]:
+    relevant: list[dict[str, Any]] = []
+    for directive in directives:
+        target = directive.get("target") if isinstance(directive.get("target"), dict) else {}
+        hypothesis_ids = [str(item) for item in _list(target.get("hypothesis_ids")) if str(item)]
+        if hypothesis_ids and hypothesis_id not in hypothesis_ids:
+            continue
+        relevant.append(directive)
+    return relevant
 
 
 def _normalize_hypothesis_ids(hypothesis_ids: list[str] | None) -> list[str]:

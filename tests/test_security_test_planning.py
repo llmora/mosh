@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.config import AppConfig
+from mosh.conversation import EngagementChatOrchestrator, active_directives_fingerprint
 from mosh.crews.discovery_live.crew import CREW_CONFIG_PACKAGE
 from mosh.crews.discovery_live.crew import _load_crewai
 from mosh.engagement import (
@@ -298,6 +299,59 @@ class SecurityTestPlanningTests(unittest.TestCase):
 
             self.assertTrue((report_dir / "security_test_plan.md").exists())
             self.assertFalse((report_dir / "security_test_plan.json").exists())
+
+    def test_conversation_directives_make_current_plan_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            _write_discovery_live(asset_discovery_dir(output_root, engagement.id, asset.id))
+            runner = FakeSecurityPlanningRunner()
+            orchestrator = SecurityTestPlanningOrchestrator(
+                AppConfig(),
+                output_root=output_root,
+                crew_runner=runner,
+            )
+
+            report_dir = orchestrator.run(engagement.id)
+            first_fingerprint = active_directives_fingerprint(output_root, engagement.id, stage="planning")
+            second_report_dir = orchestrator.run(engagement.id)
+            self.assertEqual(report_dir, second_report_dir)
+            self.assertTrue(orchestrator.last_run_skipped)
+            self.assertEqual(len(runner.calls), 1)
+
+            EngagementChatOrchestrator(output_root=output_root).ask(
+                engagement.id,
+                "Focus testing on billing approval workflows.",
+            )
+            updated_fingerprint = active_directives_fingerprint(output_root, engagement.id, stage="planning")
+            self.assertNotEqual(updated_fingerprint, first_fingerprint)
+            third_report_dir = orchestrator.run(engagement.id)
+
+            self.assertEqual(third_report_dir, report_dir)
+            self.assertFalse(orchestrator.last_run_skipped)
+            self.assertEqual(len(runner.calls), 2)
+            memory = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+            plan_runs = [item["content"] for item in memory if item["kind"] == "plan_run"]
+            self.assertEqual(plan_runs[-1]["conversation_directives_fingerprint"], updated_fingerprint)
+
+    def test_planning_evidence_bundle_includes_active_conversation_directives(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            _write_discovery_live(asset_discovery_dir(output_root, engagement.id, asset.id))
+            EngagementChatOrchestrator(output_root=output_root).ask(
+                engagement.id,
+                "Discovery missed the /graphql endpoint.",
+            )
+
+            bundle = load_engagement_assessment_evidence_bundle(output_root, engagement.id)
+
+            directives = bundle["conversation"]["active_directives"]
+            self.assertEqual(len(directives), 1)
+            self.assertEqual(directives[0]["kind"], "additional_discovery_fact")
+            self.assertEqual(directives[0]["target"]["path"], "/graphql")
 
     def test_render_security_test_plan_filters_placeholder_critic_items(self) -> None:
         review = {

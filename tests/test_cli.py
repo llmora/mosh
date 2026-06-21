@@ -179,6 +179,43 @@ class CliTests(unittest.TestCase):
             manifest = json.loads((output_root / engagement_id / "engagement.json").read_text(encoding="utf-8"))
             self.assertEqual(list(manifest["assets"][0]), ["created_at", "id"])
 
+    def test_cli_chat_records_engagement_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            attach_asset(output_root, engagement.id, "https://app.example.test")
+            stdout = io.StringIO()
+
+            with patch.dict(
+                os.environ,
+                {
+                    "OPENROUTER_API_KEY": "",
+                    "DEEPSEEK_API_KEY": "",
+                    "MOSH_LLM_API_KEY": "",
+                    "MOSH_LLM_BASE_URL": "",
+                },
+                clear=True,
+            ), contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "chat",
+                        engagement.id,
+                        "The /admin-dev URL is out of scope.",
+                        "--output-root",
+                        str(output_root),
+                    ]
+                )
+
+            directives = json.loads(
+                (output_root / engagement.id / "conversation" / "directives.json").read_text(encoding="utf-8")
+            )
+            messages = (output_root / engagement.id / "conversation" / "messages.jsonl").read_text(encoding="utf-8")
+            self.assertEqual(exit_code, 0)
+            self.assertIn("Recorded engagement directive", stdout.getvalue())
+            self.assertEqual(directives["directives"][0]["kind"], "scope_override")
+            self.assertEqual(directives["directives"][0]["target"]["action"], "exclude")
+            self.assertEqual(len([line for line in messages.splitlines() if line.strip()]), 2)
+
     def test_cli_discover_engagement_dispatches_missing_assets_and_skips_current_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"

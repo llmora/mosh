@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from mosh.config import AppConfig
+from mosh.conversation import EngagementChatOrchestrator
 from mosh.models import Event
 from mosh.crews.discovery_live.crew import DiscoveryLiveOrchestrator
 from mosh.crews.reporting.crew import FinalReportingOrchestrator
@@ -78,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     report_parser.add_argument("engagement_id", help="Engagement ID to report on")
     report_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    chat_parser = subcommands.add_parser("chat", help="Chat with an engagement")
+    chat_parser.add_argument("engagement_id", help="Engagement ID to chat with")
+    chat_parser.add_argument("message", nargs="*", help="Message to send; omit for interactive chat")
+    chat_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+
     args = parser.parse_args(argv)
 
     if args.command == "engagement":
@@ -94,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_testing(config, args)
     if args.command == "report":
         return _run_final_reporting(config, args)
+    if args.command == "chat":
+        return _run_chat(config, args)
     parser.error(f"Unsupported command: {args.command}")
     return 2
 
@@ -299,6 +307,35 @@ def _run_final_reporting(config: AppConfig, args: argparse.Namespace) -> int:
         return 1
     print(f"Final report written to {report_dir / 'report.md'}")
     return 0
+
+
+def _run_chat(config: AppConfig, args: argparse.Namespace) -> int:
+    orchestrator = EngagementChatOrchestrator(output_root=Path(args.output_root), config=config)
+    message = " ".join(args.message).strip()
+    if message:
+        try:
+            result = orchestrator.ask(args.engagement_id, message)
+        except Exception as exc:
+            print(f"mosh failed: {exc}", file=sys.stderr)
+            return 1
+        print(result.response)
+        return 0
+
+    print(f"Chatting with engagement {args.engagement_id}. Press Ctrl-D to exit.")
+    while True:
+        try:
+            line = input("> ")
+        except EOFError:
+            print()
+            return 0
+        if not line.strip():
+            continue
+        try:
+            result = orchestrator.ask(args.engagement_id, line)
+        except Exception as exc:
+            print(f"mosh failed: {exc}", file=sys.stderr)
+            return 1
+        print(result.response)
 
 
 def _print_event(event: Event) -> None:

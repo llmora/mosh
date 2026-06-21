@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.conversation import active_directives, active_directives_fingerprint, directives_fingerprint
 from mosh.crews.definitions import AgentDefinition
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
@@ -356,6 +357,11 @@ class SecurityTestPlanningOrchestrator:
                 "target": engagement.id,
                 "engagement": engagement.id,
                 "latest_discovered_at": latest_discovered_at,
+                "conversation_directives_fingerprint": active_directives_fingerprint(
+                    self.output_root,
+                    engagement.id,
+                    stage="planning",
+                ),
                 "agents": [agent.to_dict() for agent in agent_definitions],
             },
         )
@@ -385,6 +391,11 @@ class SecurityTestPlanningOrchestrator:
             "plan_run",
             {
                 "latest_discovered_at": latest_discovered_at,
+                "conversation_directives_fingerprint": active_directives_fingerprint(
+                    self.output_root,
+                    engagement.id,
+                    stage="planning",
+                ),
                 "planned_at": utc_now(),
                 "plan_path": str(report_dir / "plan.md"),
                 "links_path": str(report_dir / "links.json"),
@@ -512,6 +523,10 @@ def load_engagement_assessment_evidence_bundle(
             "skipped": skipped_assets,
         },
         "correlation": {"evidence_links": evidence_links or {}},
+        "conversation": {
+            "active_directives": active_directives(output_root, engagement.id, stage="planning"),
+            "directives_fingerprint": active_directives_fingerprint(output_root, engagement.id, stage="planning"),
+        },
         "prior_testing_feedback": {},
         "prior_source_testing_feedback": {},
     }
@@ -853,7 +868,11 @@ def _engagement_plan_is_current(output_root: Path, engagement: Engagement, repor
     previous_discovered = _parse_timestamp(_latest_plan_discovery_timestamp(report_dir))
     if latest_discovered is None or previous_discovered is None:
         return False
-    return previous_discovered >= latest_discovered
+    previous_directives_fingerprint = _latest_plan_directives_fingerprint(report_dir)
+    current_directives_fingerprint = active_directives_fingerprint(output_root, engagement.id, stage="planning")
+    if previous_directives_fingerprint is None:
+        previous_directives_fingerprint = directives_fingerprint([])
+    return previous_discovered >= latest_discovered and previous_directives_fingerprint == current_directives_fingerprint
 
 
 def _engagement_template_dir(state: SecurityTestPlanningState) -> Path:
@@ -870,6 +889,19 @@ def _latest_plan_discovery_timestamp(report_dir: Path) -> str | None:
         content = item.get("content")
         if isinstance(content, dict) and isinstance(content.get("latest_discovered_at"), str):
             return content["latest_discovered_at"]
+    return None
+
+
+def _latest_plan_directives_fingerprint(report_dir: Path) -> str | None:
+    memory = _read_json(report_dir / "memory.json", [])
+    if not isinstance(memory, list):
+        return None
+    for item in reversed(memory):
+        if not isinstance(item, dict) or item.get("kind") != "plan_run":
+            continue
+        content = item.get("content")
+        if isinstance(content, dict) and isinstance(content.get("conversation_directives_fingerprint"), str):
+            return content["conversation_directives_fingerprint"]
     return None
 
 

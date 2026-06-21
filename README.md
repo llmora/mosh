@@ -132,6 +132,9 @@ models:
   reporting:
     writer: deepseek/deepseek-v4-flash
     reviewer: deepseek/deepseek-v4-pro
+
+  chat:
+    assistant: deepseek/deepseek-v4-flash
 ```
 
 Only include the agents you want to override; omitted agents keep their defaults. For example:
@@ -153,6 +156,9 @@ models:
 
   reporting:
     reviewer: openai/gpt-5.2
+
+  chat:
+    assistant: openai/gpt-5.2-mini
 ```
 
 Use OpenRouter model IDs such as `openai/gpt-5.2` or `anthropic/claude-sonnet-4.5`. DeepSeek IDs such as `deepseek/deepseek-v4-flash` use `DEEPSEEK_API_KEY` directly when it is set; otherwise they route through OpenRouter and require `OPENROUTER_API_KEY`.
@@ -221,6 +227,33 @@ This writes the engagement security plan under:
 ```text
 report/<engagement-id>/plan/plan.md
 ```
+
+### 4. Chat With The Engagement
+
+You can ask questions about the accumulated engagement context or steer future stages with chat:
+
+```bash
+uv run mosh chat eng_a1b2c3d4 "What did discovery find around authentication?"
+uv run mosh chat eng_a1b2c3d4 "The /admin-dev URL is out of scope."
+uv run mosh chat eng_a1b2c3d4 "Focus testing on billing approval workflows."
+uv run mosh chat eng_a1b2c3d4 "Run dirb for AUTH-001 against admin paths."
+```
+
+Omit the message to open an interactive prompt:
+
+```bash
+uv run mosh chat eng_a1b2c3d4
+```
+
+Chat history is stored under:
+
+```text
+report/<engagement-id>/conversation/
+```
+
+When chat contains actionable steering, `mosh` records a directive that later stages include in their model context. Planning reruns when planning-relevant directives change. Testing directives are attached to matching hypotheses so a new instruction can trigger a focused rerun instead of being skipped as already current.
+
+When LLM settings are configured, chat uses `models.chat.assistant` to answer from a compact structured engagement context and to extract directives. Clarifications that describe intended behavior are recorded as engagement context for later planning, testing, and reporting. If the required key is missing or the model response is unusable, `mosh` falls back to local structured context answers and heuristic directive extraction.
 
 ### 5. Review The Engagement File
 

@@ -149,6 +149,9 @@ models:
   reporting:
     writer: openai/gpt-5.2-mini
     reviewer: openai/gpt-5.2
+
+  chat:
+    assistant: openai/gpt-5.2-mini
 ```
 
 Omitted model keys keep their built-in defaults. Unknown model keys should fail clearly so misspelled crew or agent names do not silently select the wrong model. The user-facing model configuration should not expose a generic `orchestrator` model unless a crew has an explicit LLM-backed coordinator role.
@@ -289,6 +292,37 @@ Planning must distinguish discovery-tool coverage gaps from execution blockers. 
 extraction, configuration review, dependency inspection, generated harnesses, or local source-runtime checks belongs in active `source` hypotheses. Only the portion that genuinely needs an unattached asset/artifact, unsupported tooling,
 mobile binary tooling, external accounts, deployment access, or unavailable build/run inputs should remain deferred. The critic must reject accepted plans that defer source-executable work solely because additional source inspection is
 needed.
+
+## Engagement Conversation
+
+Each engagement has a persistent chat surface for asking questions about accumulated artifacts and for steering future crew stages:
+
+```text
+report/<engagement-id>/conversation/messages.jsonl
+report/<engagement-id>/conversation/directives.json
+```
+
+`messages.jsonl` is the canonical conversation transcript. `directives.json` is derived state extracted from chat messages and must reference the source message ID instead of duplicating the original user intent.
+
+The default chat path is LLM-backed through `models.chat.assistant`. The application must build a compact structured engagement context, include deterministic facts for common questions such as highest finding or blocked tests, and ask the model to return a JSON envelope with `answer`, `artifact_refs`, and `directives`. The chat must not send unbounded raw plan memory, executed-test reports, or discovery memory to the model. If the model returns a useful plain-text answer instead of JSON, the application may use that answer and apply heuristic directive extraction. If a JSON answer is incomplete, the application should retry once with repair instructions. If the required model settings are missing or the model response cannot be used, the chat must fall back to local structured answers and heuristic directive extraction rather than failing the conversation.
+
+User clarifications about intended behavior, accepted risk, false positives, or design assumptions must be recorded as `engagement_context` directives for planning, testing, and reporting so later execution can take the feedback into account.
+
+Supported directive classes include:
+
+- `scope_override`
+- `additional_discovery_fact`
+- `planning_focus`
+- `test_instruction`
+- `tool_request`
+- `execution_constraint`
+- `engagement_template_update_suggestion`
+- `report_correction`
+- `engagement_context`
+
+The chat context builder may read engagement artifacts, discovery reports and memory, plans, the engagement template, testing preflight, executed test reports, final reports, and active directives. It is a read model for answering questions; it must not become a second source of truth for canonical assets, plans, test results, credentials, or permissions.
+
+Crew stages consume only relevant active directives. Planning receives planning-relevant directives in the engagement evidence bundle and records a `conversation_directives_fingerprint` in `plan_run` memory. A plan is current only when discovery inputs, evidence links, required artifacts, and the planning directive fingerprint still match. Testing attaches relevant testing directives to matching in-memory hypotheses before preflight/execution so new hypothesis-specific guidance changes the hypothesis fingerprint and can trigger a focused rerun. Final reporting includes reporting-relevant directives in its deterministic report bundle.
 
 ## Testing Crew
 
@@ -535,14 +569,16 @@ At minimum, tests should cover:
 - agent-owned tool invocation
 - crawler behavior against a fixture app
 - SBOM agent output recording
+- engagement conversation persistence, directive extraction, and directive-driven stage invalidation
 - security-testing feedback into discovery memory, discovery reporting, and replanning
 - security test rerun decisions from embedded report metadata and preserved history
 
 # Roadmap
 
-* We want the user to have the chance to provide feedback after each crew stage, e.g. to fine tune the results or point the testing in another direction, examples (but not limited to): a URL was considered in-scope when it is not, testing did not include a section which is important for the user, the user wants to provide some discovery additional information not identified by the tool, the user wants additional tools to be run in a specific stage, etc.
+* Broaden engagement conversation directives so discovery crawlers and source discovery tools directly consume scope overrides, user-supplied discovery facts, and tool requests during the same stage run.
+* Add review checkpoints to a future end-to-end run command so users can chat with the engagement between stages without manually remembering the command sequence.
 * Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
-* Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
+
 * We want the user to be able to provide 'system prompts' to adapt the testing to their own needs
 * Move the tool execution to docker, e.g. remove local dependencies
 * Incorporate a RAG so that executions are remembered and the agents learn from each execution
@@ -564,3 +600,4 @@ At minimum, tests should cover:
 * CLOUDFLARE BLOG: Require for each finding a working test + a functional git diff - that get executed deterministically
 * CLOUDFLARE BLOG: Fixer? Submit MRs
 * CLOUDFLARE BLOG: Measure success 
+* BUG? 'test' always proceeds to work?
