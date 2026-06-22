@@ -26,6 +26,13 @@ write_security_test_plan_task:
     Apply engagement steer when they do not conflict with evidence,
     accepted plan content, critic review, or structured output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a report schema gap, weak prompt guidance, unsupported
+    planning output, or repeated manual workflow, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, ordinary engagement blockers, or deferred security test
+    opportunities.
+
     You must call write_security_test_plan exactly once with the final plan and
     critic_review arguments. Do not write Markdown yourself.
   expected_output: >

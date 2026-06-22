@@ -20,6 +20,12 @@ crawl_application_task:
     Apply engagement steer when they do not conflict with mosh safety,
     authorization, scope, evidence, or structured output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a missing discovery tool, weak prompt guidance, unsupported
+    parser, or repeated manual workflow, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
+
     Scope rules:
     - Crawl depth: {max_depth}
     - Max pages: {max_pages}
@@ -64,6 +70,12 @@ compile_components_task:
 
     Apply engagement steer when they do not conflict with evidence,
     scope, or structured output requirements.
+
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a missing technology fingerprint, weak prompt guidance,
+    unsupported parser, or repeated manual workflow, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
   expected_output: >
     A structured SBOM-style inventory containing:
     - Component or technology name
@@ -92,6 +104,12 @@ write_report_task:
 
     Apply engagement steer when they do not conflict with evidence,
     scope, or structured output requirements.
+
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a report schema gap, weak prompt guidance, missing discovery
+    tool, or repeated manual workflow, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal engagement blockers, or missing customer inputs.
 
     You must call the write_discovery_report tool exactly once. Do not write
     free-form Markdown yourself. Instead, pass a complete structured report in

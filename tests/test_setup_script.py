@@ -23,6 +23,8 @@ class SetupScriptTests(unittest.TestCase):
         self.assertIn("tools/discovery/katana-form-config.yaml", script)
         self.assertIn("tools/discovery/js-endpoint-extractor/package.json", script)
         self.assertIn("tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs", script)
+        self.assertIn("tools/discovery/source-map-discovery/package.json", script)
+        self.assertIn("tools/discovery/source-map-discovery/source-map-discovery.mjs", script)
         self.assertIn("mosh-security-tools:latest", script)
         self.assertIn("tools/security/Dockerfile", script)
         self.assertIn("image_needs_rebuild", script)

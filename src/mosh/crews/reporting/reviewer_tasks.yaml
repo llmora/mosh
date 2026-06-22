@@ -18,6 +18,13 @@ review_final_report_task:
     report bundle, evidence, confirmed findings, or structured output
     requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as missing report validation, weak prompt guidance, unsupported
+    evidence presentation, or repeated manual review work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, customer-facing report content, or missing engagement
+    inputs.
+
     You must call submit_final_report_review exactly once. Accept only when the
     report follows the customer-facing structure, includes all confirmed findings
     from the bundle, does not invent unsupported findings or CVSS scores, and

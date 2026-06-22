@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.crews.harness_improvements import build_harness_improvement_tool
 from mosh.crews.discovery_live.agents import (
     CrawlerAgent,
     DiscoveryLiveReporterAgent,
@@ -18,7 +19,11 @@ from mosh.engagement import engagement_steer_prompt_value
 from mosh.memory import FileMemory
 from mosh.models import Event
 from mosh.models import CrawlResult
-from mosh.crews.discovery_live.reporting import write_reports
+from mosh.crews.discovery_live.reporting import (
+    apply_javascript_discovery_report_facts,
+    build_javascript_discovery_summary,
+    write_reports,
+)
 from mosh.scope import normalize_url
 
 
@@ -252,6 +257,24 @@ def _build_yaml_discovery_crew(
 ):
     crawler_tool = _build_crawler_tool(crewai, state, crawler_agent)
     report_tool = _build_report_tool(crewai, state, reporter_agent)
+    crawler_improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="discovery_live",
+        agent="crawler",
+    )
+    technology_improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="discovery_live",
+        agent="technology_mapper",
+    )
+    reporter_improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="discovery_live",
+        agent="reporter",
+    )
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/tasks.yaml"))
 
@@ -265,7 +288,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["crawler"],
                 llm=_llm(crewai, config, config.models.discovery_live.crawler),
-                tools=[crawler_tool],
+                tools=[crawler_tool, crawler_improvement_tool],
                 allow_delegation=False,
             )
 
@@ -274,7 +297,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["technology_mapper"],
                 llm=_llm(crewai, config, config.models.discovery_live.technology_mapper),
-                tools=[],
+                tools=[technology_improvement_tool],
                 allow_delegation=False,
             )
 
@@ -283,7 +306,7 @@ def _build_yaml_discovery_crew(
             return crewai.Agent(
                 config=self.agents_config["reporter"],
                 llm=_llm(crewai, config, config.models.discovery_live.reporter),
-                tools=[report_tool],
+                tools=[report_tool, reporter_improvement_tool],
                 allow_delegation=False,
             )
 
@@ -478,11 +501,19 @@ def _build_report_tool(crewai: Any, state: DiscoveryLiveCrewState, reporter_agen
             if not state.crawl:
                 raise RuntimeError("Crawler findings are required before writing the report.")
             state.summary = reporter_agent.summarize(state.crawl, state.components, state.memory)
-            report_content = _coerce_report_content(report)
+            raw_report_content = _coerce_report_content(report)
+            javascript_summary = build_javascript_discovery_summary(state.memory)
+            report_content = apply_javascript_discovery_report_facts(raw_report_content, javascript_summary)
+            state.memory.add_item(
+                "javascript_discovery_summary",
+                javascript_summary,
+                "reporter",
+            )
             state.memory.add_item(
                 "llm_report",
                 {
                     "structured": report_content,
+                    "raw_structured": raw_report_content,
                 },
                 "reporter",
             )

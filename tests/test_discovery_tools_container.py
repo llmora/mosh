@@ -21,6 +21,13 @@ class DiscoveryToolsContainerTests(unittest.TestCase):
         self.assertIn("COPY tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs", dockerfile)
         self.assertIn("/usr/local/bin/js-endpoint-extractor", dockerfile)
 
+    def test_dockerfile_installs_source_map_discovery(self) -> None:
+        dockerfile = Path("tools/discovery/Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("COPY tools/discovery/source-map-discovery/package.json", dockerfile)
+        self.assertIn("COPY tools/discovery/source-map-discovery/source-map-discovery.mjs", dockerfile)
+        self.assertIn("/usr/local/bin/source-map-discovery", dockerfile)
+
     def test_dockerfile_installs_dirb(self) -> None:
         dockerfile = Path("tools/discovery/Dockerfile").read_text(encoding="utf-8")
 

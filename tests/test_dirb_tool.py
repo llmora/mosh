@@ -23,6 +23,14 @@ class FakeDockerRunner:
 
 
 class DirbDockerDiscoveryToolTests(unittest.TestCase):
+    def test_default_timeout_is_five_minutes(self) -> None:
+        runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="", stderr=""))
+        tool = DirbDockerDiscoveryTool("discovery-tools:test", runner=runner)
+
+        tool.run("https://example.test", max_pages=25, max_depth=3)
+
+        self.assertEqual(runner.calls[0]["timeout"], 300)
+
     def test_runs_dirb_with_bounded_non_recursive_flags(self) -> None:
         runner = FakeDockerRunner(
             DockerToolResult(

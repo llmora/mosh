@@ -25,6 +25,10 @@ RUN cd /opt/js-endpoint-extractor && npm install --omit=dev
 COPY tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs /opt/js-endpoint-extractor/js-endpoint-extractor.mjs
 RUN chmod +x /opt/js-endpoint-extractor/js-endpoint-extractor.mjs \
     && ln -s /opt/js-endpoint-extractor/js-endpoint-extractor.mjs /usr/local/bin/js-endpoint-extractor
+COPY tools/discovery/source-map-discovery/package.json /opt/source-map-discovery/package.json
+COPY tools/discovery/source-map-discovery/source-map-discovery.mjs /opt/source-map-discovery/source-map-discovery.mjs
+RUN chmod +x /opt/source-map-discovery/source-map-discovery.mjs \
+    && ln -s /opt/source-map-discovery/source-map-discovery.mjs /usr/local/bin/source-map-discovery
 
 WORKDIR /work
 

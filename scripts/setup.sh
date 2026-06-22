@@ -117,7 +117,9 @@ build_image_if_needed \
   "$ROOT_DIR/tools/discovery/Dockerfile" \
   "$ROOT_DIR/tools/discovery/katana-form-config.yaml" \
   "$ROOT_DIR/tools/discovery/js-endpoint-extractor/package.json" \
-  "$ROOT_DIR/tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs"
+  "$ROOT_DIR/tools/discovery/js-endpoint-extractor/js-endpoint-extractor.mjs" \
+  "$ROOT_DIR/tools/discovery/source-map-discovery/package.json" \
+  "$ROOT_DIR/tools/discovery/source-map-discovery/source-map-discovery.mjs"
 
 build_image_if_needed \
   "mosh-security-tools:latest" \

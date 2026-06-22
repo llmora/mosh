@@ -45,9 +45,7 @@ The setup script runs `uv sync` to install dependencies in a `.venv` virtual env
 3. Use `uv run` to execute the CLI without activating the environment:
 
 ```bash
-uv run mosh engagement create --title "Example App"
-uv run mosh engagement attach eng_a1b2c3d4 https://app.example.com
-uv run mosh discover eng_a1b2c3d4
+uv run mosh https://app.example.com
 ```
 
 All command examples in this README use `uv run mosh` so they work without activating the virtual environment. If you prefer to activate the environment manually, run:
@@ -186,6 +184,15 @@ An engagement is the top-level assessment container. Assets are the components t
 
 You do not need to provide all of these, e.g. `mosh` works with just a single asset - but providing more assets allows better security hypotheses to be created and tested, leading to more effective vulnerability identification.
 
+For the fastest path, pass a live URL or local source tree directly. `mosh` creates an engagement, attaches the asset, runs discovery, and prints the next command:
+
+```bash
+uv run mosh https://app.example.com
+uv run mosh /path/to/repo
+```
+
+You can also create and attach assets explicitly:
+
 ```bash
 $ uv run mosh engagement create --title "Example App"
 Engagement created: eng_a1b2c3d4
@@ -246,6 +253,8 @@ After all the assets have been discovered, the planning phase performs the key t
 ```bash
 uv run mosh plan eng_a1b2c3d4
 ```
+
+The CLI prints the next suggested command after each major stage finishes, for example `mosh plan <engagement-id>` after discovery and `mosh test <engagement-id>` after planning.
 
 This writes the engagement security plan under:
 
@@ -386,11 +395,28 @@ The report is structured as a customer deliverable:
 
 Qualitative severity is taken from hypotheses results and put in the context of the business impact.
 
+### 8. Review Harness Improvement Suggestions
+
+During discovery, planning, testing, and reporting, agents can record internal suggestions for improving `mosh` itself, such as missing tools, parser gaps, prompt improvements, or repeated manual workflows. These are not customer-facing security findings and are not automatically incorporated - use these as improvements for the harness that you may want to add.
+
+List suggestions for one engagement:
+
+```bash
+uv run mosh improvements list eng_a1b2c3d4
+```
+
+Omit the engagement ID to list suggestions across all engagements under `report/`:
+
+```bash
+uv run mosh improvements list
+```
+
 ## End-To-End Example
 
 ```bash
-uv run mosh engagement create --title "Example App"
-uv run mosh engagement attach eng_a1b2c3d4 https://app.example.com
+uv run mosh https://app.example.com
+
+# Use the engagement ID printed by the shortcut.
 uv run mosh engagement attach eng_a1b2c3d4 /path/to/repo
 uv run mosh discover eng_a1b2c3d4
 uv run mosh plan eng_a1b2c3d4
@@ -403,6 +429,8 @@ uv run mosh test eng_a1b2c3d4
 uv run mosh test eng_a1b2c3d4
 
 uv run mosh report eng_a1b2c3d4
+
+uv run mosh improvements list eng_a1b2c3d4
 ```
 
 ## What you get
@@ -414,6 +442,7 @@ After a full run, you have:
 - An editable engagement template for permissions, targets, credentials, limits, and safe test data
 - Executed test reports, including resolution
 - A final customer-facing report
+- Internal harness improvement suggestions for human review, when agents identify useful `mosh` improvements
 
 ## Resolving vulnerabilities
 

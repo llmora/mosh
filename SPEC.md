@@ -178,7 +178,19 @@ Assets are the attached things under assessment. Current asset types are:
 - `source_tree`
 - `source_repo`
 
-Asset attachment is registration only. It must not automatically run discovery or testing. Asset type is inferred from the locator when possible, and callers may pass an explicit type for ambiguous URLs.
+Asset attachment through `mosh engagement attach` is registration only. It must not automatically run discovery or testing. Asset type is inferred from the locator when possible, and callers may pass an explicit type for ambiguous URLs.
+
+The top-level shortcut command accepts a single asset locator:
+
+```text
+mosh <url>
+mosh <source-tree-path>
+```
+
+This shortcut must create a new engagement, attach the asset, run discovery for
+that asset, and print the next planning command. It is equivalent to the first
+three explicit steps for a one-asset engagement, but normal `engagement attach`
+remains registration-only.
 
 Each asset is persisted under:
 
@@ -203,9 +215,80 @@ and writes source/live evidence relationships to:
 report/<engagement-id>/plan/links.json
 ```
 
+## Harness Improvement Suggestions
+
+Every engagement-backed stage may record internal suggestions for improving the
+`mosh` harness itself. These suggestions are for human maintainers and must stay
+separate from security findings, discovery gaps, preflight blockers, customer
+inputs, and final customer report content.
+
+Canonical suggestions are persisted once per engagement under:
+
+```text
+report/<engagement-id>/harness_improvements.json
+```
+
+The file uses schema `mosh.harness-improvements.v1`:
+
+```json
+{
+  "schema": "mosh.harness-improvements.v1",
+  "engagement_id": "eng_a1b2c3d4",
+  "suggestions": [
+    {
+      "id": "hi_ab12cd34ef56",
+      "fingerprint": "sha256:...",
+      "status": "proposed",
+      "category": "tooling",
+      "impact": "medium",
+      "title": "Add JWT claim diff tool",
+      "problem": "JWT claims had to be decoded and compared manually.",
+      "suggestion": "Add a bounded JWT decode and claim diff helper.",
+      "evidence": ["AUTH-001"],
+      "first_seen_at": "2026-06-21T00:00:00+00:00",
+      "last_seen_at": "2026-06-21T00:00:00+00:00",
+      "occurrences": [
+        {
+          "stage": "testing",
+          "agent": "executor",
+          "source_ref": "AUTH-001",
+          "recorded_at": "2026-06-21T00:00:00+00:00"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Suggestions are upserted by a stable fingerprint derived from category, title,
+problem, and suggestion. Repeated observations update `last_seen_at`, merge
+evidence, and append an occurrence instead of creating duplicate canonical
+suggestion records. Stage-local `memory.json` files may record only lightweight
+`harness_improvement_ref` entries containing the suggestion ID, fingerprint, and
+path. They must not duplicate canonical suggestion text.
+
+The CLI surfaces suggestions with:
+
+```text
+mosh improvements list <engagement-id>
+mosh improvements list
+```
+
+The engagement-specific form reads a single engagement. Omitting the engagement
+ID scans `report/eng_*/harness_improvements.json`, groups suggestions by
+fingerprint, and prints a human-readable cross-engagement view.
+
 ## Real-Time Visibility
 
 The CLI should show real-time observable activity from the crew.
+
+After each major stage completes successfully, the CLI should print a concise
+next-step hint. Discovery should point to `mosh plan <engagement-id>`, planning
+should point to reviewing `engagement_template.yaml` and running
+`mosh test <engagement-id>`, testing should point either to updating the
+engagement template and rerunning tests when blockers remain or to
+`mosh report <engagement-id>`, and final reporting should point to the generated
+report and internal harness improvements list.
 
 Show events such as:
 
@@ -591,6 +674,10 @@ When the crawler discovers JavaScript assets, it may invoke Extractify to extrac
 
 When JavaScript assets are discovered, the crawler should also have access to a static JavaScript endpoint discovery tool. This tool should complement Katana and Extractify: Katana observes runtime browser and XHR/fetch behavior, Extractify finds broad URL-like strings, and the static analyzer resolves common JavaScript construction patterns that produce API paths from constants, aliases, base URL globals, concatenation, and template literals. Static findings must be scope-filtered, linked back to the JavaScript source as evidence, and merged into the aggregate crawl state.
 
+When JavaScript assets are discovered, the crawler should check for valid source maps using Docker-backed tooling. Source-map discovery should record whether source maps were checked, whether any were found, how many original sources include embedded content, and any failures. Discovery reports should aggregate source-map facts across all source-map tool runs by JavaScript asset, then use these recorded facts when wording JavaScript limitations, so the report does not claim JavaScript was unexecuted or only string-scanned when Katana, Extractify, static analysis, or source-map checks actually ran.
+
+The discovery report renderer should keep the discovered routes table grounded in crawl evidence. If the structured report omits route-like crawl pages, the renderer should append those routes deterministically while filtering static assets and generated JavaScript/library placeholders.
+
 ## Testing Expectations
 
 Implement tests for all functionality so behavior does not regress.
@@ -609,23 +696,34 @@ At minimum, tests should cover:
 - engagement conversation persistence, directive extraction, and directive-driven stage invalidation
 - security-testing feedback into discovery memory, discovery reporting, and replanning
 - security test rerun decisions from embedded report metadata and preserved history
+- harness improvement suggestion persistence, deduplication, stage tool recording, and CLI surfacing
 
 # Roadmap
-* External OSINT services (crt.sh, Shodan, Censys, SecurityTrails) were blocked by security 
 
-* Right now the user needs to know the various stages of an assessment and provide them in the correct order. We should explore simplifying this (without removing current capabilities).
-* Move the tool execution to docker, e.g. remove local dependencies
+v1
 
-* Incorporate a RAG so that executions are remembered and the agents learn from each execution
+* Create a default command - when passed a URL or a Source code - it starts an engagement, and runs
+
+* Checkout git code
 
 * Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required. * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
-* We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
-* As targets grow, we will run out of context very quickly during planning phase - check if planning can be done per asset + links, and what is the difference in output.
+
 * Incorporate OWASP testing guide
-container restrictions and could not be queried directly — this limitation is documented.
+
 * CLOUDFLARE BLOG: Adversarial validation tries to disprove each finding
 * CLOUDFLARE BLOG: A fresh agent validates the list of findings against fresh code - can't find their own issues
-* CLOUDFLARE BLOG: Wishlist - our tool improver
+
+v2
+* Move the tool execution to docker, e.g. remove local dependencies
+
+* We do not have security testing tools that focus on mobile app inspection, reverse-engineering. Security test planning leaves these out of scope because of this, we may want to add some mobile-client focused security testing tools.
+
+* As targets grow, we will run out of context very quickly during planning phase - check if planning can be done per asset + links, and what is the difference in output.
+
+v3
+* Incorporate a RAG so that executions are remembered and the agents learn from each execution
+
+
 * CLOUDFLARE BLOG: Feedback
 * CLOUDFLARE: Gapfill - matrix of coverage
 * CLOUDFLARE: Built-in attack classes + planning invents its own

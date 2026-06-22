@@ -42,7 +42,7 @@ class JsStaticEndpointDockerToolTests(unittest.TestCase):
         args = runner.calls[0]["args"]
         self.assertEqual(args, ["js-endpoint-extractor", "--base-url", "https://example.test/app", "--json"])
         self.assertEqual(runner.calls[0]["input_text"], "https://example.test/app.js\n")
-        self.assertEqual(runner.calls[0]["timeout"], 120)
+        self.assertEqual(runner.calls[0]["timeout"], 300)
         self.assertFalse(runner.calls[0]["tty"])
         self.assertEqual(
             [page.url for page in result.pages],
@@ -69,6 +69,22 @@ class JsStaticEndpointDockerToolTests(unittest.TestCase):
         payload = json.loads(runner.calls[0]["input_text"])
         self.assertEqual(payload, contexts)
 
+    def test_reuses_cached_result_for_same_static_analysis_input(self) -> None:
+        runner = FakeDockerRunner(
+            DockerToolResult(
+                exit_code=0,
+                stdout='[{"source":"https://example.test/app.js","endpoints":["/api/login"]}]',
+                stderr="",
+            )
+        )
+        tool = JsStaticEndpointDockerTool("discovery-tools:test", runner=runner)
+
+        first = tool.run("https://example.test", ["https://example.test/app.js"])
+        second = tool.run("https://example.test", ["https://example.test/app.js#ignored"])
+
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual([page.url for page in first.pages], [page.url for page in second.pages])
+
     def test_parses_static_endpoint_json_with_scope_filtering(self) -> None:
         output = (
             '[{"source":"https://example.test/static/app.js",'
@@ -81,6 +97,26 @@ class JsStaticEndpointDockerToolTests(unittest.TestCase):
         self.assertEqual([page.url for page in result.pages], ["https://example.test/api/login"])
         self.assertEqual(result.out_of_scope, ["https://outside.test/api"])
         self.assertEqual(result.pages[0].references, ["https://example.test/static/app.js"])
+
+    def test_filters_static_bundle_false_positive_strings(self) -> None:
+        output = json.dumps(
+            [
+                {
+                    "source": "https://example.test/static/js/main.js",
+                    "endpoints": [
+                        "/api/login",
+                        "[object WeakMap]",
+                        "\\u2700-\\u27bf",
+                        "btn btn-rounded m-l-10 btn-light",
+                        "/static/js/[object WeakMap]",
+                    ],
+                }
+            ]
+        )
+
+        result = parse_js_static_output("https://example.test", output)
+
+        self.assertEqual([page.url for page in result.pages], ["https://example.test/api/login"])
 
     def test_records_invalid_json_as_failure(self) -> None:
         result = parse_js_static_output("https://example.test", "not-json")

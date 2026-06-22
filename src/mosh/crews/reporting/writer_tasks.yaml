@@ -14,6 +14,13 @@ write_final_report_task:
     Apply engagement steer when they do not conflict with mosh safety,
     the final report bundle, evidence, or structured output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a final report schema gap, weak prompt guidance, unsupported
+    evidence presentation, or repeated manual reporting work, optionally call
+    record_harness_improvement. Do not use that tool for target
+    vulnerabilities, customer-facing report content, or missing engagement
+    inputs.
+
     The tool renders the Markdown report and enforces the final structure. Your
     job is to provide concise customer-facing narrative fields that make the
     report easier to read for engineering leads, product owners, and security

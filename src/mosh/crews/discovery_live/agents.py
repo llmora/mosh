@@ -15,6 +15,7 @@ from mosh.crews.discovery_live.tools import (
     ExtractifyDockerTool,
     JsStaticEndpointDockerTool,
     KatanaDockerCrawlerTool,
+    SourceMapDiscoveryDockerTool,
     ToolDefinition,
 )
 from mosh.crews.discovery_live.osint import build_default_osint_providers
@@ -63,6 +64,7 @@ def discovery_live_agent_definitions(config: AppConfig) -> list[AgentDefinition]
                 ExternalOsintDiscoveryTool.definition,
                 ExtractifyDockerTool.definition,
                 JsStaticEndpointDockerTool.definition,
+                SourceMapDiscoveryDockerTool.definition,
             ],
         ),
         AgentDefinition(
@@ -99,6 +101,7 @@ class CrawlerAgent:
             | ExternalOsintDiscoveryTool
             | ExtractifyDockerTool
             | JsStaticEndpointDockerTool
+            | SourceMapDiscoveryDockerTool
         ]
         | None = None,
         candidate_follow_up_limit: int = 5,
@@ -146,6 +149,7 @@ class CrawlerAgent:
         js_static_crawl = self._run_js_static_tool(crawl, memory)
         if js_static_crawl:
             crawl = self._merge_crawls(crawl, js_static_crawl)
+        self._run_source_map_tool(crawl, memory)
         openapi_crawl = self._run_openapi_spec_parsing(crawl, memory)
         if openapi_crawl:
             crawl = self._merge_crawls(crawl, openapi_crawl)
@@ -193,6 +197,16 @@ class CrawlerAgent:
                 {"tool": tool_name},
             )
             return None
+        if isinstance(tool, ExternalOsintDiscoveryTool):
+            query_root = tool.query_root_for(url)
+            if query_root and tool.has_queried_root(query_root):
+                memory.record_event(
+                    self.name,
+                    "tool_skip",
+                    "Skipping external_osint_discovery because passive root was already queried",
+                    {"tool": tool_name, "url": url, "query_root": query_root},
+                )
+                return None
         return self._run_crawl_tool(tool, url, memory, max_pages, max_depth)
 
     def _run_extractify_tool(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
@@ -210,6 +224,43 @@ class CrawlerAgent:
             crawl,
             memory,
         )
+
+    def _run_source_map_tool(self, crawl: CrawlResult, memory: FileMemory) -> dict[str, object] | None:
+        js_urls = _javascript_urls(crawl)
+        if not js_urls:
+            return None
+        tool = next((candidate for candidate in self.additional_tools if candidate.definition.name == "source_map_discovery"), None)
+        if not tool:
+            memory.record_event(
+                self.name,
+                "tool_unavailable",
+                "source_map_discovery is not available to the crawler agent",
+                {"tool": "source_map_discovery"},
+            )
+            return None
+        memory.record_event(
+            self.name,
+            "tool_call",
+            "Invoking source_map_discovery",
+            {
+                "tool": "source_map_discovery",
+                "javascript_urls": len(js_urls),
+                "sample": js_urls[:5],
+            },
+        )
+        summary = tool.run(crawl.start_url, js_urls)
+        memory.record_event(
+            self.name,
+            "tool_result",
+            "source_map_discovery completed",
+            _source_map_event_result_data(summary),
+        )
+        memory.add_item(
+            "source_map_discovery",
+            summary,
+            self.name,
+        )
+        return summary
 
     def _run_openapi_spec_parsing(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
         """Detect and parse OpenAPI/Swagger specs from crawled JSON endpoints."""
@@ -278,6 +329,7 @@ class CrawlerAgent:
         js_urls = _javascript_urls(crawl)
         if not js_urls:
             return None
+        javascript_contexts = _javascript_contexts(crawl) if tool_name == "js_static_endpoint_discovery" else []
         tool = next((candidate for candidate in self.additional_tools if candidate.definition.name == tool_name), None)
         if not tool:
             memory.record_event(
@@ -295,11 +347,11 @@ class CrawlerAgent:
                 "tool": tool_name,
                 "javascript_urls": len(js_urls),
                 "sample": js_urls[:5],
-                "javascript_contexts": len(_javascript_contexts(crawl)) if tool_name == "js_static_endpoint_discovery" else 0,
+                "javascript_contexts": len(javascript_contexts),
             },
         )
         if tool_name == "js_static_endpoint_discovery":
-            javascript_crawl = tool.run(crawl.start_url, js_urls, _javascript_contexts(crawl))
+            javascript_crawl = tool.run(crawl.start_url, js_urls, javascript_contexts)
         else:
             javascript_crawl = tool.run(crawl.start_url, js_urls)
         result_data = _crawl_event_result_data(javascript_crawl)
@@ -458,12 +510,15 @@ def _looks_like_javascript_reference(reference: str) -> bool:
 
 
 def _javascript_urls(crawl: CrawlResult) -> list[str]:
+    scope = ScopePolicy.from_url(crawl.start_url)
     return sorted(
         {
             value
             for page in crawl.pages
             for value in [page.url, *page.references]
-            if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
+            if value.startswith(("http://", "https://"))
+            and scope.in_scope(value)
+            and _looks_like_javascript_reference(value)
         }
     )
 
@@ -471,11 +526,14 @@ def _javascript_urls(crawl: CrawlResult) -> list[str]:
 def _javascript_contexts(crawl: CrawlResult) -> list[dict[str, object]]:
     contexts: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
+    scope = ScopePolicy.from_url(crawl.start_url)
     for page in crawl.pages:
         page_js_urls = [
             value
             for value in [page.url, *page.references]
-            if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
+            if value.startswith(("http://", "https://"))
+            and scope.in_scope(value)
+            and _looks_like_javascript_reference(value)
         ]
         for js_url in sorted(set(page_js_urls)):
             key = (page.url, js_url)
@@ -510,6 +568,29 @@ def _crawl_event_result_data(crawl: CrawlResult, sample_limit: int = 20) -> dict
     }
     if crawl.failed:
         result_data["failures"] = crawl.failed
+    return result_data
+
+
+def _source_map_event_result_data(summary: dict[str, object], sample_limit: int = 20) -> dict[str, object]:
+    assets = summary.get("assets") if isinstance(summary.get("assets"), list) else []
+    failed = summary.get("failed") if isinstance(summary.get("failed"), list) else []
+    source_map_urls: list[str] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        source_maps = asset.get("source_maps") if isinstance(asset.get("source_maps"), list) else []
+        for source_map in source_maps:
+            if isinstance(source_map, dict) and isinstance(source_map.get("url"), str):
+                source_map_urls.append(source_map["url"])
+    result_data: dict[str, object] = {
+        "checked": bool(summary.get("checked")),
+        "javascript_assets": summary.get("javascript_assets", 0),
+        "source_maps_found": summary.get("source_maps_found", 0),
+        "source_map_urls": source_map_urls[:sample_limit],
+        "failed": len(failed),
+    }
+    if failed:
+        result_data["failures"] = failed
     return result_data
 
 
@@ -588,6 +669,7 @@ def build_discovery_live_agents(config: AppConfig | None = None) -> DiscoveryLiv
                 ),
                 ExtractifyDockerTool(config.tool_image),
                 JsStaticEndpointDockerTool(config.tool_image),
+                SourceMapDiscoveryDockerTool(config.tool_image),
             ],
             candidate_follow_up_limit=config.candidate_follow_up_limit,
         ),

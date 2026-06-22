@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request
 from unittest.mock import patch
 
 from mosh.crews.discovery_live.osint import (
@@ -9,6 +11,7 @@ from mosh.crews.discovery_live.osint import (
     CrtShOsintProvider,
     OsintObservation,
     ShodanOsintProvider,
+    _open_json,
     build_default_osint_providers,
 )
 from mosh.crews.discovery_live.tools import ExternalOsintDiscoveryTool
@@ -29,8 +32,26 @@ class StaticOsintProvider:
 class FailingOsintProvider:
     name = "failing_external_osint"
 
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
     def query(self, root_domain: str, timeout: int) -> list[OsintObservation]:
+        self.calls.append((root_domain, timeout))
         raise RuntimeError("provider unavailable")
+
+
+class JsonResponse:
+    def __init__(self, body: str) -> None:
+        self.body = body
+
+    def __enter__(self) -> "JsonResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body.encode("utf-8")
 
 
 class ExternalOsintDiscoveryToolTests(unittest.TestCase):
@@ -146,6 +167,46 @@ class ExternalOsintDiscoveryToolTests(unittest.TestCase):
         self.assertEqual(result.candidates, [])
         self.assertEqual(result.failed, [])
 
+    def test_queries_each_passive_root_once_per_tool_instance(self) -> None:
+        provider = StaticOsintProvider(
+            [
+                OsintObservation(
+                    host="api.example.test",
+                    source_tool="static_external_osint",
+                    evidence=["provider host result"],
+                )
+            ]
+        )
+        tool = ExternalOsintDiscoveryTool([provider], provider_timeout=7)
+
+        first = tool.run("https://www.example.test/app", max_pages=25, max_depth=3)
+        second = tool.run("https://example.test/login", max_pages=25, max_depth=3)
+
+        self.assertEqual(provider.calls, [("example.test", 7)])
+        self.assertEqual([candidate.url for candidate in first.candidates], ["https://api.example.test/"])
+        self.assertEqual(second.candidates, [])
+        self.assertEqual(second.failed, [])
+
+    def test_does_not_repeat_failed_passive_root_queries(self) -> None:
+        provider = FailingOsintProvider()
+        tool = ExternalOsintDiscoveryTool([provider], provider_timeout=7)
+
+        first = tool.run("https://example.test", max_pages=25, max_depth=3)
+        second = tool.run("https://www.example.test/register", max_pages=25, max_depth=3)
+
+        self.assertEqual(provider.calls, [("example.test", 7)])
+        self.assertEqual(
+            first.failed,
+            [
+                {
+                    "url": "https://example.test/",
+                    "error": "failing_external_osint failed: provider unavailable",
+                }
+            ],
+        )
+        self.assertEqual(second.failed, [])
+        self.assertEqual(second.candidates, [])
+
     def test_default_provider_builder_includes_key_backed_providers_when_configured(self) -> None:
         providers = build_default_osint_providers(
             shodan_api_key="shodan-key",
@@ -225,6 +286,34 @@ class ExternalOsintDiscoveryToolTests(unittest.TestCase):
             ["dns.names: *.example.test or services.tls.certificates.leaf_data.names: *.example.test"],
         )
         self.assertEqual(observations, [])
+
+    def test_open_json_retries_transient_osint_query_failures(self) -> None:
+        request = Request("https://crt.sh/?q=%25.example.test&output=json")
+        with patch(
+            "mosh.crews.discovery_live.osint.urlopen",
+            side_effect=[
+                TimeoutError("slow response"),
+                HTTPError(request.full_url, 503, "Service Unavailable", {}, None),
+                JsonResponse('{"ok": true}'),
+            ],
+        ) as urlopen:
+            with patch("mosh.crews.discovery_live.osint.time.sleep") as sleep:
+                payload = _open_json(request, timeout=5)
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.25, 0.5])
+
+    def test_open_json_does_not_retry_non_transient_http_errors(self) -> None:
+        request = Request("https://crt.sh/?q=%25.example.test&output=json")
+        with patch(
+            "mosh.crews.discovery_live.osint.urlopen",
+            side_effect=HTTPError(request.full_url, 404, "Not Found", {}, None),
+        ) as urlopen:
+            with self.assertRaises(HTTPError):
+                _open_json(request, timeout=5)
+
+        self.assertEqual(urlopen.call_count, 1)
 
 
 if __name__ == "__main__":

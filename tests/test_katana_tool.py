@@ -120,6 +120,21 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
         self.assertEqual(result.out_of_scope, ["https://outside.test/path"])
         self.assertEqual(result.pages[1].content_type, "text/html")
 
+    def test_filters_generated_javascript_artifacts_from_katana_output(self) -> None:
+        output = "\n".join(
+            [
+                '{"url":"https://example.test/js/%7B%7Bimage%7D%7D","status_code":200}',
+                '{"url":"https://example.test/js/$1","status_code":200}',
+                '{"url":"https://example.test/js/\\\\u2700-\\\\u27bf","status_code":200}',
+                "{\"url\":\"https://example.test/js/'+this.settings.content.icon+'\",\"status_code\":200}",
+                '{"url":"https://example.test/hc/outlook/usage","status_code":200}',
+            ]
+        )
+
+        result = parse_katana_output("https://example.test", output)
+
+        self.assertEqual([page.url for page in result.pages], ["https://example.test/hc/outlook/usage"])
+
     def test_parses_concatenated_json_objects_from_tty_output(self) -> None:
         output = (
             '{"url":"https://example.test/one","status_code":200}'

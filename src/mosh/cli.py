@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 from mosh.config import AppConfig
@@ -27,9 +28,13 @@ from mosh.engagements import (
     create_engagement,
     engagement_exists,
     engagement_dir,
+    infer_asset_type,
     load_engagement,
+    normalize_asset_locator,
     record_asset_discovery,
+    validate_asset_type,
 )
+from mosh.harness_improvements import iter_harness_improvements
 from mosh.crews.planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.testing.crew import (
     SecurityTestPreflightResult,
@@ -38,12 +43,27 @@ from mosh.crews.testing.crew import (
 )
 
 
+COMMANDS = {
+    "chat",
+    "discover",
+    "engagement",
+    "improvements",
+    "plan",
+    "report",
+    "test",
+}
+SHORTCUT_DISCOVERY_ASSET_TYPES = {"live_url", "source_tree"}
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         config = AppConfig.from_env()
     except Exception as exc:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if _is_shortcut_invocation(argv):
+        return _run_shortcut(config, argv)
     parser = argparse.ArgumentParser(prog="mosh")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
@@ -121,6 +141,19 @@ def main(argv: list[str] | None = None) -> int:
     chat_parser.add_argument("message", nargs="*", help="Message to send; omit for interactive chat")
     chat_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    improvements_parser = subcommands.add_parser("improvements", help="Review internal mosh harness improvements")
+    improvements_subcommands = improvements_parser.add_subparsers(dest="improvements_command", required=True)
+    improvements_list_parser = improvements_subcommands.add_parser(
+        "list",
+        help="List harness improvement suggestions for one engagement, or all engagements when omitted",
+    )
+    improvements_list_parser.add_argument("engagement_id", nargs="?", help="Engagement ID")
+    improvements_list_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+
+    if not argv:
+        parser.print_help(sys.stderr)
+        return 2
+
     args = parser.parse_args(argv)
 
     if args.command == "engagement":
@@ -141,8 +174,64 @@ def main(argv: list[str] | None = None) -> int:
         return _run_final_reporting(config, args)
     if args.command == "chat":
         return _run_chat(config, args)
+    if args.command == "improvements":
+        return _run_improvements(args)
     parser.error(f"Unsupported command: {args.command}")
     return 2
+
+
+def _is_shortcut_invocation(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    first = argv[0]
+    return not first.startswith("-") and first not in COMMANDS
+
+
+def _run_shortcut(config: AppConfig, argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="mosh")
+    parser.add_argument("locator", help="Live URL or source tree path")
+    parser.add_argument("--type", help=argparse.SUPPRESS)
+    parser.add_argument("--max-pages", type=int, default=200, help=argparse.SUPPRESS)
+    parser.add_argument("--max-depth", type=int, default=config.max_depth, help=argparse.SUPPRESS)
+    parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code)
+    output_root = Path(args.output_root)
+    try:
+        _validate_shortcut_locator(args.locator, args.type)
+        engagement = create_engagement(output_root, title=f"Assessment for {args.locator}")
+        print(f"Engagement created: {engagement.id}")
+        print(f"Manifest written to {engagement_dir(output_root, engagement.id) / 'engagement.json'}")
+        result = attach_asset(output_root, engagement.id, args.locator, asset_type=args.type)
+        print(f"Attached: {result.asset.id} ({result.asset.type})")
+        print(f"Engagement: {result.engagement.id}")
+        report_dir = _run_asset_discovery(
+            config,
+            output_root,
+            result.engagement,
+            result.asset,
+            SimpleNamespace(max_pages=args.max_pages, max_depth=args.max_depth),
+        )
+        record_asset_discovery(output_root, result.engagement.id, result.asset.id, report_dir)
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Discovery report for {result.asset.id} written to {report_dir}")
+    _print_next_step(f"run `mosh plan {result.engagement.id}`")
+    return 0
+
+
+def _validate_shortcut_locator(locator: str, asset_type: str | None) -> None:
+    normalized_type = validate_asset_type(asset_type) if asset_type else infer_asset_type(locator)
+    if normalized_type not in SHORTCUT_DISCOVERY_ASSET_TYPES:
+        supported = " and ".join(sorted(SHORTCUT_DISCOVERY_ASSET_TYPES))
+        raise ValueError(
+            f"Shortcut discovery supports {supported} assets; got {normalized_type}. "
+            "Use `mosh engagement create` and `mosh engagement attach` for this asset type."
+        )
+    normalize_asset_locator(locator, normalized_type)
 
 
 def _run_discovery(config: AppConfig, args: argparse.Namespace) -> int:
@@ -161,6 +250,7 @@ def _run_engagement_create(args: argparse.Namespace) -> int:
         return 1
     print(f"Engagement created: {engagement.id}")
     print(f"Manifest written to {engagement_dir(Path(args.output_root), engagement.id) / 'engagement.json'}")
+    _print_next_step(f"attach an asset with `mosh engagement attach {engagement.id} <url-or-source>`")
     return 0
 
 
@@ -179,6 +269,7 @@ def _run_engagement_attach(args: argparse.Namespace) -> int:
     action = "Attached" if result.created else "Asset already attached"
     print(f"{action}: {result.asset.id} ({result.asset.type})")
     print(f"Engagement: {result.engagement.id}")
+    _print_next_step(f"run `mosh discover {result.engagement.id}`")
     return 0
 
 
@@ -287,6 +378,7 @@ def _run_engagement_discovery(config: AppConfig, args: argparse.Namespace) -> in
     ]
     if not due_assets:
         print(f"No assets need discovery for {engagement.id}; use --refresh to rerun.")
+        _print_next_step(f"run `mosh plan {engagement.id}`")
         return 0
 
     for asset in due_assets:
@@ -297,6 +389,7 @@ def _run_engagement_discovery(config: AppConfig, args: argparse.Namespace) -> in
             print(f"mosh failed: asset {asset.id}: {exc}", file=sys.stderr)
             return 1
         print(f"Discovery report for {asset.id} written to {report_dir}")
+    _print_next_step(f"run `mosh plan {engagement.id}` when discovery is complete")
     return 0
 
 
@@ -360,8 +453,16 @@ def _run_security_test_planning(config: AppConfig, args: argparse.Namespace) -> 
         return 1
     if getattr(orchestrator, "last_run_skipped", False):
         print(f"Security test plan is current; no new discovery since previous plan at {report_dir}")
+        _print_next_step(
+            f"review `{engagement_dir(Path(args.output_root), args.engagement_id) / 'engagement_template.yaml'}`, "
+            f"then run `mosh test {args.engagement_id}`"
+        )
         return 0
     print(f"Security test plan written to {report_dir}")
+    _print_next_step(
+        f"review `{engagement_dir(Path(args.output_root), args.engagement_id) / 'engagement_template.yaml'}`, "
+        f"then run `mosh test {args.engagement_id}`"
+    )
     return 0
 
 
@@ -388,6 +489,9 @@ def _run_testing(config: AppConfig, args: argparse.Namespace) -> int:
     summary = _testing_blocked_summary(report_dir, engagement_file)
     if summary:
         print(summary)
+        _print_next_step(f"update `{engagement_file}` and run `mosh test {args.engagement_id}` again")
+    else:
+        _print_next_step(f"run `mosh report {args.engagement_id}`")
     return 0
 
 
@@ -434,6 +538,7 @@ def _run_final_reporting(config: AppConfig, args: argparse.Namespace) -> int:
         print(f"mosh failed: {exc}", file=sys.stderr)
         return 1
     print(f"Final report written to {report_dir / 'report.md'}")
+    _print_next_step(f"review `{report_dir / 'report.md'}` and run `mosh improvements list {args.engagement_id}`")
     return 0
 
 
@@ -464,6 +569,96 @@ def _run_chat(config: AppConfig, args: argparse.Namespace) -> int:
             print(f"mosh failed: {exc}", file=sys.stderr)
             return 1
         print(result.response)
+
+
+def _run_improvements(args: argparse.Namespace) -> int:
+    if args.improvements_command == "list":
+        return _run_improvements_list(args)
+    print(f"mosh failed: unsupported improvements command: {args.improvements_command}", file=sys.stderr)
+    return 1
+
+
+def _run_improvements_list(args: argparse.Namespace) -> int:
+    output_root = Path(args.output_root)
+    engagement_id = args.engagement_id
+    try:
+        if engagement_id:
+            _require_engagement(output_root, engagement_id)
+        suggestions = list(iter_harness_improvements(output_root, engagement_id))
+    except Exception as exc:
+        print(f"mosh failed: {exc}", file=sys.stderr)
+        return 1
+
+    grouped = _group_improvements(suggestions)
+    if not grouped:
+        print("No harness improvements recorded.")
+        return 0
+
+    scope = f"for {engagement_id}" if engagement_id else "across all engagements"
+    plural = "suggestion" if len(grouped) == 1 else "suggestions"
+    print(f"Harness improvements {scope}: {len(grouped)} {plural}")
+    for index, item in enumerate(grouped, start=1):
+        if index > 1:
+            print()
+        print(f"{index}. [{item['impact']}] {item['title']}")
+        print(f"   Category: {item['category']}")
+        print(f"   Engagements: {', '.join(item['engagements'])}")
+        print(f"   Occurrences: {item['occurrences']}")
+        print(f"   Problem: {item['problem']}")
+        print(f"   Suggestion: {item['suggestion']}")
+        evidence = item.get("evidence") or []
+        if evidence:
+            print(f"   Evidence: {'; '.join(evidence[:3])}")
+    return 0
+
+
+def _group_improvements(suggestions: list[dict[str, object]]) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for suggestion in suggestions:
+        fingerprint = str(suggestion.get("fingerprint") or suggestion.get("id") or "")
+        if not fingerprint:
+            continue
+        item = grouped.get(fingerprint)
+        occurrences = suggestion.get("occurrences") if isinstance(suggestion.get("occurrences"), list) else []
+        engagement_id = str(suggestion.get("engagement_id") or "")
+        if item is None:
+            item = {
+                "fingerprint": fingerprint,
+                "impact": str(suggestion.get("impact") or "medium"),
+                "category": str(suggestion.get("category") or "other"),
+                "title": str(suggestion.get("title") or "Untitled harness improvement"),
+                "problem": str(suggestion.get("problem") or ""),
+                "suggestion": str(suggestion.get("suggestion") or ""),
+                "evidence": suggestion.get("evidence") if isinstance(suggestion.get("evidence"), list) else [],
+                "engagements": set(),
+                "occurrences": 0,
+                "last_seen_at": str(suggestion.get("last_seen_at") or ""),
+            }
+            grouped[fingerprint] = item
+        if engagement_id:
+            item["engagements"].add(engagement_id)  # type: ignore[union-attr]
+        item["occurrences"] = int(item["occurrences"]) + len(occurrences)
+        last_seen = str(suggestion.get("last_seen_at") or "")
+        if last_seen > str(item.get("last_seen_at") or ""):
+            item["last_seen_at"] = last_seen
+
+    impact_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+    rendered = []
+    for item in grouped.values():
+        rendered.append({**item, "engagements": sorted(item["engagements"])})  # type: ignore[index]
+    return sorted(
+        rendered,
+        key=lambda item: (
+            impact_rank.get(str(item.get("impact")), 5),
+            -len(item.get("engagements") or []),
+            -int(item.get("occurrences") or 0),
+            str(item.get("title") or ""),
+        ),
+    )
+
+
+def _print_next_step(message: str) -> None:
+    print(f"Next: {message}.")
 
 
 def _print_event(event: Event) -> None:

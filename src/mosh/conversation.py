@@ -882,6 +882,7 @@ def _extract_requested_tools(text: str) -> list[str]:
         "dirb": ("dirb", "directory brute", "bruteforce", "brute force"),
         "katana": ("katana",),
         "js-endpoint-extractor": ("js endpoint", "javascript endpoint", "js-endpoint-extractor"),
+        "source-map-discovery": ("source map", "source-map", "source-map-discovery"),
         "extractify": ("extractify",),
     }
     requested: list[str] = []

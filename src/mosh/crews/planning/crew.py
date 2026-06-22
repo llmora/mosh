@@ -10,6 +10,7 @@ from typing import Any, Callable, Protocol
 from mosh.config import AppConfig
 from mosh.conversation import active_directives, active_directives_fingerprint, directives_fingerprint
 from mosh.crews.definitions import AgentDefinition
+from mosh.crews.harness_improvements import build_harness_improvement_tool
 from mosh.crews.discovery_live.crew import (
     CREW_CONFIG_PACKAGE,
     CrewAIUnavailable,
@@ -1054,6 +1055,7 @@ def _build_planning_engagement_template(target_url: str, source: str | None, pla
 
 def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     plan_tool = _build_submit_plan_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="planning", agent="planner")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/planner_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/planner_tasks.yaml"))
 
@@ -1067,7 +1069,7 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
             return crewai.Agent(
                 config=self.agents_config["planner"],
                 llm=_llm(crewai, config, config.models.planning.planner),
-                tools=[plan_tool],
+                tools=[plan_tool, improvement_tool],
                 allow_delegation=False,
             )
 
@@ -1097,6 +1099,7 @@ def _build_planning_planner_crew(crewai: Any, config: AppConfig, state: Security
 
 def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     critique_tool = _build_submit_critique_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="planning", agent="reviewer")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/critic_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/critic_tasks.yaml"))
 
@@ -1110,7 +1113,7 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
             return crewai.Agent(
                 config=self.agents_config["reviewer"],
                 llm=_llm(crewai, config, config.models.planning.reviewer),
-                tools=[critique_tool],
+                tools=[critique_tool, improvement_tool],
                 allow_delegation=False,
             )
 
@@ -1140,6 +1143,7 @@ def _build_planning_critic_crew(crewai: Any, config: AppConfig, state: SecurityT
 
 def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: SecurityTestPlanningState):
     write_tool = _build_write_security_test_plan_tool(crewai, state)
+    improvement_tool = build_harness_improvement_tool(crewai, state.memory, stage="planning", agent="reporter")
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/reporter_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/reporter_tasks.yaml"))
 
@@ -1153,7 +1157,7 @@ def _build_planning_reporter_crew(crewai: Any, config: AppConfig, state: Securit
             return crewai.Agent(
                 config=self.agents_config["reporter"],
                 llm=_llm(crewai, config, config.models.planning.reporter),
-                tools=[write_tool],
+                tools=[write_tool, improvement_tool],
                 allow_delegation=False,
             )
 
@@ -1188,6 +1192,12 @@ def _build_engagement_template_refinement_crew(
     deterministic_template: dict[str, Any],
 ):
     write_tool = _build_write_refined_engagement_template_tool(crewai, state, deterministic_template)
+    improvement_tool = build_harness_improvement_tool(
+        crewai,
+        state.memory,
+        stage="planning",
+        agent="engagement_refiner",
+    )
     agents_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/engagement_refiner_agents.yaml"))
     tasks_path = str(resources.files(CREW_CONFIG_PACKAGE).joinpath("planning/engagement_refiner_tasks.yaml"))
 
@@ -1201,7 +1211,7 @@ def _build_engagement_template_refinement_crew(
             return crewai.Agent(
                 config=self.agents_config["engagement_refiner"],
                 llm=_llm(crewai, config, config.models.planning.engagement_refiner),
-                tools=[write_tool],
+                tools=[write_tool, improvement_tool],
                 allow_delegation=False,
             )
 

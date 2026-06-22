@@ -30,6 +30,13 @@ execute_security_test_task:
     authorization, scope, effective target mappings, evidence, tool-use, or
     structured output requirements.
 
+    If you identify a reusable limitation or improvement to the mosh harness
+    itself, such as a missing bounded test tool, weak prompt guidance,
+    unsupported source/runtime workflow, or repeated manual execution work,
+    optionally call record_harness_improvement. Do not use that tool for target
+    vulnerabilities, normal preflight blockers, missing customer credentials,
+    authorization, safe test data, or target mappings.
+
     Source discovery context JSON:
     {source_context}
 

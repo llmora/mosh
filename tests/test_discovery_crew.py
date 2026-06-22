@@ -174,6 +174,7 @@ class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
             self.assertIn("external_osint_discovery", tool_names)
             self.assertIn("extractify_js_endpoint_discovery", tool_names)
             self.assertIn("js_static_endpoint_discovery", tool_names)
+            self.assertIn("source_map_discovery", tool_names)
 
     def test_crewai_yaml_config_files_are_packaged(self) -> None:
         agents_yaml = resources.files(CREW_CONFIG_PACKAGE).joinpath("discovery_live/agents.yaml")
