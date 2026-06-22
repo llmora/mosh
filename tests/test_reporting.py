@@ -224,6 +224,43 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(len(summary["source_maps"]["assets"]), 1)
             self.assertEqual(normalized["limitations"], [])
 
+    def test_javascript_discovery_preserves_source_map_limitation_when_maps_not_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            memory = FileMemory(Path(directory))
+            memory.record_event(
+                "crawler",
+                "tool_call",
+                "Invoking js_static_endpoint_discovery",
+                {"tool": "js_static_endpoint_discovery", "javascript_urls": 1},
+            )
+            memory.record_event(
+                "crawler",
+                "tool_result",
+                "js_static_endpoint_discovery completed",
+                {"failed": 0, "pages": 2},
+            )
+            summary = build_javascript_discovery_summary(memory)
+
+            normalized = apply_javascript_discovery_report_facts(
+                {
+                    "limitations": [
+                        {
+                            "title": "JS Bundle Not Deeply Parsed",
+                            "detail": "Routes inferred from string references only.",
+                        },
+                        {
+                            "title": "Source Maps Not Checked",
+                            "detail": "Source maps were not checked for discovered JavaScript bundles.",
+                        },
+                    ]
+                },
+                summary,
+            )
+
+            rendered_titles = [item["title"] for item in normalized["limitations"]]
+            self.assertNotIn("JS Bundle Not Deeply Parsed", rendered_titles)
+            self.assertIn("Source Maps Not Checked", rendered_titles)
+
     def test_routes_section_backfills_crawl_routes_missing_from_agent_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             crawl = CrawlResult(

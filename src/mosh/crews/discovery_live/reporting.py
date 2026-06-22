@@ -633,8 +633,11 @@ def _javascript_limitation_replaced_by_facts(limitation: Any, javascript_summary
     source_maps = javascript_summary.get("source_maps") if isinstance(javascript_summary.get("source_maps"), dict) else {}
     if "javascript" in text and "execut" in text:
         return bool(katana.get("completed")) and _safe_int(katana.get("failed")) == 0
-    if "bundle" in text or "string references only" in text or "source map" in text:
-        return bool(static.get("completed") or source_maps.get("checked"))
+    if "source map" in text:
+        source_map_failures = source_maps.get("failed") if isinstance(source_maps.get("failed"), list) else []
+        return bool(source_maps.get("checked") or source_map_failures)
+    if "bundle" in text or "string references only" in text:
+        return bool(static.get("completed"))
     return False
 
 
