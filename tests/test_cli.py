@@ -112,6 +112,19 @@ def _write_discovery_source(discovery_dir: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_without_arguments_prints_help_and_exits_nonzero(self) -> None:
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            exit_code = main([])
+
+        output = stderr.getvalue()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("usage: mosh", output)
+        self.assertNotIn("the following arguments are required: command", output)
+        self.assertIn("Create a security test plan from discovery output", output)
+        self.assertIn("Review internal mosh harness improvements", output)
+
     def test_cli_reports_invalid_mosh_yaml_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "mosh.yaml").write_text(

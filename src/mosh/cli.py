@@ -150,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
     improvements_list_parser.add_argument("engagement_id", nargs="?", help="Engagement ID")
     improvements_list_parser.add_argument("--output-root", default="report", help=argparse.SUPPRESS)
 
+    if not argv:
+        parser.print_help(sys.stderr)
+        return 2
+
     args = parser.parse_args(argv)
 
     if args.command == "engagement":
