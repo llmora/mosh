@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 from typing import Any
 
+from mosh.memory import FileMemory
 from mosh.models import CrawlResult
 
 
@@ -30,6 +33,25 @@ REPORT_SECTION_ORDER = (
 
 SECURITY_TESTING_FEEDBACK_HEADING = "Security Testing Feedback"
 
+JAVASCRIPT_DISCOVERY_TOOLS = (
+    "katana_docker_crawler",
+    "extractify_js_endpoint_discovery",
+    "js_static_endpoint_discovery",
+    "source_map_discovery",
+)
+
+JAVASCRIPT_LIMITATION_REPLACEMENT_MARKERS = (
+    "javascript not executed",
+    "did not execute javascript",
+    "no javascript execution",
+    "js bundle not deeply parsed",
+    "javascript bundle not deeply parsed",
+    "full bundle decompilation",
+    "bundle decompilation",
+    "string references only",
+    "source maps not checked",
+)
+
 
 def write_reports(
     report_dir: Path,
@@ -45,6 +67,69 @@ def write_reports(
     if stale_json_report.exists():
         stale_json_report.unlink()
     return markdown_report
+
+
+def build_javascript_discovery_summary(memory: FileMemory) -> dict[str, Any]:
+    events = _read_json_list(memory.events_path)
+    memory_items = _read_json_list(memory.memory_path)
+    tools: dict[str, dict[str, Any]] = {
+        tool: {"called": False, "completed": False, "failed": 0, "pages": 0} for tool in JAVASCRIPT_DISCOVERY_TOOLS
+    }
+    javascript_assets = 0
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        action = event.get("action")
+        message = _text(event.get("message"))
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        tool = data.get("tool") if isinstance(data.get("tool"), str) else _tool_from_message(message)
+        if tool not in tools:
+            continue
+        if action == "tool_call":
+            tools[tool]["called"] = True
+            tools[tool]["javascript_assets"] = max(
+                int(tools[tool].get("javascript_assets") or 0),
+                _safe_int(data.get("javascript_urls")),
+            )
+            javascript_assets = max(javascript_assets, _safe_int(data.get("javascript_urls")))
+        elif action == "tool_result":
+            tools[tool]["completed"] = True
+            tools[tool]["failed"] = _safe_int(data.get("failed"))
+            tools[tool]["pages"] = _safe_int(data.get("pages"))
+            if tool == "source_map_discovery":
+                tools[tool]["source_maps_found"] = _safe_int(data.get("source_maps_found"))
+
+    source_map_summary = _latest_memory_item_content(memory_items, "source_map_discovery")
+    if source_map_summary:
+        javascript_assets = max(javascript_assets, _safe_int(source_map_summary.get("javascript_assets")))
+
+    return {
+        "javascript_assets": javascript_assets,
+        "tools": tools,
+        "source_maps": source_map_summary,
+    }
+
+
+def apply_javascript_discovery_report_facts(
+    report_content: dict[str, Any],
+    javascript_summary: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = copy.deepcopy(report_content)
+    if _safe_int(javascript_summary.get("javascript_assets")) <= 0:
+        return normalized
+
+    limitations = _list(normalized.get("limitations"))
+    filtered = [
+        limitation
+        for limitation in limitations
+        if not _javascript_limitation_replaced_by_facts(limitation, javascript_summary)
+    ]
+    deterministic_limitation = _javascript_coverage_limitation(javascript_summary)
+    if deterministic_limitation and not _has_item_title(filtered, deterministic_limitation["title"]):
+        filtered.append(deterministic_limitation)
+    normalized["limitations"] = filtered
+    return normalized
 
 
 def render_markdown_report(
@@ -315,6 +400,132 @@ def _add_appendix(lines: list[str], value: Any, crawl: CrawlResult) -> None:
         for failure in crawl.failed:
             lines.append(f"| {_cell(failure.get('url'))} | {_cell(failure.get('error'))} |")
     lines.append("")
+
+
+def _read_json_list(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _tool_from_message(message: str) -> str | None:
+    for tool in JAVASCRIPT_DISCOVERY_TOOLS:
+        if message.startswith(tool):
+            return tool
+        if f" {tool}" in message:
+            return tool
+    return None
+
+
+def _latest_memory_item_content(memory_items: list[dict[str, Any]], kind: str) -> dict[str, Any]:
+    for item in reversed(memory_items):
+        if item.get("kind") != kind:
+            continue
+        content = item.get("content")
+        if isinstance(content, dict):
+            return content
+    return {}
+
+
+def _javascript_limitation_replaced_by_facts(limitation: Any, javascript_summary: dict[str, Any]) -> bool:
+    text = _limitation_text(limitation).lower()
+    if not any(marker in text for marker in JAVASCRIPT_LIMITATION_REPLACEMENT_MARKERS):
+        return False
+    tools = javascript_summary.get("tools") if isinstance(javascript_summary.get("tools"), dict) else {}
+    katana = tools.get("katana_docker_crawler") if isinstance(tools.get("katana_docker_crawler"), dict) else {}
+    static = tools.get("js_static_endpoint_discovery") if isinstance(tools.get("js_static_endpoint_discovery"), dict) else {}
+    source_maps = javascript_summary.get("source_maps") if isinstance(javascript_summary.get("source_maps"), dict) else {}
+    if "javascript" in text and "execut" in text:
+        return bool(katana.get("completed")) and _safe_int(katana.get("failed")) == 0
+    if "bundle" in text or "string references only" in text or "source map" in text:
+        return bool(static.get("completed") or source_maps.get("checked"))
+    return False
+
+
+def _javascript_coverage_limitation(javascript_summary: dict[str, Any]) -> dict[str, Any] | None:
+    tools = javascript_summary.get("tools") if isinstance(javascript_summary.get("tools"), dict) else {}
+    source_maps = javascript_summary.get("source_maps") if isinstance(javascript_summary.get("source_maps"), dict) else {}
+    source_map_failures = source_maps.get("failed") if isinstance(source_maps.get("failed"), list) else []
+    source_maps_checked = bool(source_maps.get("checked"))
+    source_maps_found = _safe_int(source_maps.get("source_maps_found"))
+    completed_tools = [
+        _human_js_tool_name(tool)
+        for tool, state in tools.items()
+        if isinstance(state, dict) and bool(state.get("completed"))
+    ]
+    if source_maps_checked and source_maps_found == 0 and not source_map_failures:
+        return {
+            "title": "Source Maps Not Available",
+            "detail": (
+                f"{_sentence_list(completed_tools)} checked the discovered JavaScript assets. "
+                "No valid source maps were found, so source-level reconstruction remains limited to runtime observations "
+                "and extracted JavaScript evidence."
+            ),
+            "confidence": "confirmed",
+            "evidence": ["source_map_discovery checked JavaScript assets and found 0 source maps"],
+        }
+    if source_map_failures:
+        return {
+            "title": "Source Map Discovery Incomplete",
+            "detail": (
+                f"{_sentence_list(completed_tools)} checked the discovered JavaScript assets, but source-map discovery "
+                "reported failures for one or more assets."
+            ),
+            "confidence": "confirmed",
+            "evidence": [str(item.get("error")) for item in source_map_failures if isinstance(item, dict) and item.get("error")],
+        }
+    return None
+
+
+def _limitation_text(limitation: Any) -> str:
+    if isinstance(limitation, dict):
+        return " ".join(
+            _text(limitation.get(key))
+            for key in ("title", "name", "summary", "detail", "description", "notes")
+            if _text(limitation.get(key))
+        )
+    return _text(limitation)
+
+
+def _has_item_title(items: list[Any], title: str) -> bool:
+    wanted = title.lower()
+    for item in items:
+        if isinstance(item, dict) and _text(item.get("title")).lower() == wanted:
+            return True
+        if isinstance(item, str) and item.lower() == wanted:
+            return True
+    return False
+
+
+def _human_js_tool_name(tool: str) -> str:
+    return {
+        "katana_docker_crawler": "Katana runtime crawling",
+        "extractify_js_endpoint_discovery": "Extractify string extraction",
+        "js_static_endpoint_discovery": "static JavaScript endpoint analysis",
+        "source_map_discovery": "source-map discovery",
+    }.get(tool, tool)
+
+
+def _sentence_list(items: list[str]) -> str:
+    items = [item for item in items if item]
+    if not items:
+        return "JavaScript discovery tooling"
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _list(value: Any) -> list[Any]:

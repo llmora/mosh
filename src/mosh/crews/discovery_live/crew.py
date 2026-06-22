@@ -19,7 +19,11 @@ from mosh.engagement import engagement_steer_prompt_value
 from mosh.memory import FileMemory
 from mosh.models import Event
 from mosh.models import CrawlResult
-from mosh.crews.discovery_live.reporting import write_reports
+from mosh.crews.discovery_live.reporting import (
+    apply_javascript_discovery_report_facts,
+    build_javascript_discovery_summary,
+    write_reports,
+)
 from mosh.scope import normalize_url
 
 
@@ -497,11 +501,19 @@ def _build_report_tool(crewai: Any, state: DiscoveryLiveCrewState, reporter_agen
             if not state.crawl:
                 raise RuntimeError("Crawler findings are required before writing the report.")
             state.summary = reporter_agent.summarize(state.crawl, state.components, state.memory)
-            report_content = _coerce_report_content(report)
+            raw_report_content = _coerce_report_content(report)
+            javascript_summary = build_javascript_discovery_summary(state.memory)
+            report_content = apply_javascript_discovery_report_facts(raw_report_content, javascript_summary)
+            state.memory.add_item(
+                "javascript_discovery_summary",
+                javascript_summary,
+                "reporter",
+            )
             state.memory.add_item(
                 "llm_report",
                 {
                     "structured": report_content,
+                    "raw_structured": raw_report_content,
                 },
                 "reporter",
             )

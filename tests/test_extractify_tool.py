@@ -48,6 +48,22 @@ class ExtractifyDockerToolTests(unittest.TestCase):
             ["https://api.example.test/users", "https://example.test/api/login"],
         )
 
+    def test_reuses_cached_result_for_same_javascript_assets(self) -> None:
+        runner = FakeDockerRunner(
+            DockerToolResult(
+                exit_code=0,
+                stdout='[{"source":"https://example.test/app.js","endpoints":["/api/login"]}]',
+                stderr="",
+            )
+        )
+        tool = ExtractifyDockerTool("discovery-tools:test", runner=runner)
+
+        first = tool.run("https://example.test", ["https://example.test/app.js"])
+        second = tool.run("https://example.test", ["https://example.test/app.js#ignored"])
+
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual([page.url for page in first.pages], [page.url for page in second.pages])
+
     def test_parses_extractify_json_with_scope_filtering(self) -> None:
         output = (
             '[{"source":"https://example.test/static/app.js",'

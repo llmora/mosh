@@ -4,8 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mosh.memory import FileMemory
 from mosh.models import CrawledPage, CrawlResult
-from mosh.crews.discovery_live.reporting import update_report_with_testing_feedback, write_reports
+from mosh.crews.discovery_live.reporting import (
+    apply_javascript_discovery_report_facts,
+    build_javascript_discovery_summary,
+    update_report_with_testing_feedback,
+    write_reports,
+)
 
 
 class ReportingTests(unittest.TestCase):
@@ -69,6 +75,73 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("| Pages Crawled | 1 |", markdown)
             self.assertIn("## Confirmed Findings", markdown)
             self.assertIn("Example finding", markdown)
+
+    def test_javascript_discovery_facts_replace_contradicted_limitations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            memory = FileMemory(Path(directory))
+            memory.record_event(
+                "crawler",
+                "tool_call",
+                "Invoking katana_docker_crawler",
+                {"tool": "katana_docker_crawler"},
+            )
+            memory.record_event(
+                "crawler",
+                "tool_result",
+                "katana_docker_crawler completed",
+                {"failed": 0, "pages": 3},
+            )
+            memory.record_event(
+                "crawler",
+                "tool_call",
+                "Invoking js_static_endpoint_discovery",
+                {"tool": "js_static_endpoint_discovery", "javascript_urls": 1},
+            )
+            memory.record_event(
+                "crawler",
+                "tool_result",
+                "js_static_endpoint_discovery completed",
+                {"failed": 0, "pages": 2},
+            )
+            memory.record_event(
+                "crawler",
+                "tool_result",
+                "source_map_discovery completed",
+                {"checked": True, "javascript_assets": 1, "source_maps_found": 0, "failed": 0},
+            )
+            memory.add_item(
+                "source_map_discovery",
+                {
+                    "checked": True,
+                    "javascript_assets": 1,
+                    "source_maps_found": 0,
+                    "sources_with_content": 0,
+                    "assets": [],
+                    "failed": [],
+                },
+                "crawler",
+            )
+            summary = build_javascript_discovery_summary(memory)
+            report_content = {
+                "limitations": [
+                    {
+                        "title": "JavaScript Not Executed",
+                        "detail": "The crawler did not execute JavaScript.",
+                    },
+                    {
+                        "title": "JS Bundle Not Deeply Parsed",
+                        "detail": "Routes inferred from string references only.",
+                    },
+                ]
+            }
+
+            normalized = apply_javascript_discovery_report_facts(report_content, summary)
+
+            rendered_titles = [item["title"] for item in normalized["limitations"]]
+            self.assertNotIn("JavaScript Not Executed", rendered_titles)
+            self.assertNotIn("JS Bundle Not Deeply Parsed", rendered_titles)
+            self.assertIn("Source Maps Not Available", rendered_titles)
+            self.assertIn("source-level reconstruction", normalized["limitations"][0]["detail"])
 
     def test_testing_feedback_section_is_replaced_in_discovery_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

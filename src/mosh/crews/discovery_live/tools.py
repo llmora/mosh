@@ -154,6 +154,7 @@ class ExtractifyDockerTool:
     ) -> None:
         self.runner = runner or DockerToolRunner(image)
         self.docker_timeout = docker_timeout
+        self._result_cache: dict[tuple[str, ...], Any] = {}
 
     def run(self, start_url: str, js_urls: list[str]) -> CrawlResult:
         normalized_start_url = normalize_url(start_url)
@@ -161,17 +162,21 @@ class ExtractifyDockerTool:
         if not unique_js_urls:
             return CrawlResult(normalized_start_url, [], [], [], None)
 
-        result = self.runner.run(
-            [
-                "extractify",
-                "-ee",
-                "-eu",
-                "-json",
-                "-dedup",
-            ],
-            input_text="\n".join(unique_js_urls) + "\n",
-            timeout=self.docker_timeout,
-        )
+        cache_key = tuple(unique_js_urls)
+        result = self._result_cache.get(cache_key)
+        if result is None:
+            result = self.runner.run(
+                [
+                    "extractify",
+                    "-ee",
+                    "-eu",
+                    "-json",
+                    "-dedup",
+                ],
+                input_text="\n".join(unique_js_urls) + "\n",
+                timeout=self.docker_timeout,
+            )
+            self._result_cache[cache_key] = result
         crawl = parse_extractify_output(normalized_start_url, result.stdout)
         if result.exit_code != 0:
             return CrawlResult(
@@ -198,6 +203,7 @@ class JsStaticEndpointDockerTool:
     ) -> None:
         self.runner = runner or DockerToolRunner(image)
         self.docker_timeout = docker_timeout
+        self._result_cache: dict[tuple[str, str], Any] = {}
 
     def run(
         self,
@@ -211,16 +217,20 @@ class JsStaticEndpointDockerTool:
             return CrawlResult(normalized_start_url, [], [], [], None)
 
         input_text = _js_static_input(unique_js_urls, contexts)
-        result = self.runner.run(
-            [
-                "js-endpoint-extractor",
-                "--base-url",
-                normalized_start_url,
-                "--json",
-            ],
-            input_text=input_text,
-            timeout=self.docker_timeout,
-        )
+        cache_key = (normalized_start_url, input_text)
+        result = self._result_cache.get(cache_key)
+        if result is None:
+            result = self.runner.run(
+                [
+                    "js-endpoint-extractor",
+                    "--base-url",
+                    normalized_start_url,
+                    "--json",
+                ],
+                input_text=input_text,
+                timeout=self.docker_timeout,
+            )
+            self._result_cache[cache_key] = result
         crawl = parse_js_static_output(normalized_start_url, result.stdout)
         if result.exit_code != 0:
             return CrawlResult(
@@ -231,6 +241,48 @@ class JsStaticEndpointDockerTool:
                 robots=None,
             )
         return crawl
+
+
+class SourceMapDiscoveryDockerTool:
+    definition = ToolDefinition(
+        name="source_map_discovery",
+        description="Run source-map discovery inside the discovery tools container for JavaScript assets.",
+    )
+
+    def __init__(
+        self,
+        image: str,
+        runner: DockerToolRunner | None = None,
+        docker_timeout: int = 300,
+    ) -> None:
+        self.runner = runner or DockerToolRunner(image)
+        self.docker_timeout = docker_timeout
+        self._result_cache: dict[tuple[str, ...], Any] = {}
+
+    def run(self, start_url: str, js_urls: list[str]) -> dict[str, Any]:
+        normalized_start_url = normalize_url(start_url)
+        unique_js_urls = sorted({strip_fragment(url) for url in js_urls if url.startswith(("http://", "https://"))})
+        if not unique_js_urls:
+            return empty_source_map_summary(normalized_start_url)
+
+        cache_key = tuple(unique_js_urls)
+        result = self._result_cache.get(cache_key)
+        if result is None:
+            result = self.runner.run(
+                [
+                    "source-map-discovery",
+                    "--base-url",
+                    normalized_start_url,
+                    "--json",
+                ],
+                input_text="\n".join(unique_js_urls) + "\n",
+                timeout=self.docker_timeout,
+            )
+            self._result_cache[cache_key] = result
+        summary = parse_source_map_output(normalized_start_url, result.stdout)
+        if result.exit_code != 0:
+            summary["failed"].append({"url": normalized_start_url, "error": _source_map_error(result.stderr, result.stdout)})
+        return summary
 
 
 class ExternalOsintDiscoveryTool:
@@ -424,6 +476,70 @@ def parse_js_static_output(start_url: str, output: str) -> CrawlResult:
     return _parse_endpoint_findings_output(start_url, output, "js static endpoint extractor")
 
 
+def empty_source_map_summary(start_url: str) -> dict[str, Any]:
+    return {
+        "start_url": normalize_url(start_url),
+        "checked": False,
+        "javascript_assets": 0,
+        "source_maps_found": 0,
+        "sources_with_content": 0,
+        "assets": [],
+        "failed": [],
+    }
+
+
+def parse_source_map_output(start_url: str, output: str) -> dict[str, Any]:
+    summary = empty_source_map_summary(start_url)
+    try:
+        findings = json.loads(output or "[]")
+    except json.JSONDecodeError as exc:
+        summary["failed"].append({"url": summary["start_url"], "error": f"source-map discovery returned invalid JSON: {exc}"})
+        return summary
+    if not isinstance(findings, list):
+        summary["failed"].append({"url": summary["start_url"], "error": "source-map discovery returned non-list JSON"})
+        return summary
+
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        source = finding.get("source") if isinstance(finding.get("source"), str) else summary["start_url"]
+        checked = finding.get("checked") if isinstance(finding.get("checked"), list) else []
+        source_maps = finding.get("source_maps") if isinstance(finding.get("source_maps"), list) else []
+        asset = {
+            "source": source,
+            "checked": len(checked),
+            "source_maps_found": 0,
+            "source_maps": [],
+        }
+        error = finding.get("error")
+        if isinstance(error, str) and error:
+            summary["failed"].append({"url": source, "error": error})
+        for source_map in source_maps:
+            if not isinstance(source_map, dict):
+                continue
+            source_map_url = source_map.get("url") if isinstance(source_map.get("url"), str) else ""
+            if not source_map_url:
+                continue
+            sources_count = _int_or_default(source_map.get("sources_count"), len(_string_values(source_map.get("sources"))))
+            sources_with_content = _int_or_default(source_map.get("sources_with_content"), 0)
+            asset["source_maps"].append(
+                {
+                    "url": source_map_url,
+                    "source_root": source_map.get("source_root") if isinstance(source_map.get("source_root"), str) else "",
+                    "sources_count": sources_count,
+                    "sources_with_content": sources_with_content,
+                }
+            )
+            asset["source_maps_found"] += 1
+            summary["source_maps_found"] += 1
+            summary["sources_with_content"] += sources_with_content
+        summary["assets"].append(asset)
+
+    summary["javascript_assets"] = len(summary["assets"])
+    summary["checked"] = summary["javascript_assets"] > 0
+    return summary
+
+
 def _parse_endpoint_findings_output(start_url: str, output: str, tool_name: str) -> CrawlResult:
     normalized_start_url = normalize_url(start_url)
     scope = ScopePolicy.from_url(normalized_start_url)
@@ -499,14 +615,39 @@ def _normalize_extracted_url(candidate: str, source: str, start_url: str) -> str
     candidate = candidate.strip()
     if not candidate:
         return None
+    if not _looks_like_endpoint_candidate(candidate):
+        return None
     if candidate.startswith(("javascript:", "mailto:", "tel:", "data:")):
         return None
     if candidate.startswith("//"):
-        return strip_fragment(f"{urlparse(start_url).scheme}:{candidate}")
+        return _valid_extracted_url(strip_fragment(f"{urlparse(start_url).scheme}:{candidate}"))
     if candidate.startswith(("http://", "https://")):
-        return strip_fragment(candidate)
+        return _valid_extracted_url(strip_fragment(candidate))
     base = source if source.startswith(("http://", "https://")) else start_url
-    return strip_fragment(urljoin(base, candidate))
+    return _valid_extracted_url(strip_fragment(urljoin(base, candidate)))
+
+
+def _looks_like_endpoint_candidate(candidate: str) -> bool:
+    lowered = candidate.lower()
+    if len(candidate) < 3:
+        return False
+    if any(character.isspace() for character in candidate):
+        return False
+    if any(marker in lowered for marker in ("[object ", "\\u", "\\x", "{{", "}}", "${", "<", ">", "class=", "function(")):
+        return False
+    return True
+
+
+def _valid_extracted_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    raw = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+    if any(character.isspace() for character in raw):
+        return None
+    if any(character in raw for character in ("[", "]", "{", "}", "\\", '"', "'")):
+        return None
+    return url
 
 
 def _parse_dirb_stream(output: str) -> list[dict[str, Any]]:
@@ -666,6 +807,12 @@ def _int_or_default(value: Any, default: int) -> int:
         return default
 
 
+def _string_values(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def _katana_error(stderr: str, stdout: str) -> str:
     error = stderr.strip() or stdout.strip() or "katana failed"
     return error[:2000]
@@ -683,6 +830,11 @@ def _extractify_error(stderr: str, stdout: str) -> str:
 
 def _js_static_error(stderr: str, stdout: str) -> str:
     error = stderr.strip() or stdout.strip() or "js static endpoint extractor failed"
+    return error[:2000]
+
+
+def _source_map_error(stderr: str, stdout: str) -> str:
+    error = stderr.strip() or stdout.strip() or "source-map discovery failed"
     return error[:2000]
 
 

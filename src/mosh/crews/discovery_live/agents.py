@@ -15,6 +15,7 @@ from mosh.crews.discovery_live.tools import (
     ExtractifyDockerTool,
     JsStaticEndpointDockerTool,
     KatanaDockerCrawlerTool,
+    SourceMapDiscoveryDockerTool,
     ToolDefinition,
 )
 from mosh.crews.discovery_live.osint import build_default_osint_providers
@@ -63,6 +64,7 @@ def discovery_live_agent_definitions(config: AppConfig) -> list[AgentDefinition]
                 ExternalOsintDiscoveryTool.definition,
                 ExtractifyDockerTool.definition,
                 JsStaticEndpointDockerTool.definition,
+                SourceMapDiscoveryDockerTool.definition,
             ],
         ),
         AgentDefinition(
@@ -99,6 +101,7 @@ class CrawlerAgent:
             | ExternalOsintDiscoveryTool
             | ExtractifyDockerTool
             | JsStaticEndpointDockerTool
+            | SourceMapDiscoveryDockerTool
         ]
         | None = None,
         candidate_follow_up_limit: int = 5,
@@ -146,6 +149,7 @@ class CrawlerAgent:
         js_static_crawl = self._run_js_static_tool(crawl, memory)
         if js_static_crawl:
             crawl = self._merge_crawls(crawl, js_static_crawl)
+        self._run_source_map_tool(crawl, memory)
         openapi_crawl = self._run_openapi_spec_parsing(crawl, memory)
         if openapi_crawl:
             crawl = self._merge_crawls(crawl, openapi_crawl)
@@ -220,6 +224,43 @@ class CrawlerAgent:
             crawl,
             memory,
         )
+
+    def _run_source_map_tool(self, crawl: CrawlResult, memory: FileMemory) -> dict[str, object] | None:
+        js_urls = _javascript_urls(crawl)
+        if not js_urls:
+            return None
+        tool = next((candidate for candidate in self.additional_tools if candidate.definition.name == "source_map_discovery"), None)
+        if not tool:
+            memory.record_event(
+                self.name,
+                "tool_unavailable",
+                "source_map_discovery is not available to the crawler agent",
+                {"tool": "source_map_discovery"},
+            )
+            return None
+        memory.record_event(
+            self.name,
+            "tool_call",
+            "Invoking source_map_discovery",
+            {
+                "tool": "source_map_discovery",
+                "javascript_urls": len(js_urls),
+                "sample": js_urls[:5],
+            },
+        )
+        summary = tool.run(crawl.start_url, js_urls)
+        memory.record_event(
+            self.name,
+            "tool_result",
+            "source_map_discovery completed",
+            _source_map_event_result_data(summary),
+        )
+        memory.add_item(
+            "source_map_discovery",
+            summary,
+            self.name,
+        )
+        return summary
 
     def _run_openapi_spec_parsing(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
         """Detect and parse OpenAPI/Swagger specs from crawled JSON endpoints."""
@@ -523,6 +564,29 @@ def _crawl_event_result_data(crawl: CrawlResult, sample_limit: int = 20) -> dict
     return result_data
 
 
+def _source_map_event_result_data(summary: dict[str, object], sample_limit: int = 20) -> dict[str, object]:
+    assets = summary.get("assets") if isinstance(summary.get("assets"), list) else []
+    failed = summary.get("failed") if isinstance(summary.get("failed"), list) else []
+    source_map_urls: list[str] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        source_maps = asset.get("source_maps") if isinstance(asset.get("source_maps"), list) else []
+        for source_map in source_maps:
+            if isinstance(source_map, dict) and isinstance(source_map.get("url"), str):
+                source_map_urls.append(source_map["url"])
+    result_data: dict[str, object] = {
+        "checked": bool(summary.get("checked")),
+        "javascript_assets": summary.get("javascript_assets", 0),
+        "source_maps_found": summary.get("source_maps_found", 0),
+        "source_map_urls": source_map_urls[:sample_limit],
+        "failed": len(failed),
+    }
+    if failed:
+        result_data["failures"] = failed
+    return result_data
+
+
 def _candidate_skip_reason(
     candidate: DiscoveryCandidate,
     normalized_candidate_url: str,
@@ -598,6 +662,7 @@ def build_discovery_live_agents(config: AppConfig | None = None) -> DiscoveryLiv
                 ),
                 ExtractifyDockerTool(config.tool_image),
                 JsStaticEndpointDockerTool(config.tool_image),
+                SourceMapDiscoveryDockerTool(config.tool_image),
             ],
             candidate_follow_up_limit=config.candidate_follow_up_limit,
         ),

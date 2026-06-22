@@ -674,6 +674,8 @@ When the crawler discovers JavaScript assets, it may invoke Extractify to extrac
 
 When JavaScript assets are discovered, the crawler should also have access to a static JavaScript endpoint discovery tool. This tool should complement Katana and Extractify: Katana observes runtime browser and XHR/fetch behavior, Extractify finds broad URL-like strings, and the static analyzer resolves common JavaScript construction patterns that produce API paths from constants, aliases, base URL globals, concatenation, and template literals. Static findings must be scope-filtered, linked back to the JavaScript source as evidence, and merged into the aggregate crawl state.
 
+When JavaScript assets are discovered, the crawler should check for valid source maps using Docker-backed tooling. Source-map discovery should record whether source maps were checked, whether any were found, how many original sources include embedded content, and any failures. Discovery reports should use these recorded facts when wording JavaScript limitations, so the report does not claim JavaScript was unexecuted or only string-scanned when Katana, Extractify, static analysis, or source-map checks actually ran.
+
 ## Testing Expectations
 
 Implement tests for all functionality so behavior does not regress.
