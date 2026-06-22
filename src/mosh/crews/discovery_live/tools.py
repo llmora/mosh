@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from mosh.crews.discovery_live.crawler import Crawler
 from mosh.crews.discovery_live.osint import ExternalOsintProvider, build_default_osint_providers, normalize_osint_host
@@ -398,6 +398,9 @@ def parse_katana_output(start_url: str, output: str) -> CrawlResult:
         discovered_url = strip_fragment(discovered_url)
         if not discovered_url.startswith(("http://", "https://")):
             continue
+        discovered_url = _valid_discovered_url(discovered_url)
+        if not discovered_url:
+            continue
         if not scope.in_scope(discovered_url):
             out_of_scope.add(discovered_url)
             continue
@@ -639,13 +642,26 @@ def _looks_like_endpoint_candidate(candidate: str) -> bool:
 
 
 def _valid_extracted_url(url: str) -> str | None:
+    return _valid_discovered_url(url)
+
+
+def _valid_discovered_url(url: str) -> str | None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
     raw = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
     if any(character.isspace() for character in raw):
         return None
-    if any(character in raw for character in ("[", "]", "{", "}", "\\", '"', "'")):
+    decoded = unquote(raw)
+    lowered_raw = raw.lower()
+    lowered_decoded = decoded.lower()
+    if any(character in decoded for character in ("[", "]", "{", "}", "\\", '"', "'")):
+        return None
+    if any(marker in lowered_decoded for marker in ("[object ", "\\u", "\\x", "{{", "}}", "${", "<", ">", "class=", "function(", "this.")):
+        return None
+    if any(marker in lowered_raw for marker in ("%7b", "%7d", "%5b", "%5d")):
+        return None
+    if re.search(r"/\$\d+(?:$|[/?#])", decoded):
         return None
     return url
 

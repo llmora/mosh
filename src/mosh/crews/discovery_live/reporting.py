@@ -4,6 +4,7 @@ import copy
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from mosh.memory import FileMemory
 from mosh.models import CrawlResult
@@ -50,6 +51,30 @@ JAVASCRIPT_LIMITATION_REPLACEMENT_MARKERS = (
     "bundle decompilation",
     "string references only",
     "source maps not checked",
+    "no source maps available",
+    "without accompanying source map",
+    "without source map",
+)
+
+STATIC_ROUTE_SUFFIXES = (
+    ".js",
+    ".mjs",
+    ".css",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".webp",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".map",
+    ".pdf",
+    ".zip",
+    ".gz",
 )
 
 
@@ -100,9 +125,10 @@ def build_javascript_discovery_summary(memory: FileMemory) -> dict[str, Any]:
             if tool == "source_map_discovery":
                 tools[tool]["source_maps_found"] = _safe_int(data.get("source_maps_found"))
 
-    source_map_summary = _latest_memory_item_content(memory_items, "source_map_discovery")
+    source_map_summary = _aggregate_source_map_discovery(memory_items)
     if source_map_summary:
         javascript_assets = max(javascript_assets, _safe_int(source_map_summary.get("javascript_assets")))
+        tools["source_map_discovery"]["source_maps_found"] = _safe_int(source_map_summary.get("source_maps_found"))
 
     return {
         "javascript_assets": javascript_assets,
@@ -246,15 +272,7 @@ def _add_summary_statistics(lines: list[str], summary: dict[str, Any]) -> None:
 
 
 def _add_routes_section(lines: list[str], value: Any, crawl: CrawlResult) -> None:
-    routes = _list(value) or [
-        {
-            "url": page.url,
-            "status": page.status,
-            "content_type": page.content_type,
-            "notes": page.title or "",
-        }
-        for page in crawl.pages
-    ]
+    routes = _routes_with_crawl_evidence(value, crawl)
     lines.extend(["## Discovered Routes", "", "| URL | Status | Content Type | Notes | Evidence |", "|---|---:|---|---|---|"])
     if not routes:
         lines.append("| No routes reported. |  |  |  |  |")
@@ -275,6 +293,33 @@ def _add_routes_section(lines: list[str], value: Any, crawl: CrawlResult) -> Non
             + " |"
         )
     lines.append("")
+
+
+def _routes_with_crawl_evidence(value: Any, crawl: CrawlResult) -> list[Any]:
+    routes = _list(value)
+    seen = {_route_key(route) for route in routes if isinstance(route, dict)}
+    seen_paths = {_route_path_key(route) for route in routes if isinstance(route, dict)}
+    seen.discard("")
+    seen_paths.discard("")
+    for page in crawl.pages:
+        if not _include_crawl_route(page):
+            continue
+        key = _canonical_url_key(page.url)
+        path_key = _path_key(page.url)
+        if key in seen or path_key in seen_paths:
+            continue
+        routes.append(
+            {
+                "url": page.url,
+                "status": page.status,
+                "content_type": page.content_type,
+                "notes": page.title or _crawl_route_note(page),
+                "evidence": page.references[:5],
+            }
+        )
+        seen.add(key)
+        seen_paths.add(path_key)
+    return routes
 
 
 def _add_api_section(lines: list[str], value: Any) -> None:
@@ -414,6 +459,96 @@ def _read_json_list(path: Path) -> list[dict[str, Any]]:
     return [item for item in data if isinstance(item, dict)]
 
 
+def _aggregate_source_map_discovery(memory_items: list[dict[str, Any]]) -> dict[str, Any]:
+    assets_by_source: dict[str, dict[str, Any]] = {}
+    failed_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    start_urls: set[str] = set()
+    checked = False
+    observed_javascript_assets = 0
+    observed_source_maps_found = 0
+    observed_sources_with_content = 0
+
+    for item in memory_items:
+        if item.get("kind") != "source_map_discovery":
+            continue
+        content = item.get("content")
+        if not isinstance(content, dict):
+            continue
+        checked = checked or bool(content.get("checked"))
+        observed_javascript_assets = max(observed_javascript_assets, _safe_int(content.get("javascript_assets")))
+        observed_source_maps_found = max(observed_source_maps_found, _safe_int(content.get("source_maps_found")))
+        observed_sources_with_content = max(observed_sources_with_content, _safe_int(content.get("sources_with_content")))
+        start_url = _text(content.get("start_url"))
+        if start_url:
+            start_urls.add(start_url)
+        failures = content.get("failed") if isinstance(content.get("failed"), list) else []
+        for failure in failures:
+            if not isinstance(failure, dict):
+                continue
+            url = _text(failure.get("url"))
+            error = _text(failure.get("error"))
+            if error:
+                failed_by_key.setdefault((url, error), {"url": url, "error": error})
+        content_assets = content.get("assets") if isinstance(content.get("assets"), list) else []
+        for asset in content_assets:
+            if not isinstance(asset, dict):
+                continue
+            source = _text(asset.get("source"))
+            if not source:
+                continue
+            aggregate = assets_by_source.setdefault(
+                source,
+                {
+                    "source": source,
+                    "checked": 0,
+                    "source_maps_found": 0,
+                    "source_maps": [],
+                },
+            )
+            aggregate["checked"] = max(_safe_int(aggregate.get("checked")), _safe_int(asset.get("checked")))
+            maps_by_url = {
+                source_map.get("url"): source_map
+                for source_map in aggregate["source_maps"]
+                if isinstance(source_map, dict) and isinstance(source_map.get("url"), str)
+            }
+            asset_source_maps = asset.get("source_maps") if isinstance(asset.get("source_maps"), list) else []
+            for source_map in asset_source_maps:
+                if not isinstance(source_map, dict):
+                    continue
+                source_map_url = _text(source_map.get("url"))
+                if not source_map_url or source_map_url in maps_by_url:
+                    continue
+                normalized_map = {
+                    "url": source_map_url,
+                    "source_root": _text(source_map.get("source_root")),
+                    "sources_count": _safe_int(source_map.get("sources_count")),
+                    "sources_with_content": _safe_int(source_map.get("sources_with_content")),
+                }
+                aggregate["source_maps"].append(normalized_map)
+                maps_by_url[source_map_url] = normalized_map
+
+    assets = sorted(assets_by_source.values(), key=lambda asset: asset["source"])
+    source_maps_found = 0
+    sources_with_content = 0
+    for asset in assets:
+        source_maps = asset.get("source_maps") if isinstance(asset.get("source_maps"), list) else []
+        asset["source_maps"] = sorted(source_maps, key=lambda source_map: source_map.get("url", ""))
+        asset["source_maps_found"] = len(asset["source_maps"])
+        source_maps_found += asset["source_maps_found"]
+        sources_with_content += sum(_safe_int(source_map.get("sources_with_content")) for source_map in asset["source_maps"])
+
+    return {
+        "start_url": sorted(start_urls)[0] if start_urls else "",
+        "start_urls": sorted(start_urls),
+        "checked": checked or bool(assets),
+        "javascript_assets": max(len(assets), observed_javascript_assets),
+        "source_maps_found": max(source_maps_found, observed_source_maps_found),
+        "sources_with_content": max(sources_with_content, observed_sources_with_content),
+        "assets": assets,
+        "failed": sorted(failed_by_key.values(), key=lambda failure: (failure.get("url", ""), failure.get("error", ""))),
+    }
+
+
 def _tool_from_message(message: str) -> str | None:
     for tool in JAVASCRIPT_DISCOVERY_TOOLS:
         if message.startswith(tool):
@@ -423,14 +558,69 @@ def _tool_from_message(message: str) -> str | None:
     return None
 
 
-def _latest_memory_item_content(memory_items: list[dict[str, Any]], kind: str) -> dict[str, Any]:
-    for item in reversed(memory_items):
-        if item.get("kind") != kind:
-            continue
-        content = item.get("content")
-        if isinstance(content, dict):
-            return content
-    return {}
+def _route_key(route: dict[str, Any]) -> str:
+    return _canonical_url_key(_text(route.get("url") or route.get("route") or route.get("path")))
+
+
+def _route_path_key(route: dict[str, Any]) -> str:
+    return _path_key(_text(route.get("url") or route.get("route") or route.get("path")))
+
+
+def _canonical_url_key(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.netloc:
+        path = _normalized_path(parsed.path)
+        query = f"?{parsed.query}" if parsed.query else ""
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}{query}"
+    return _normalized_path(url)
+
+
+def _path_key(url: str) -> str:
+    parsed = urlparse(url)
+    path = parsed.path if parsed.scheme or parsed.netloc else url
+    return _normalized_path(path)
+
+
+def _normalized_path(path: str) -> str:
+    if not path:
+        return "/"
+    if path != "/":
+        path = path.rstrip("/")
+    return path or "/"
+
+
+def _include_crawl_route(page: Any) -> bool:
+    url = _text(getattr(page, "url", ""))
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    path = parsed.path or "/"
+    lowered_path = path.lower()
+    if _route_path_looks_generated(path):
+        return False
+    if lowered_path.endswith(STATIC_ROUTE_SUFFIXES):
+        return False
+    if lowered_path.startswith(("/static/", "/assets/")):
+        return False
+    if any(lowered_path.startswith(prefix) and lowered_path != prefix for prefix in ("/js/", "/css/", "/img/")):
+        return False
+    return True
+
+
+def _route_path_looks_generated(path: str) -> bool:
+    lowered = path.lower()
+    if any(marker in lowered for marker in ("%7b", "%7d", "%5b", "%5d", "{{", "}}", "[object", "this.", "\\u", "\\x")):
+        return True
+    if any(character in path for character in ("{", "}", "[", "]", "\\", '"', "'")):
+        return True
+    return False
+
+
+def _crawl_route_note(page: Any) -> str:
+    references = _string_list(getattr(page, "references", []))
+    if references:
+        return "Discovered from crawler evidence."
+    return ""
 
 
 def _javascript_limitation_replaced_by_facts(limitation: Any, javascript_summary: dict[str, Any]) -> bool:

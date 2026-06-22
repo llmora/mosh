@@ -143,6 +143,164 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("Source Maps Not Available", rendered_titles)
             self.assertIn("source-level reconstruction", normalized["limitations"][0]["detail"])
 
+    def test_javascript_discovery_summary_aggregates_source_maps_by_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            memory = FileMemory(Path(directory))
+            memory.record_event(
+                "crawler",
+                "tool_call",
+                "Invoking js_static_endpoint_discovery",
+                {"tool": "js_static_endpoint_discovery", "javascript_urls": 2},
+            )
+            memory.record_event(
+                "crawler",
+                "tool_result",
+                "js_static_endpoint_discovery completed",
+                {"failed": 0, "pages": 2},
+            )
+            memory.add_item(
+                "source_map_discovery",
+                {
+                    "checked": True,
+                    "javascript_assets": 2,
+                    "source_maps_found": 1,
+                    "sources_with_content": 3,
+                    "start_url": "https://example.test/",
+                    "assets": [
+                        {
+                            "source": "https://example.test/static/js/app.js",
+                            "checked": 1,
+                            "source_maps_found": 1,
+                            "source_maps": [
+                                {
+                                    "url": "https://example.test/static/js/app.js.map",
+                                    "source_root": "",
+                                    "sources_count": 3,
+                                    "sources_with_content": 3,
+                                }
+                            ],
+                        }
+                    ],
+                    "failed": [],
+                },
+                "crawler",
+            )
+            memory.add_item(
+                "source_map_discovery",
+                {
+                    "checked": True,
+                    "javascript_assets": 1,
+                    "source_maps_found": 0,
+                    "sources_with_content": 0,
+                    "start_url": "https://example.test/login",
+                    "assets": [
+                        {
+                            "source": "https://example.test/static/js/app.js",
+                            "checked": 1,
+                            "source_maps_found": 0,
+                            "source_maps": [],
+                        }
+                    ],
+                    "failed": [],
+                },
+                "crawler",
+            )
+
+            summary = build_javascript_discovery_summary(memory)
+            normalized = apply_javascript_discovery_report_facts(
+                {
+                    "limitations": [
+                        {
+                            "title": "No Source Maps Available",
+                            "detail": "JavaScript bundles are minified without accompanying source map files.",
+                        }
+                    ]
+                },
+                summary,
+            )
+
+            self.assertEqual(summary["source_maps"]["source_maps_found"], 1)
+            self.assertEqual(summary["source_maps"]["sources_with_content"], 3)
+            self.assertEqual(len(summary["source_maps"]["assets"]), 1)
+            self.assertEqual(normalized["limitations"], [])
+
+    def test_routes_section_backfills_crawl_routes_missing_from_agent_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            crawl = CrawlResult(
+                start_url="https://example.test",
+                pages=[
+                    CrawledPage(
+                        url="https://example.test/login",
+                        status=200,
+                        content_type="text/html",
+                        title="Login",
+                        headers={},
+                        links=[],
+                        references=[],
+                        forms=[],
+                    ),
+                    CrawledPage(
+                        url="https://example.test/register",
+                        status=0,
+                        content_type="",
+                        title=None,
+                        headers={},
+                        links=[],
+                        references=["https://example.test/static/js/app.js"],
+                        forms=[],
+                    ),
+                    CrawledPage(
+                        url="https://example.test/static/js/app.js",
+                        status=200,
+                        content_type="application/javascript",
+                        title=None,
+                        headers={},
+                        links=[],
+                        references=[],
+                        forms=[],
+                    ),
+                    CrawledPage(
+                        url="https://example.test/js/%7B%7Bimage%7D%7D",
+                        status=0,
+                        content_type="",
+                        title=None,
+                        headers={},
+                        links=[],
+                        references=[],
+                        forms=[],
+                    ),
+                ],
+                out_of_scope=[],
+                failed=[],
+                robots=None,
+            )
+
+            markdown = write_reports(
+                Path(directory),
+                "https://example.test",
+                crawl,
+                components=[],
+                summary={"pages_crawled": 4},
+                report_content={
+                    "title": "Agent Report",
+                    "discovered_routes": [
+                        {
+                            "url": "https://example.test/login",
+                            "status": 200,
+                            "content_type": "text/html",
+                            "notes": "Login route.",
+                        }
+                    ],
+                },
+            )
+
+            routes_section = markdown.split("## API Endpoints", maxsplit=1)[0]
+            route_lines = routes_section.splitlines()
+            self.assertIn("https://example.test/login", routes_section)
+            self.assertIn("https://example.test/register", routes_section)
+            self.assertFalse(any(line.startswith("| https://example.test/static/js/app.js |") for line in route_lines))
+            self.assertFalse(any(line.startswith("| https://example.test/js/%7B%7Bimage%7D%7D |") for line in route_lines))
+
     def test_testing_feedback_section_is_replaced_in_discovery_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory)
