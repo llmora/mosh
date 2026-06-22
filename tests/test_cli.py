@@ -131,20 +131,88 @@ class CliTests(unittest.TestCase):
         self.assertIn("mosh failed: Unknown model key `models.discovery_live.crawlerr`", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
-    def test_cli_rejects_url_shorthand_and_raw_url_discovery(self) -> None:
-        stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
-            main(["https://example.test"])
+    def test_cli_shortcut_url_creates_engagement_attaches_asset_and_runs_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            with fixture_server() as url:
+                live_runner = FakeCrewRunner()
+                stdout = io.StringIO()
 
-        self.assertEqual(raised.exception.code, 2)
-        self.assertIn("invalid choice", stderr.getvalue())
+                with patch("mosh.crews.discovery_live.crew.build_discovery_live_crew_runner", return_value=live_runner):
+                    with contextlib.redirect_stdout(stdout):
+                        exit_code = main([url, "--output-root", str(output_root)])
 
+            match = re.search(r"Engagement created: (eng_[a-z0-9]{8})", stdout.getvalue())
+            self.assertIsNotNone(match)
+            engagement_id = match.group(1)
+            engagement = load_engagement(output_root, engagement_id)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(live_runner.calls), 1)
+            self.assertEqual(live_runner.calls[0]["target_url"], url.rstrip("/"))
+            self.assertEqual([(asset.id, asset.type) for asset in engagement.assets], [("asset_live_1", "live_url")])
+            self.assertTrue((asset_discovery_dir(output_root, engagement_id, "asset_live_1") / "report.md").exists())
+            self.assertIn("Attached: asset_live_1 (live_url)", stdout.getvalue())
+            self.assertIn(f"Next: run `mosh plan {engagement_id}`.", stdout.getvalue())
+
+    def test_cli_shortcut_source_path_creates_engagement_attaches_asset_and_runs_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            with fixture_source_tree() as source:
+                source_runner = FakeDiscoverySourceRunner()
+                stdout = io.StringIO()
+
+                with patch(
+                    "mosh.crews.discovery_source.crew.build_discovery_source_crew_runner",
+                    return_value=source_runner,
+                ):
+                    with contextlib.redirect_stdout(stdout):
+                        exit_code = main([str(source), "--output-root", str(output_root)])
+
+            match = re.search(r"Engagement created: (eng_[a-z0-9]{8})", stdout.getvalue())
+            self.assertIsNotNone(match)
+            engagement_id = match.group(1)
+            engagement = load_engagement(output_root, engagement_id)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(source_runner.calls), 1)
+            self.assertEqual(Path(source_runner.calls[0]["source"]), source.resolve())
+            self.assertEqual([(asset.id, asset.type) for asset in engagement.assets], [("asset_source_1", "source_tree")])
+            self.assertTrue((asset_discovery_dir(output_root, engagement_id, "asset_source_1") / "report.md").exists())
+            self.assertIn("Attached: asset_source_1 (source_tree)", stdout.getvalue())
+            self.assertIn(f"Next: run `mosh plan {engagement_id}`.", stdout.getvalue())
+
+    def test_cli_discover_still_requires_engagement_id(self) -> None:
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             exit_code = main(["discover", "https://example.test"])
 
         self.assertEqual(exit_code, 1)
         self.assertIn("engagement not found", stderr.getvalue())
+
+    def test_cli_shortcut_rejects_invalid_locator_before_creating_engagement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["not-a-real-target", "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Cannot infer asset type", stderr.getvalue())
+            self.assertFalse(any(output_root.glob("eng_*")) if output_root.exists() else False)
+
+    def test_cli_shortcut_rejects_unsupported_discovery_asset_before_creating_engagement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["https://github.com/example/app", "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 1)
+            self.assertIn("Shortcut discovery supports live_url and source_tree assets", stderr.getvalue())
+            self.assertFalse(any(output_root.glob("eng_*")) if output_root.exists() else False)
 
     def test_cli_engagement_create_and_attach_commands_write_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +242,7 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("Attached: asset_live_1 (live_url)", stdout.getvalue())
+            self.assertIn(f"Next: run `mosh discover {engagement_id}`.", stdout.getvalue())
             engagement = load_engagement(output_root, engagement_id)
             self.assertEqual(engagement.title, "Example App")
             self.assertEqual([(asset.id, asset.type) for asset in engagement.assets], [("asset_live_1", "live_url")])
@@ -350,7 +419,9 @@ class CliTests(unittest.TestCase):
                     self.assertTrue((asset_discovery_dir(output_root, engagement.id, source_asset.id) / "report.md").exists())
                     self.assertIn("Discovery report for asset_live_1 written to", stdout.getvalue())
                     self.assertIn("Discovery report for asset_source_1 written to", stdout.getvalue())
+                    self.assertIn(f"Next: run `mosh plan {engagement.id}` when discovery is complete.", stdout.getvalue())
                     self.assertIn("No assets need discovery", second_stdout.getvalue())
+                    self.assertIn(f"Next: run `mosh plan {engagement.id}`.", second_stdout.getvalue())
 
     def test_cli_discover_engagement_asset_flag_selects_one_asset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -428,7 +499,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(second_exit_code, 0)
             self.assertEqual(len(runner.calls), 1)
             self.assertIn("Security test plan written to", stdout.getvalue())
+            self.assertIn(f"then run `mosh test {engagement.id}`.", stdout.getvalue())
             self.assertIn("Security test plan is current", second_stdout.getvalue())
+            self.assertIn(f"then run `mosh test {engagement.id}`.", second_stdout.getvalue())
             self.assertTrue((report_dir / "plan.md").exists())
             self.assertTrue((output_root / engagement.id / "engagement_template.yaml").exists())
             self.assertFalse((report_dir / "engagement_template.yaml").exists())
@@ -459,6 +532,7 @@ class CliTests(unittest.TestCase):
             preflight = (report_dir / "preflight.md").read_text(encoding="utf-8")
             self.assertEqual(exit_code, 0)
             self.assertIn("Security testing preflight written to", stdout.getvalue())
+            self.assertIn(f"Next: run `mosh report {engagement.id}`.", stdout.getvalue())
             self.assertEqual(runner.calls[0]["target_url"], target_url)
             self.assertTrue((report_dir / "executed_tests" / "HDR-001.md").exists())
             self.assertIn(f"Engagement file: `{output_root / engagement.id / 'engagement_template.yaml'}`", preflight)
@@ -577,6 +651,7 @@ class CliTests(unittest.TestCase):
             report_path = output_root / engagement.id / "final-report" / "report.md"
             self.assertEqual(exit_code, 0)
             self.assertIn("Final report written to", stdout.getvalue())
+            self.assertIn(f"Next: review `{report_path}` and run `mosh improvements list {engagement.id}`.", stdout.getvalue())
             self.assertTrue(report_path.exists())
             self.assertEqual(runner.calls[0]["target_url"], target_url)
 

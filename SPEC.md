@@ -178,7 +178,19 @@ Assets are the attached things under assessment. Current asset types are:
 - `source_tree`
 - `source_repo`
 
-Asset attachment is registration only. It must not automatically run discovery or testing. Asset type is inferred from the locator when possible, and callers may pass an explicit type for ambiguous URLs.
+Asset attachment through `mosh engagement attach` is registration only. It must not automatically run discovery or testing. Asset type is inferred from the locator when possible, and callers may pass an explicit type for ambiguous URLs.
+
+The top-level shortcut command accepts a single asset locator:
+
+```text
+mosh <url>
+mosh <source-tree-path>
+```
+
+This shortcut must create a new engagement, attach the asset, run discovery for
+that asset, and print the next planning command. It is equivalent to the first
+three explicit steps for a one-asset engagement, but normal `engagement attach`
+remains registration-only.
 
 Each asset is persisted under:
 
@@ -269,6 +281,14 @@ fingerprint, and prints a human-readable cross-engagement view.
 ## Real-Time Visibility
 
 The CLI should show real-time observable activity from the crew.
+
+After each major stage completes successfully, the CLI should print a concise
+next-step hint. Discovery should point to `mosh plan <engagement-id>`, planning
+should point to reviewing `engagement_template.yaml` and running
+`mosh test <engagement-id>`, testing should point either to updating the
+engagement template and rerunning tests when blockers remain or to
+`mosh report <engagement-id>`, and final reporting should point to the generated
+report and internal harness improvements list.
 
 Show events such as:
 
@@ -681,8 +701,6 @@ v1
 * Create a default command - when passed a URL or a Source code - it starts an engagement, and runs
 
 * Checkout git code
-
-* Incorporate a RAG so that executions are remembered and the agents learn from each execution
 
 * Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required. * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
 
