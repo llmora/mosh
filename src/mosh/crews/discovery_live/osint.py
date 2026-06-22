@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
 OSINT_USER_AGENT = "mosh/0.1 passive-osint"
+OSINT_QUERY_RETRIES = 2
+OSINT_RETRY_BASE_DELAY_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -197,10 +201,30 @@ def normalize_osint_host(value: str) -> str:
     return host
 
 
-def _open_json(request: Request, timeout: int) -> Any:
-    with urlopen(request, timeout=timeout) as response:
-        body = response.read().decode("utf-8", errors="replace")
-    return json.loads(body or "null")
+def _open_json(request: Request, timeout: int, retries: int = OSINT_QUERY_RETRIES) -> Any:
+    attempts = max(1, retries + 1)
+    for attempt in range(attempts):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8", errors="replace")
+            return json.loads(body or "null")
+        except HTTPError as exc:
+            if not _retryable_http_error(exc) or attempt == attempts - 1:
+                raise
+            _sleep_before_retry(attempt)
+        except (TimeoutError, URLError):
+            if attempt == attempts - 1:
+                raise
+            _sleep_before_retry(attempt)
+    raise RuntimeError("unreachable OSINT retry state")
+
+
+def _retryable_http_error(error: HTTPError) -> bool:
+    return 500 <= error.code < 600
+
+
+def _sleep_before_retry(attempt: int) -> None:
+    time.sleep(OSINT_RETRY_BASE_DELAY_SECONDS * (2**attempt))
 
 
 def _censys_hit_observations(hit: dict[str, Any], source_tool: str) -> list[OsintObservation]:

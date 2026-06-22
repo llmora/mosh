@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mosh.crews.discovery_live.agents import CrawlerAgent, discovery_live_agent_definitions
+from mosh.crews.discovery_live.osint import OsintObservation
+from mosh.crews.discovery_live.tools import ExternalOsintDiscoveryTool
 from mosh.config import AppConfig
 from mosh.memory import FileMemory
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
@@ -65,6 +67,23 @@ class FakeDirbTool(StaticCrawlTool):
 class FakeExternalOsintTool(StaticCrawlTool):
     class definition:
         name = "external_osint_discovery"
+
+
+class RecordingOsintProvider:
+    name = "recording_external_osint"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def query(self, root_domain: str, timeout: int) -> list[OsintObservation]:
+        self.calls.append((root_domain, timeout))
+        return [
+            OsintObservation(
+                host="api.example.test",
+                source_tool="recording_external_osint",
+                evidence=["provider host result"],
+            )
+        ]
 
 
 class FakeExtractifyTool:
@@ -429,6 +448,59 @@ class AgentToolBoundaryTests(unittest.TestCase):
                     for event in events
                 )
             )
+
+    def test_crawler_agent_skips_repeated_external_osint_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = StaticCrawlTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://example.test/",
+                            status=200,
+                            content_type="text/html",
+                            title="Example",
+                            headers={},
+                            links=[],
+                            references=[],
+                            forms=[],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            provider = RecordingOsintProvider()
+            osint = ExternalOsintDiscoveryTool([provider])
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(
+                crawl_tool=primary,
+                additional_tools=[osint],
+                candidate_follow_up_limit=0,
+            )
+
+            agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+            agent.discover("https://www.example.test/register", memory, max_pages=10, max_depth=2)
+
+            self.assertEqual(provider.calls, [("example.test", 10)])
+
+            events = json.loads((Path(directory) / "events.json").read_text(encoding="utf-8"))
+            external_calls = [
+                event
+                for event in events
+                if event["action"] == "tool_call"
+                and event["data"].get("tool") == "external_osint_discovery"
+            ]
+            external_skips = [
+                event
+                for event in events
+                if event["action"] == "tool_skip"
+                and event["data"].get("tool") == "external_osint_discovery"
+            ]
+            self.assertEqual(len(external_calls), 1)
+            self.assertEqual(len(external_skips), 1)
+            self.assertEqual(external_skips[0]["data"]["query_root"], "example.test")
 
     def test_crawler_agent_respects_candidate_follow_up_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -42,7 +42,7 @@ class JsStaticEndpointDockerToolTests(unittest.TestCase):
         args = runner.calls[0]["args"]
         self.assertEqual(args, ["js-endpoint-extractor", "--base-url", "https://example.test/app", "--json"])
         self.assertEqual(runner.calls[0]["input_text"], "https://example.test/app.js\n")
-        self.assertEqual(runner.calls[0]["timeout"], 120)
+        self.assertEqual(runner.calls[0]["timeout"], 300)
         self.assertFalse(runner.calls[0]["tty"])
         self.assertEqual(
             [page.url for page in result.pages],

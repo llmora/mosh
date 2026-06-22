@@ -21,6 +21,12 @@ class AppConfigTests(unittest.TestCase):
 
         self.assertEqual(config.max_depth, 5)
 
+    def test_default_dirb_timeout_is_five_minutes(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())
+
+        self.assertEqual(config.dirb_docker_timeout, 300)
+
     def test_max_depth_can_be_overridden_from_env(self) -> None:
         with patch.dict(os.environ, {"MOSH_MAX_DEPTH": "7"}, clear=True):
             config = AppConfig.from_env(dotenv_path=self._missing_dotenv_path())

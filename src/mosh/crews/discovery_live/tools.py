@@ -150,7 +150,7 @@ class ExtractifyDockerTool:
         self,
         image: str,
         runner: DockerToolRunner | None = None,
-        docker_timeout: int = 120,
+        docker_timeout: int = 300,
     ) -> None:
         self.runner = runner or DockerToolRunner(image)
         self.docker_timeout = docker_timeout
@@ -194,7 +194,7 @@ class JsStaticEndpointDockerTool:
         self,
         image: str,
         runner: DockerToolRunner | None = None,
-        docker_timeout: int = 120,
+        docker_timeout: int = 300,
     ) -> None:
         self.runner = runner or DockerToolRunner(image)
         self.docker_timeout = docker_timeout
@@ -249,6 +249,14 @@ class ExternalOsintDiscoveryTool:
     ) -> None:
         self.providers = providers if providers is not None else build_default_osint_providers()
         self.provider_timeout = provider_timeout
+        self._queried_roots: set[str] = set()
+
+    def query_root_for(self, url: str) -> str | None:
+        normalized_start_url = normalize_url(url)
+        return ScopePolicy.from_url(normalized_start_url).passive_query_root()
+
+    def has_queried_root(self, query_root: str) -> bool:
+        return query_root in self._queried_roots
 
     def run(self, url: str, max_pages: int, max_depth: int) -> CrawlResult:
         normalized_start_url = normalize_url(url)
@@ -256,6 +264,9 @@ class ExternalOsintDiscoveryTool:
         query_root = scope.passive_query_root()
         if not query_root:
             return CrawlResult(normalized_start_url, [], [], [], None)
+        if query_root in self._queried_roots:
+            return CrawlResult(normalized_start_url, [], [], [], None)
+        self._queried_roots.add(query_root)
 
         candidates_by_key: dict[tuple[str, str], DiscoveryCandidate] = {}
         out_of_scope: set[str] = set()

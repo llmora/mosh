@@ -193,6 +193,16 @@ class CrawlerAgent:
                 {"tool": tool_name},
             )
             return None
+        if isinstance(tool, ExternalOsintDiscoveryTool):
+            query_root = tool.query_root_for(url)
+            if query_root and tool.has_queried_root(query_root):
+                memory.record_event(
+                    self.name,
+                    "tool_skip",
+                    "Skipping external_osint_discovery because passive root was already queried",
+                    {"tool": tool_name, "url": url, "query_root": query_root},
+                )
+                return None
         return self._run_crawl_tool(tool, url, memory, max_pages, max_depth)
 
     def _run_extractify_tool(self, crawl: CrawlResult, memory: FileMemory) -> CrawlResult | None:
