@@ -329,6 +329,7 @@ class CrawlerAgent:
         js_urls = _javascript_urls(crawl)
         if not js_urls:
             return None
+        javascript_contexts = _javascript_contexts(crawl) if tool_name == "js_static_endpoint_discovery" else []
         tool = next((candidate for candidate in self.additional_tools if candidate.definition.name == tool_name), None)
         if not tool:
             memory.record_event(
@@ -346,11 +347,11 @@ class CrawlerAgent:
                 "tool": tool_name,
                 "javascript_urls": len(js_urls),
                 "sample": js_urls[:5],
-                "javascript_contexts": len(_javascript_contexts(crawl)) if tool_name == "js_static_endpoint_discovery" else 0,
+                "javascript_contexts": len(javascript_contexts),
             },
         )
         if tool_name == "js_static_endpoint_discovery":
-            javascript_crawl = tool.run(crawl.start_url, js_urls, _javascript_contexts(crawl))
+            javascript_crawl = tool.run(crawl.start_url, js_urls, javascript_contexts)
         else:
             javascript_crawl = tool.run(crawl.start_url, js_urls)
         result_data = _crawl_event_result_data(javascript_crawl)
@@ -509,12 +510,15 @@ def _looks_like_javascript_reference(reference: str) -> bool:
 
 
 def _javascript_urls(crawl: CrawlResult) -> list[str]:
+    scope = ScopePolicy.from_url(crawl.start_url)
     return sorted(
         {
             value
             for page in crawl.pages
             for value in [page.url, *page.references]
-            if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
+            if value.startswith(("http://", "https://"))
+            and scope.in_scope(value)
+            and _looks_like_javascript_reference(value)
         }
     )
 
@@ -522,11 +526,14 @@ def _javascript_urls(crawl: CrawlResult) -> list[str]:
 def _javascript_contexts(crawl: CrawlResult) -> list[dict[str, object]]:
     contexts: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
+    scope = ScopePolicy.from_url(crawl.start_url)
     for page in crawl.pages:
         page_js_urls = [
             value
             for value in [page.url, *page.references]
-            if value.startswith(("http://", "https://")) and _looks_like_javascript_reference(value)
+            if value.startswith(("http://", "https://"))
+            and scope.in_scope(value)
+            and _looks_like_javascript_reference(value)
         ]
         for js_url in sorted(set(page_js_urls)):
             key = (page.url, js_url)

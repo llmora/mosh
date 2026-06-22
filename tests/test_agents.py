@@ -793,6 +793,61 @@ class AgentToolBoundaryTests(unittest.TestCase):
             source_map_item = next(item for item in memory_items if item["kind"] == "source_map_discovery")
             self.assertEqual(source_map_item["content"]["source_maps_found"], 1)
 
+    def test_crawler_agent_filters_javascript_asset_tools_through_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            primary = StaticCrawlTool(
+                CrawlResult(
+                    start_url="https://example.test/",
+                    pages=[
+                        CrawledPage(
+                            url="https://example.test/",
+                            status=200,
+                            content_type="text/html",
+                            title="App",
+                            headers={},
+                            links=[],
+                            references=[
+                                "https://api.example.test/api.js",
+                                "https://cdn.thirdparty.test/lib.js",
+                                "https://example.test/app.js",
+                            ],
+                            forms=[],
+                            inline_scripts=["window.API_BASE = 'https://api.example.test';"],
+                        )
+                    ],
+                    out_of_scope=[],
+                    failed=[],
+                    robots=None,
+                )
+            )
+            extractify = FakeExtractifyTool(CrawlResult("https://example.test/", [], [], [], None))
+            js_static = FakeJsStaticTool(CrawlResult("https://example.test/", [], [], [], None))
+            source_maps = FakeSourceMapTool(CrawlResult("https://example.test/", [], [], [], None))
+            memory = FileMemory(Path(directory))
+            agent = CrawlerAgent(crawl_tool=primary, additional_tools=[extractify, js_static, source_maps])
+
+            agent.discover("https://example.test", memory, max_pages=10, max_depth=2)
+
+            expected_js_urls = ["https://api.example.test/api.js", "https://example.test/app.js"]
+            self.assertEqual(extractify.calls[0]["js_urls"], expected_js_urls)
+            self.assertEqual(js_static.calls[0]["js_urls"], expected_js_urls)
+            self.assertEqual(source_maps.calls[0]["js_urls"], expected_js_urls)
+            self.assertEqual(
+                js_static.calls[0]["contexts"],
+                [
+                    {
+                        "source": "https://api.example.test/api.js",
+                        "page_url": "https://example.test/",
+                        "inline_scripts": ["window.API_BASE = 'https://api.example.test';"],
+                    },
+                    {
+                        "source": "https://example.test/app.js",
+                        "page_url": "https://example.test/",
+                        "inline_scripts": ["window.API_BASE = 'https://api.example.test';"],
+                    },
+                ],
+            )
+
     def test_crawler_agent_filters_openapi_endpoints_through_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             spec_url = "https://app.example.test/openapi.json"
