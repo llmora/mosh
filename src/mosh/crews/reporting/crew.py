@@ -27,6 +27,7 @@ from mosh.engagement import engagement_steer_prompt_value, load_engagement_steer
 from mosh.engagements import Engagement, asset_discovery_dir, engagement_dir, load_engagement
 from mosh.memory import FileMemory
 from mosh.models import Event
+from mosh.source_assets import first_source_asset
 
 
 EXECUTION_METADATA_STARTS = ("<!-- mosh-execution",)
@@ -400,9 +401,9 @@ def _engagement_report_target(engagement: Engagement) -> str:
     live = next((asset.locator for asset in engagement.assets if asset.type == "live_url"), "")
     if live:
         return live
-    source = next((asset.locator for asset in engagement.assets if asset.type == "source_tree"), "")
-    if source:
-        return f"source:{source}"
+    source_asset = first_source_asset(engagement.assets)
+    if source_asset:
+        return f"source:{source_asset.locator}"
     return engagement.id
 
 

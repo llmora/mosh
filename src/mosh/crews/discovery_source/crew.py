@@ -31,6 +31,9 @@ from mosh.memory import FileMemory
 from mosh.models import Event
 
 
+SOURCE_CONTEXT_MAX_FILES = 200
+
+
 @dataclass
 class DiscoverySourceCrewState:
     source: str
@@ -921,10 +924,12 @@ def _deterministic_source_index(state: DiscoverySourceCrewState) -> dict[str, An
 
 def _compact_discovery_source_context(source_index: dict[str, Any]) -> dict[str, Any]:
     inventory = source_index.get("inventory") if isinstance(source_index.get("inventory"), dict) else {}
+    summary = source_index.get("summary") if isinstance(source_index.get("summary"), dict) else {}
     return {
         "schema": "mosh.discovery-source-context.v1",
         "source": source_index.get("source"),
         "summary": source_index.get("summary"),
+        "files": _limit_items(inventory.get("files"), SOURCE_CONTEXT_MAX_FILES),
         "apps": _limit_items(inventory.get("apps"), 50),
         "languages": inventory.get("languages"),
         "frameworks": _limit_items(inventory.get("frameworks"), 50),
@@ -940,7 +945,8 @@ def _compact_discovery_source_context(source_index: dict[str, Any]) -> dict[str,
         "compose_topology": _limit_items(inventory.get("compose_topology"), 50),
         "evidence_refs": _limit_items(source_index.get("evidence_refs"), 150),
         "context_limits": {
-            "files_omitted": True,
+            "files_omitted": _source_files_omitted(inventory, summary, SOURCE_CONTEXT_MAX_FILES),
+            "max_files": SOURCE_CONTEXT_MAX_FILES,
             "max_apps": 50,
             "max_entrypoints": 100,
             "max_routes": 150,
@@ -948,6 +954,12 @@ def _compact_discovery_source_context(source_index: dict[str, Any]) -> dict[str,
             "max_configuration": 100,
         },
     }
+
+
+def _source_files_omitted(inventory: dict[str, Any], summary: dict[str, Any], limit: int) -> bool:
+    if inventory.get("files_truncated") or summary.get("files_truncated"):
+        return True
+    return len(_list(inventory.get("files"))) > limit
 
 
 def _normalize_component_map(component_map: dict[str, Any]) -> dict[str, Any]:

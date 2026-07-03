@@ -28,7 +28,6 @@ from mosh.engagement import (
 )
 from mosh.engagements import (
     Engagement,
-    EngagementAsset,
     asset_discovery_dir,
     engagement_dir,
     engagement_plan_dir,
@@ -44,6 +43,7 @@ from mosh.memory import FileMemory
 from mosh.models import Event, utc_now
 from mosh.crews.planning.evidence_linker import build_model_assisted_linker
 from mosh.crews.planning.reporting import write_security_test_plan
+from mosh.source_assets import first_source_asset, is_source_asset, readable_source_root
 
 
 @dataclass
@@ -90,6 +90,7 @@ SOURCE_CONTEXT_MAX_SECURITY_ITEMS = 100
 SOURCE_CONTEXT_MAX_DEPENDENCIES = 200
 SOURCE_CONTEXT_MAX_CONFIG = 150
 SOURCE_CONTEXT_MAX_EVIDENCE_REFS = 200
+SOURCE_CONTEXT_MAX_FILES = 200
 
 
 class SecurityTestPlanningCrewRunner(Protocol):
@@ -167,8 +168,8 @@ class CrewAISecurityTestPlanningCrewRunner:
             raise CrewAIUnavailable(f"Missing LLM setting(s): {', '.join(missing_settings)}.")
 
         engagement = load_engagement(output_root, engagement_id)
-        target_url, source = _engagement_primary_targets(engagement)
-        discovery_source_dir = _first_asset_discovery_dir(output_root, engagement, "source_tree")
+        target_url, source = _engagement_primary_targets(output_root, engagement)
+        discovery_source_dir = _first_source_asset_discovery_dir(output_root, engagement)
         engagement_template_path = engagement_dir(output_root, engagement.id) / "engagement_template.yaml"
         engagement_steer = load_engagement_steer(engagement_template_path)
         memory.record_event(
@@ -397,7 +398,7 @@ class SecurityTestPlanningOrchestrator:
         result = self.crew_runner.run_engagement(self.output_root, engagement.id, report_dir, memory)
         engagement_path = engagement_root / "engagement_template.yaml"
         if not engagement_path.exists():
-            target_url, source = _engagement_primary_targets(engagement)
+            target_url, source = _engagement_primary_targets(self.output_root, engagement)
             engagement_template = write_engagement_template_mapping(
                 engagement_root,
                 _build_planning_engagement_template(target_url, source, result.plan),
@@ -477,6 +478,7 @@ def load_discovery_source_context(discovery_source_dir: Path) -> dict[str, Any]:
     memory = _read_json(discovery_source_dir / "memory.json", [])
     source_index = _latest_memory_item(memory, "source_index")
     source_index_mapping = source_index if isinstance(source_index, dict) else {}
+    source_files_omitted = _source_index_files_omitted(source_index_mapping, SOURCE_CONTEXT_MAX_FILES)
     return {
         "schema": "mosh.discovery-source-planning-context.v1",
         "report_markdown": _truncate_text(_read_text(discovery_source_dir / "report.md"), DISCOVERY_REPORT_MAX_CHARS),
@@ -490,7 +492,8 @@ def load_discovery_source_context(discovery_source_dir: Path) -> dict[str, Any]:
         "context_limits": {
             "events_omitted": True,
             "raw_memory_omitted": True,
-            "source_files_omitted": True,
+            "source_files_omitted": source_files_omitted,
+            "max_files": SOURCE_CONTEXT_MAX_FILES,
             "max_report_chars": DISCOVERY_REPORT_MAX_CHARS,
             "max_routes": SOURCE_CONTEXT_MAX_ROUTES,
             "max_dependencies": SOURCE_CONTEXT_MAX_DEPENDENCIES,
@@ -524,7 +527,7 @@ def load_engagement_assessment_evidence_bundle(
                 )
             else:
                 skipped_assets.append({"id": asset.id, "type": asset.type, "reason": "missing discovery output"})
-        elif asset.type == "source_tree":
+        elif is_source_asset(asset):
             if discovery_dir.exists():
                 source_discoveries.append(
                     {
@@ -713,6 +716,16 @@ def _security_relevant_headers(headers: Any) -> dict[str, Any]:
     return relevant
 
 
+def _source_index_files_omitted(source_index: Any, limit: int) -> bool:
+    if not isinstance(source_index, dict):
+        return False
+    inventory = source_index.get("inventory") if isinstance(source_index.get("inventory"), dict) else {}
+    summary = source_index.get("summary") if isinstance(source_index.get("summary"), dict) else {}
+    if inventory.get("files_truncated") or summary.get("files_truncated"):
+        return True
+    return len(_list(inventory.get("files"))) > limit
+
+
 def _compact_source_index(source_index: Any) -> dict[str, Any]:
     if not isinstance(source_index, dict):
         return {}
@@ -722,6 +735,9 @@ def _compact_source_index(source_index: Any) -> dict[str, Any]:
         "source": source_index.get("source"),
         "summary": source_index.get("summary"),
         "inventory": {
+            "file_count": inventory.get("file_count"),
+            "files_truncated": inventory.get("files_truncated"),
+            "files": _limit_items(inventory.get("files"), SOURCE_CONTEXT_MAX_FILES),
             "apps": _limit_items(inventory.get("apps"), SOURCE_CONTEXT_MAX_APPS),
             "languages": inventory.get("languages"),
             "frameworks": _limit_items(inventory.get("frameworks"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
@@ -735,13 +751,15 @@ def _compact_source_index(source_index: Any) -> dict[str, Any]:
             "configuration": _limit_items(inventory.get("configuration"), SOURCE_CONTEXT_MAX_CONFIG),
             "environment_variables": _limit_items(inventory.get("environment_variables"), SOURCE_CONTEXT_MAX_CONFIG),
             "compose_topology": _limit_items(inventory.get("compose_topology"), SOURCE_CONTEXT_MAX_SECURITY_ITEMS),
+            "ignored_dirs": inventory.get("ignored_dirs"),
         },
         "evidence_refs": _limit_items(source_index.get("evidence_refs"), SOURCE_CONTEXT_MAX_EVIDENCE_REFS),
         "route_resolution": source_index.get("route_resolution"),
         "component_map": source_index.get("component_map"),
         "gap_analysis": source_index.get("gap_analysis"),
         "context_limits": {
-            "files_omitted": True,
+            "files_omitted": _source_index_files_omitted(source_index, SOURCE_CONTEXT_MAX_FILES),
+            "max_files": SOURCE_CONTEXT_MAX_FILES,
             "max_apps": SOURCE_CONTEXT_MAX_APPS,
             "max_entrypoints": SOURCE_CONTEXT_MAX_ENTRYPOINTS,
             "max_routes": SOURCE_CONTEXT_MAX_ROUTES,
@@ -1000,9 +1018,11 @@ def _parse_timestamp(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _engagement_primary_targets(engagement: Engagement) -> tuple[str, str | None]:
+def _engagement_primary_targets(output_root: Path, engagement: Engagement) -> tuple[str, str | None]:
     live = next((asset.locator for asset in engagement.assets if asset.type == "live_url"), "")
-    source = next((asset.locator for asset in engagement.assets if asset.type == "source_tree"), None)
+    source_asset = first_source_asset(engagement.assets)
+    source_root = readable_source_root(output_root, engagement.id, source_asset) if source_asset else None
+    source = str(source_root) if source_root else source_asset.locator if source_asset else None
     if live:
         return live, source
     if source:
@@ -1010,8 +1030,8 @@ def _engagement_primary_targets(engagement: Engagement) -> tuple[str, str | None
     return engagement.id, None
 
 
-def _first_asset_discovery_dir(output_root: Path, engagement: Engagement, asset_type: str) -> Path | None:
-    asset: EngagementAsset | None = next((item for item in engagement.assets if item.type == asset_type), None)
+def _first_source_asset_discovery_dir(output_root: Path, engagement: Engagement) -> Path | None:
+    asset = first_source_asset(engagement.assets)
     if asset is None:
         return None
     return asset_discovery_dir(output_root, engagement.id, asset.id)

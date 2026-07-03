@@ -72,12 +72,13 @@ class MoshCrewAIEventListener(BaseEventListener):  # type: ignore[misc]
         if not self._event_buffer and not self._usage_buffer:
             return
         self._memory.report_dir.mkdir(parents=True, exist_ok=True)
-        if self._event_buffer:
-            _append_json_list(self._memory.report_dir / "events.json", self._event_buffer)
-            self._event_buffer.clear()
-        if self._usage_buffer:
-            _append_json_list(self._usage_path, self._usage_buffer)
-            self._usage_buffer.clear()
+        with self._memory._lock:
+            if self._event_buffer:
+                _append_json_list(self._memory.report_dir / "events.json", self._event_buffer)
+                self._event_buffer.clear()
+            if self._usage_buffer:
+                _append_json_list(self._usage_path, self._usage_buffer)
+                self._usage_buffer.clear()
 
     def setup_listeners(self, crewai_event_bus: Any) -> None:
         @crewai_event_bus.on(CrewKickoffStartedEvent)
@@ -260,13 +261,11 @@ def _append_json_list(path: Path, items: list[dict[str, Any]]) -> None:
     existing: list[dict[str, Any]] = []
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            existing = data if isinstance(data, list) else []
-        except (json.JSONDecodeError, OSError):
+            existing = FileMemory._read_list(path)
+        except (json.JSONDecodeError, OSError, ValueError):
             existing = []
     existing.extend(items)
-    payload = json.dumps(existing, indent=2, sort_keys=True) + "\n"
-    path.write_text(payload, encoding="utf-8")
+    FileMemory._write_json(path, existing)
 
 
 _JWT_RE = re.compile(

@@ -451,7 +451,7 @@ def _safe_headers(headers: dict[str, Any]) -> dict[str, str]:
 def _source_root(route: SourceRoute | None) -> Path | None:
     if route is None:
         return None
-    path = Path(route.asset.locator).expanduser()
+    path = Path(route.source_root or route.asset.locator).expanduser()
     if not path.exists() or not path.is_dir():
         return None
     return path.resolve()

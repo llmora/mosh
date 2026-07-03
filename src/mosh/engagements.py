@@ -18,7 +18,37 @@ ENGAGEMENT_SCHEMA = "mosh.engagement.v1"
 ASSET_SCHEMA = "mosh.asset.v1"
 
 VALID_ASSET_TYPES = {"live_url", "source_tree", "source_repo", "mobile_app"}
-GIT_HOSTS = {"github.com", "gitlab.com", "bitbucket.org"}
+GIT_PAGES_HOST_SUFFIXES = (".github.io", ".gitlab.io", ".bitbucket.io")
+GITHUB_UI_SEGMENTS = {
+    "actions",
+    "blob",
+    "branches",
+    "commit",
+    "commits",
+    "compare",
+    "discussions",
+    "issues",
+    "packages",
+    "pull",
+    "pulls",
+    "releases",
+    "security",
+    "tree",
+    "wiki",
+}
+BITBUCKET_UI_SEGMENTS = {
+    "addon",
+    "admin",
+    "branch",
+    "branches",
+    "commits",
+    "downloads",
+    "issues",
+    "pipelines",
+    "pull-requests",
+    "src",
+    "wiki",
+}
 MOBILE_APP_HOSTS = {"apps.apple.com", "play.google.com"}
 
 
@@ -254,20 +284,20 @@ def infer_asset_type(locator: str) -> str:
         return "source_tree"
     if path.exists() and path.is_file() and path.suffix.lower() in {".apk", ".ipa"}:
         return "mobile_app"
-    if _looks_like_ssh_git(value):
-        return "source_repo"
     parsed = urlparse(value)
-    if parsed.scheme in {"ssh", "git"} and parsed.netloc:
-        return "source_repo"
+    if _looks_like_unsupported_git_locator(value) or (parsed.scheme in {"ssh", "git"} and parsed.netloc):
+        raise ValueError("Source repository assets only support HTTPS repository URLs.")
     if parsed.scheme in {"http", "https"} and parsed.netloc:
         host = (parsed.hostname or "").lower()
         if host in MOBILE_APP_HOSTS:
             return "mobile_app"
-        if value.rstrip("/").endswith(".git") or host in GIT_HOSTS:
+        if _is_git_pages_host(host):
+            return "live_url"
+        if _is_https_source_repo_url(parsed):
             return "source_repo"
+        if _is_known_repo_host_inner_url(parsed):
+            raise ValueError("Repository host URL points inside a repository; pass the repository root URL.")
         return "live_url"
-    if value.rstrip("/").endswith(".git"):
-        return "source_repo"
     raise ValueError(f"Cannot infer asset type for `{locator}`; pass --type explicitly.")
 
 
@@ -293,7 +323,9 @@ def normalize_asset_locator(locator: str, asset_type: str) -> str:
         if not path.is_dir():
             raise NotADirectoryError(f"Source path is not a directory: {locator}")
         return str(path.resolve())
-    if normalized_type in {"source_repo", "mobile_app"}:
+    if normalized_type == "source_repo":
+        return _normalize_source_repo_locator(value)
+    if normalized_type == "mobile_app":
         return value.rstrip("/")
     return value
 
@@ -384,8 +416,78 @@ def _next_asset_id(engagement: Engagement, asset_type: str) -> str:
         index += 1
 
 
-def _looks_like_ssh_git(value: str) -> bool:
+def _looks_like_unsupported_git_locator(value: str) -> bool:
     return bool(re.fullmatch(r"git@[^:]+:.+\.git", value))
+
+
+def _normalize_source_repo_locator(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("Source repository assets only support HTTPS repository URLs.")
+    if parsed.username or parsed.password:
+        raise ValueError("Source repository URLs must not include embedded credentials.")
+    host = (parsed.hostname or "").lower()
+    if _is_git_pages_host(host):
+        raise ValueError("Git Pages URLs are live URLs, not source repository assets.")
+    if not _is_https_source_repo_url(parsed):
+        if _is_known_repo_host_inner_url(parsed):
+            raise ValueError("Repository host URL points inside a repository; pass the repository root URL.")
+        raise ValueError(
+            "Source repository URL must be an HTTPS clone URL ending in .git "
+            "or a known repository host root URL."
+        )
+    netloc = parsed.netloc.lower()
+    return parsed._replace(scheme="https", netloc=netloc, path=parsed.path.rstrip("/"), params="", query="", fragment="").geturl()
+
+
+def _is_https_source_repo_url(parsed) -> bool:
+    if parsed.scheme != "https" or not parsed.netloc:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    if parsed.query or parsed.fragment:
+        return False
+    path = parsed.path.rstrip("/")
+    if path.endswith(".git") and len(_path_segments(path)) >= 1:
+        return True
+    host = (parsed.hostname or "").lower()
+    if _is_git_pages_host(host):
+        return False
+    return _is_known_repo_host_root_url(parsed)
+
+
+def _is_known_repo_host_root_url(parsed) -> bool:
+    host = (parsed.hostname or "").lower()
+    segments = _path_segments(parsed.path)
+    if parsed.query or parsed.fragment:
+        return False
+    if host == "github.com":
+        return len(segments) == 2
+    if host == "bitbucket.org":
+        return len(segments) == 2
+    if host == "gitlab.com":
+        return len(segments) >= 2 and "-" not in segments
+    return False
+
+
+def _is_known_repo_host_inner_url(parsed) -> bool:
+    host = (parsed.hostname or "").lower()
+    segments = _path_segments(parsed.path)
+    if host == "github.com":
+        return len(segments) >= 3 and segments[2].lower() in GITHUB_UI_SEGMENTS
+    if host == "bitbucket.org":
+        return len(segments) >= 3 and segments[2].lower() in BITBUCKET_UI_SEGMENTS
+    if host == "gitlab.com":
+        return "-" in segments and len(segments) >= 3
+    return False
+
+
+def _is_git_pages_host(host: str) -> bool:
+    return host.endswith(GIT_PAGES_HOST_SUFFIXES)
+
+
+def _path_segments(path: str) -> list[str]:
+    return [segment for segment in path.strip("/").split("/") if segment]
 
 
 def _clean_optional_text(value: str | None) -> str | None:

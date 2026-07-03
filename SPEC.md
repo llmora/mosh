@@ -185,6 +185,7 @@ The top-level shortcut command accepts a single asset locator:
 ```text
 mosh <url>
 mosh <source-tree-path>
+mosh <https-source-repo-url>
 ```
 
 This shortcut must create a new engagement, attach the asset, run discovery for
@@ -192,13 +193,20 @@ that asset, and print the next planning command. It is equivalent to the first
 three explicit steps for a one-asset engagement, but normal `engagement attach`
 remains registration-only.
 
+Source repositories are accepted only as HTTPS URLs. HTTPS URLs ending in `.git`
+and canonical repository root URLs on known Git hosts (`github.com`,
+`gitlab.com`, and `bitbucket.org`) are inferred as `source_repo`; Git host URLs
+that point inside repository web UI paths must be rejected as ambiguous and the
+user should pass the repository root. Git Pages hosts such as `*.github.io` are
+live URLs. SSH, SCP-style Git, and `git://` repository locators are unsupported.
+
 Each asset is persisted under:
 
 ```text
 report/<engagement-id>/assets/<asset-id>/asset.json
 ```
 
-`engagement.json` stores only asset references: `id` and `created_at`. Asset type, locator, label, and non-derived metadata are stored only in the asset's `asset.json` to avoid duplicated state. Asset discovery paths must not be stored in `asset.json`; they are derived from `report/<engagement-id>/assets/<asset-id>/discovery/`.
+`engagement.json` stores only asset references: `id` and `created_at`. Asset type, locator, label, and non-derived metadata are stored only in the asset's `asset.json` to avoid duplicated state. Asset discovery paths must not be stored in `asset.json`; they are derived from `report/<engagement-id>/assets/<asset-id>/discovery/`. For `source_repo` assets, the repository URL remains the canonical locator and the local checkout path is derived as `report/<engagement-id>/assets/<asset-id>/checkout/`; this checkout path must not be duplicated into `engagement.json` or `asset.json`.
 
 Engagement discovery dispatches by asset and writes:
 
@@ -393,7 +401,7 @@ Security planning is engagement-wide. It consumes discovery from all relevant en
 report/<engagement-id>/plan/
 ```
 
-Planning input must be a compact evidence bundle, not a raw dump of discovery artifacts. The planner context should omit orchestration events, raw memory logs, inline script bodies, and duplicated discovery blobs. It should retain security-relevant summaries, structured discovery reports, bounded live routes, forms, references, source routes, dependencies, configuration, evidence refs, asset-scoped discovery details, and `correlation.evidence_links`. Nested text, lists, and mappings must also be bounded so model-generated discovery reports cannot cause planning context-window failures.
+Planning input must be a compact evidence bundle, not a raw dump of discovery artifacts. The planner context should omit orchestration events, raw memory logs, inline script bodies, and duplicated discovery blobs. It should retain security-relevant summaries, structured discovery reports, bounded live routes, forms, references, source routes, bounded source file inventories, dependencies, configuration, evidence refs, asset-scoped discovery details, and `correlation.evidence_links`. For source assets, `source_index.inventory.files` is the authoritative indexed file list used by discovery summaries and planning; planning must preserve concrete file paths from it and must distinguish bounded prompt omission from a truly truncated source inventory. Nested text, lists, and mappings must also be bounded so model-generated discovery reports cannot cause planning context-window failures.
 
 Planning must distinguish discovery-tool coverage gaps from execution blockers. When an attached source asset is available, work that can be done with bounded source reads, source searches, manual route extraction, prompt-template
 extraction, configuration review, dependency inspection, generated harnesses, or local source-runtime checks belongs in active `source` hypotheses. Only the portion that genuinely needs an unattached asset/artifact, unsupported tooling,
@@ -701,10 +709,6 @@ At minimum, tests should cover:
 # Roadmap
 
 v1
-
-* Create a default command - when passed a URL or a Source code - it starts an engagement, and runs
-
-* Checkout git code
 
 * Create a web-based GUI that allows the user to acess all engagements, monitor progress for an engagement, provide input / steering during execution, and do an export of the report(s) to PDF. The GUI would have an onboarding wizard to ask for keys or anything else that may be required. * We want to improve the application based on results of testing, create an improver crew that works on this, for instance (but not limited to): adding new tools, fine-tuning prompts, deciding to introduce or remove stages, etc.
 
