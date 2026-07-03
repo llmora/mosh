@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -58,7 +59,15 @@ class FileMemory:
     def _read_list(path: Path) -> list[dict[str, Any]]:
         if not path.exists():
             return []
-        data = json.loads(path.read_text(encoding="utf-8"))
+        for attempt in range(3):
+            text = path.read_text(encoding="utf-8")
+            try:
+                data = json.loads(text)
+                break
+            except json.JSONDecodeError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.01)
         if not isinstance(data, list):
             raise ValueError(f"{path} must contain a JSON list")
         return data

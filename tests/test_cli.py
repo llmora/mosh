@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from mosh.cli import main
 from mosh.engagement import load_engagement_file, write_engagement_template
-from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_engagement
+from mosh.engagements import attach_asset, asset_dir, asset_discovery_dir, create_engagement, load_engagement
 from mosh.harness_improvements import record_harness_improvement
 from tests.fakes import (
     FakeCrewRunner,
@@ -195,6 +195,42 @@ class CliTests(unittest.TestCase):
             self.assertIn("Attached: asset_source_1 (source_tree)", stdout.getvalue())
             self.assertIn(f"Next: run `mosh plan {engagement_id}`.", stdout.getvalue())
 
+    def test_cli_shortcut_https_repo_creates_engagement_clones_and_runs_source_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            with fixture_source_tree() as source:
+                source_runner = FakeDiscoverySourceRunner()
+                stdout = io.StringIO()
+
+                with patch("mosh.cli.ensure_source_root", return_value=source.resolve()) as ensure_source:
+                    with patch(
+                        "mosh.crews.discovery_source.crew.build_discovery_source_crew_runner",
+                        return_value=source_runner,
+                    ):
+                        with contextlib.redirect_stdout(stdout):
+                            exit_code = main(
+                                [
+                                    "https://github.com/example/app",
+                                    "--output-root",
+                                    str(output_root),
+                                ]
+                            )
+
+            match = re.search(r"Engagement created: (eng_[a-z0-9]{8})", stdout.getvalue())
+            self.assertIsNotNone(match)
+            engagement_id = match.group(1)
+            engagement = load_engagement(output_root, engagement_id)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(source_runner.calls), 1)
+            self.assertEqual(Path(source_runner.calls[0]["source"]), source.resolve())
+            self.assertEqual([(asset.id, asset.type) for asset in engagement.assets], [("asset_repo_1", "source_repo")])
+            self.assertEqual(engagement.assets[0].locator, "https://github.com/example/app")
+            self.assertTrue((asset_discovery_dir(output_root, engagement_id, "asset_repo_1") / "report.md").exists())
+            self.assertIn("Attached: asset_repo_1 (source_repo)", stdout.getvalue())
+            self.assertIn(f"Next: run `mosh plan {engagement_id}`.", stdout.getvalue())
+            ensure_source.assert_called_once()
+
     def test_cli_discover_still_requires_engagement_id(self) -> None:
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
@@ -221,10 +257,10 @@ class CliTests(unittest.TestCase):
             stderr = io.StringIO()
 
             with contextlib.redirect_stderr(stderr):
-                exit_code = main(["https://github.com/example/app", "--output-root", str(output_root)])
+                exit_code = main(["https://apps.apple.com/us/app/example/id123", "--output-root", str(output_root)])
 
             self.assertEqual(exit_code, 1)
-            self.assertIn("Shortcut discovery supports live_url and source_tree assets", stderr.getvalue())
+            self.assertIn("got mobile_app", stderr.getvalue())
             self.assertFalse(any(output_root.glob("eng_*")) if output_root.exists() else False)
 
     def test_cli_engagement_create_and_attach_commands_write_manifest(self) -> None:
@@ -469,18 +505,48 @@ class CliTests(unittest.TestCase):
                     self.assertFalse((asset_discovery_dir(output_root, engagement.id, live_asset.id) / "report.md").exists())
                     self.assertTrue((asset_discovery_dir(output_root, engagement.id, source_asset.id) / "report.md").exists())
 
+    def test_cli_discover_engagement_dispatches_source_repo_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            with fixture_source_tree() as source:
+                engagement = create_engagement(output_root)
+                repo_asset = attach_asset(output_root, engagement.id, "https://github.com/example/app").asset
+                source_runner = FakeDiscoverySourceRunner()
+
+                with patch("mosh.cli.ensure_source_root", return_value=source.resolve()) as ensure_source:
+                    with patch(
+                        "mosh.crews.discovery_source.crew.build_discovery_source_crew_runner",
+                        return_value=source_runner,
+                    ):
+                        exit_code = main(
+                            [
+                                "discover",
+                                engagement.id,
+                                "--asset",
+                                repo_asset.id,
+                                "--output-root",
+                                str(output_root),
+                            ]
+                        )
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(len(source_runner.calls), 1)
+                self.assertEqual(Path(source_runner.calls[0]["source"]), source.resolve())
+                self.assertTrue((asset_discovery_dir(output_root, engagement.id, repo_asset.id) / "report.md").exists())
+                ensure_source.assert_called_once()
+
     def test_cli_discover_engagement_reports_unsupported_asset_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_root = Path(directory) / "report"
             engagement = create_engagement(output_root)
-            asset = attach_asset(output_root, engagement.id, "https://github.com/example/app").asset
+            asset = attach_asset(output_root, engagement.id, "https://apps.apple.com/us/app/example/id123").asset
             stderr = io.StringIO()
 
             with contextlib.redirect_stderr(stderr):
                 exit_code = main(["discover", engagement.id, "--asset", asset.id, "--output-root", str(output_root)])
 
             self.assertEqual(exit_code, 1)
-            self.assertIn("Discovery is not implemented for source_repo assets yet.", stderr.getvalue())
+            self.assertIn("Discovery is not implemented for mobile_app assets yet.", stderr.getvalue())
 
     def test_cli_plan_engagement_runs_linking_and_writes_engagement_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -550,6 +616,44 @@ class CliTests(unittest.TestCase):
             self.assertTrue((report_dir / "executed_tests" / "HDR-001.md").exists())
             self.assertIn(f"Engagement file: `{output_root / engagement.id / 'engagement_template.yaml'}`", preflight)
             self.assertFalse((planning_dir / "engagement_template.yaml").exists())
+
+    def test_cli_test_security_uses_source_repo_checkout_as_source_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            repo_asset = attach_asset(output_root, engagement.id, "https://github.com/example/app").asset
+            checkout = asset_dir(output_root, engagement.id, repo_asset.id) / "checkout"
+            checkout.mkdir(parents=True)
+            (checkout / "app.py").write_text("def route():\n    return '/health'\n", encoding="utf-8")
+            planning_dir = output_root / engagement.id / "plan"
+            plan = {
+                "title": "Source Plan",
+                "test_hypotheses": [
+                    {
+                        "id": "SRC-001",
+                        "title": "Source route enforces authorization",
+                        "priority": "medium",
+                        "surface": "source",
+                        "requirements": ["No credentials required."],
+                        "execution_mode": "source",
+                        "affected_source": [{"path": "app.py", "start_line": 1, "end_line": 2}],
+                    }
+                ],
+            }
+            _write_plan_memory(planning_dir, plan)
+            write_engagement_template(output_root / engagement.id, f"source:{checkout.resolve()}", plan)
+            runner = FakeSecurityTestingRunner()
+
+            with patch(
+                "mosh.crews.testing.crew.build_testing_crew_runner",
+                return_value=runner,
+            ):
+                exit_code = main(["test", engagement.id, "--output-root", str(output_root)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(runner.calls[0]["source"], str(checkout.resolve()))
+            self.assertEqual(runner.calls[0]["discovery_source_dir"], str(asset_discovery_dir(output_root, engagement.id, repo_asset.id)))
+            self.assertEqual(runner.calls[0]["executable_pending"], ["SRC-001"])
 
     def test_cli_test_security_hypothesis_option_runs_only_selected_hypothesis(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

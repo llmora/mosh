@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mosh.config import AppConfig
 from mosh.crews.discovery_source.agents import build_discovery_source_agents
@@ -14,13 +15,17 @@ from mosh.crews.discovery_source.crew import (
     DiscoverySourceOrchestrator,
     _apply_route_resolutions,
     _build_yaml_discovery_source_crew,
+    _compact_discovery_source_context,
     _route_id,
 )
+from mosh.crews.discovery_source.reporting import render_discovery_source_report
 from mosh.crews.discovery_source.tools import (
     ConfigInventoryTool,
     DependencyInventoryTool,
     MAX_INDEXED_FILES,
+    ReadSourceSliceTool,
     RouteApiExtractorTool,
+    SourceSearchTool,
     SourceInventoryTool,
     build_source_index,
 )
@@ -84,6 +89,95 @@ class DiscoverySourceToolTests(unittest.TestCase):
             self.assertFalse(any("Pods" in Path(manifest).parts for manifest in app.get("manifests", [])))
             self.assertFalse(any("Pods" in Path(entrypoint["path"]).parts for entrypoint in app.get("entrypoints", [])))
         self.assertFalse(any("Pods" in Path(entrypoint_path).parts for entrypoint_path in entrypoint_paths))
+
+    def test_source_inventory_indexes_native_c_sources_and_build_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            src = source / "src"
+            src.mkdir()
+            (src / "lumberjack.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            (src / "esent.h").write_text("#pragma once\n", encoding="utf-8")
+            (src / "libesent.def").write_text("EXPORTS\n", encoding="utf-8")
+            (src / "Makefile").write_text("all:\n\tcc lumberjack.c\n", encoding="utf-8")
+            (source / "CMakeLists.txt").write_text("project(lumberjack C)\n", encoding="utf-8")
+            (source / "meson.build").write_text("project('lumberjack', 'c')\n", encoding="utf-8")
+            (source / "LICENSE").write_text("MIT\n", encoding="utf-8")
+
+            inventory = SourceInventoryTool().run(str(source))
+            search = SourceSearchTool().run(str(source), "main")
+
+        files = {file["path"]: file for file in inventory["files"]}
+        self.assertEqual(files["src/lumberjack.c"]["role"], "source")
+        self.assertEqual(files["src/lumberjack.c"]["language"], "c")
+        self.assertEqual(files["src/esent.h"]["role"], "source")
+        self.assertEqual(files["src/libesent.def"]["role"], "source")
+        self.assertEqual(files["src/Makefile"]["role"], "manifest")
+        self.assertEqual(files["CMakeLists.txt"]["role"], "manifest")
+        self.assertEqual(files["meson.build"]["role"], "manifest")
+        self.assertEqual(files["LICENSE"]["role"], "text")
+        self.assertEqual(inventory["languages"]["c"], 2)
+        self.assertEqual(search["matches"][0]["path"], "src/lumberjack.c")
+
+    def test_source_discovery_context_and_report_include_indexed_native_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            src = source / "src"
+            src.mkdir()
+            (source / "LICENSE").write_text("MIT\n", encoding="utf-8")
+            (src / "lumberjack.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            (src / "esent.h").write_text("#pragma once\n", encoding="utf-8")
+            (src / "libesent.def").write_text("EXPORTS\n", encoding="utf-8")
+            (src / "Makefile").write_text("all:\n\tcc lumberjack.c\n", encoding="utf-8")
+
+            inventory = SourceInventoryTool().run(str(source))
+            source_index = build_source_index(
+                {"kind": "local-path", "path": str(source), "display_name": "source", "commit_sha": "unknown"},
+                inventory,
+                {"routes": []},
+                {"dependencies": [], "manifests": []},
+                {"configuration": [], "environment_variables": [], "compose_topology": []},
+            )
+
+        context = _compact_discovery_source_context(source_index)
+        context_paths = {file["path"] for file in context["files"]}
+        self.assertIn("src/lumberjack.c", context_paths)
+        self.assertIn("src/libesent.def", context_paths)
+        self.assertIn("LICENSE", context_paths)
+        self.assertFalse(context["context_limits"]["files_omitted"])
+
+        markdown = render_discovery_source_report(source_index, {})
+        self.assertIn("## Indexed Files", markdown)
+        self.assertIn("| src/lumberjack.c | source", markdown)
+        self.assertIn("| src/libesent.def | source", markdown)
+        self.assertIn("| LICENSE | text", markdown)
+
+    def test_read_source_slice_reports_missing_path_with_suggestions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            src = source / "src"
+            src.mkdir()
+            (src / "lumberjack.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(FileNotFoundError, "src/lumberjack\\.c"):
+                ReadSourceSliceTool().run(str(source), "src/ljack.c", 1, 5)
+
+            with self.assertRaisesRegex(FileNotFoundError, "src/lumberjack\\.c"):
+                ReadSourceSliceTool().run(str(source), "source/ljack.c", 1, 5)
+
+    def test_read_source_slice_reports_specific_unreadable_reasons(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / "src").mkdir()
+            (source / "src" / "binary.c").write_bytes(b"\xff\xfe\x00\x00")
+            (source / "src" / "large.c").write_text("0123456789", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "not UTF-8 readable text"):
+                ReadSourceSliceTool().run(str(source), "src/binary.c", 1, 1)
+            with self.assertRaisesRegex(ValueError, "path is not a file"):
+                ReadSourceSliceTool().run(str(source), "src", 1, 1)
+            with patch("mosh.crews.discovery_source.tools.MAX_TEXT_FILE_BYTES", 3):
+                with self.assertRaisesRegex(ValueError, "too large"):
+                    ReadSourceSliceTool().run(str(source), "src/large.c", 1, 1)
 
     def test_route_extractor_finds_framework_routes_without_vendor_routes(self) -> None:
         with fixture_source_tree() as source:

@@ -17,6 +17,7 @@ from mosh.engagements import (
     load_engagement,
 )
 from mosh.models import utc_now
+from mosh.source_assets import is_source_asset, readable_source_root
 
 
 EVIDENCE_LINKS_SCHEMA = "mosh.evidence-links.v1"
@@ -65,6 +66,7 @@ class SourceRoute:
     framework: str | None
     snippet_hash: str | None
     route_resolution_confidence: str | None
+    source_root: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,7 +121,7 @@ def build_evidence_links(
 ) -> EvidenceLinkResult:
     engagement = load_engagement(output_root, engagement_id)
     live_assets = [asset for asset in engagement.assets if asset.type == "live_url"]
-    source_assets = [asset for asset in engagement.assets if asset.type == "source_tree"]
+    source_assets = [asset for asset in engagement.assets if is_source_asset(asset)]
     skipped_assets: list[dict[str, Any]] = []
     link_records: list[dict[str, Any]] = []
 
@@ -528,6 +530,7 @@ def _source_ref_id_from_ref(value: dict[str, Any]) -> str:
             if isinstance(value.get("route_resolution_confidence"), str)
             else None
         ),
+        source_root=None,
     )
     return _source_ref_id(route) if route.asset.id else ""
 
@@ -619,22 +622,29 @@ def _live_endpoint(
 def _source_routes_from_asset(output_root: Path, engagement_id: str, asset: EngagementAsset) -> list[SourceRoute]:
     memory = _read_memory(asset_discovery_dir(output_root, engagement_id, asset.id))
     routes: list[SourceRoute] = []
+    source_root = readable_source_root(output_root, engagement_id, asset)
+    source_root_value = str(source_root) if source_root else None
     source_index = _latest_memory_content(memory, "source_index")
     if source_index:
         inventory = source_index.get("inventory") if isinstance(source_index.get("inventory"), dict) else {}
-        routes.extend(_source_routes_from_records(asset, _list(inventory.get("routes"))))
+        routes.extend(_source_routes_from_records(asset, _list(inventory.get("routes")), source_root=source_root_value))
     if not routes:
         resolved = _latest_memory_content(memory, "source_routes_resolved")
         if resolved:
-            routes.extend(_source_routes_from_records(asset, _list(resolved.get("routes"))))
+            routes.extend(_source_routes_from_records(asset, _list(resolved.get("routes")), source_root=source_root_value))
     if not routes:
         raw_routes = _latest_memory_content(memory, "source_routes")
         if raw_routes:
-            routes.extend(_source_routes_from_records(asset, _list(raw_routes.get("routes"))))
+            routes.extend(_source_routes_from_records(asset, _list(raw_routes.get("routes")), source_root=source_root_value))
     return _dedupe_source_routes(routes)
 
 
-def _source_routes_from_records(asset: EngagementAsset, records: list[Any]) -> list[SourceRoute]:
+def _source_routes_from_records(
+    asset: EngagementAsset,
+    records: list[Any],
+    *,
+    source_root: str | None = None,
+) -> list[SourceRoute]:
     routes: list[SourceRoute] = []
     for item in records:
         if not isinstance(item, dict):
@@ -653,6 +663,7 @@ def _source_routes_from_records(asset: EngagementAsset, records: list[Any]) -> l
                 framework=_optional_text(item.get("framework")),
                 snippet_hash=_optional_text(item.get("snippet_hash")),
                 route_resolution_confidence=_optional_text(item.get("route_resolution_confidence")),
+                source_root=source_root,
             )
         )
     return routes

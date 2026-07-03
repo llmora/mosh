@@ -148,8 +148,11 @@ draft_security_test_plan_task:
     to populate affected_source and evidence_sources. In engagement-backed
     planning, these source details may live under
     asset_evidence.source[].discovery.source_index instead of the top-level
-    discovery_source marker. If discovery_live is absent, do not invent runtime
-    reachability; use source or deferred modes.
+    discovery_source marker. Treat source_index.inventory.files as the
+    authoritative indexed file list: cite concrete paths from it instead of
+    relying only on language counts or narrative summaries, and do not say a
+    file path is unknown when inventory.files names it. If discovery_live is
+    absent, do not invent runtime reachability; use source or deferred modes.
     When source is available, do not defer work solely because it requires
     source inspection, bounded source search, manual grep, source route
     extraction, prompt-template extraction, middleware review, configuration

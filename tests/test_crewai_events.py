@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -126,6 +127,44 @@ class MoshCrewAIEventListenerTests(unittest.TestCase):
         usage = json.loads(usage_path.read_text(encoding="utf-8"))
         self.assertEqual(len(usage), 1)
         self.assertEqual(usage[0]["total_tokens"], 50)
+
+    def test_concurrent_flushes_and_memory_events_preserve_json_list(self):
+        from mosh.crews.events import MoshCrewAIEventListener
+
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(8)
+
+        def run_catching(fn, worker: int) -> None:
+            try:
+                barrier.wait()
+                fn(worker)
+            except BaseException as exc:
+                errors.append(exc)
+
+        def flush_buffered_events(worker: int) -> None:
+            for index in range(25):
+                listener = MoshCrewAIEventListener(self.memory)
+                listener._record("crewai", "buffered", "Buffered event", {"worker": worker, "index": index})
+                listener._flush()
+
+        def record_memory_events(worker: int) -> None:
+            for index in range(25):
+                self.memory.record_event("orchestrator", "direct", "Direct event", {"worker": worker, "index": index})
+
+        threads = [
+            *(threading.Thread(target=run_catching, args=(flush_buffered_events, worker)) for worker in range(4)),
+            *(threading.Thread(target=run_catching, args=(record_memory_events, worker)) for worker in range(4, 8)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        if errors:
+            raise AssertionError(f"concurrent event writes failed: {errors!r}")
+
+        events = json.loads((self.report_dir / "events.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(events), 200)
 
     @unittest.skipUnless(_crewai_events_available(), "crewai>=1.14.7 required")
     def test_crew_started_event_handler_buffers_then_flushes(self):

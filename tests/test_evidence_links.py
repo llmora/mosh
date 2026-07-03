@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
+from mosh.engagements import attach_asset, asset_dir, asset_discovery_dir, create_engagement
 from mosh.evidence_links import (
     EVIDENCE_LINKS_SCHEMA,
     build_evidence_links,
@@ -92,6 +92,56 @@ class EvidenceLinksTests(unittest.TestCase):
             self.assertEqual(parameterized["asset_refs"], [source_asset.id, live_asset.id])
             self.assertEqual(parameterized["refs"][0]["path"], "api/users.py")
             self.assertEqual(parameterized["refs"][1]["path"], "/api/users/123")
+
+    def test_build_evidence_links_treats_source_repo_as_source_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            live_asset = attach_asset(output_root, engagement.id, "https://app.example.test").asset
+            repo_asset = attach_asset(output_root, engagement.id, "https://github.com/example/app").asset
+            checkout = asset_dir(output_root, engagement.id, repo_asset.id) / "checkout"
+            checkout.mkdir(parents=True)
+            _write_memory(
+                asset_discovery_dir(output_root, engagement.id, live_asset.id),
+                [
+                    {
+                        "kind": "crawled_page",
+                        "content": {
+                            "url": "https://app.example.test/api/status",
+                            "status": 200,
+                            "links": [],
+                            "references": [],
+                            "forms": [],
+                        },
+                    }
+                ],
+            )
+            _write_memory(
+                asset_discovery_dir(output_root, engagement.id, repo_asset.id),
+                [
+                    {
+                        "kind": "source_index",
+                        "content": {
+                            "inventory": {
+                                "routes": [
+                                    {
+                                        "method": "GET",
+                                        "full_route": "/api/status",
+                                        "path": "api/status.py",
+                                    }
+                                ]
+                            }
+                        },
+                    }
+                ],
+            )
+
+            result = build_evidence_links(output_root, engagement.id)
+
+            self.assertEqual(len(result.payload["links"]), 1)
+            link = result.payload["links"][0]
+            self.assertEqual(link["asset_refs"], [repo_asset.id, live_asset.id])
+            self.assertEqual(link["refs"][0]["path"], "api/status.py")
 
     def test_build_evidence_links_adds_validated_model_assisted_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

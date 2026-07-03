@@ -37,6 +37,7 @@ from mosh.engagements import (
 )
 from mosh.memory import FileMemory
 from mosh.models import Event, MemoryItem, utc_now
+from mosh.source_assets import first_source_asset, readable_source_root
 
 
 EXECUTION_METADATA_START = "<!-- mosh-execution"
@@ -127,23 +128,29 @@ class SecurityTestingOrchestrator:
         selected_hypothesis_ids = _normalize_hypothesis_ids(hypothesis_ids)
         engagement = load_engagement(self.output_root, engagement_id)
         live_asset = next((asset for asset in engagement.assets if asset.type == "live_url"), None)
-        source_asset = next((asset for asset in engagement.assets if asset.type == "source_tree"), None)
+        source_asset = first_source_asset(engagement.assets)
         url = live_asset.locator if live_asset else None
-        source = source_asset.locator if source_asset else None
+        source_root = readable_source_root(self.output_root, engagement.id, source_asset) if source_asset else None
+        source = str(source_root) if source_root else None
         if not url and not source:
-            raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
+            if source_asset:
+                raise ValueError(
+                    f"Engagement {engagement.id} source asset {source_asset.id} is not available locally; "
+                    "run `mosh discover` for the asset first."
+                )
+            raise ValueError(f"Engagement {engagement.id} has no live_url or source assets to test.")
         domain_dir = engagement_dir(self.output_root, engagement.id)
         if live_asset:
             discovery_dir = asset_discovery_dir(self.output_root, engagement.id, live_asset.id)
         elif source_asset:
             discovery_dir = asset_discovery_dir(self.output_root, engagement.id, source_asset.id)
         else:
-            raise ValueError(f"Engagement {engagement.id} has no live_url or source_tree assets to test.")
+            raise ValueError(f"Engagement {engagement.id} has no live_url or source assets to test.")
         discovery_source_dir = (
-            asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset else None
+            asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset and source else None
         )
         discovery_live_asset = (engagement.id, live_asset.id) if live_asset else None
-        discovery_source_asset = (engagement.id, source_asset.id) if source_asset else None
+        discovery_source_asset = (engagement.id, source_asset.id) if source_asset and source else None
         planning_dir = engagement_plan_dir(self.output_root, engagement.id)
         report_dir = domain_dir / "security-testing"
         engagement_path = domain_dir / "engagement_template.yaml"

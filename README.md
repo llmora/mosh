@@ -184,11 +184,12 @@ An engagement is the top-level assessment container. Assets are the components t
 
 You do not need to provide all of these, e.g. `mosh` works with just a single asset - but providing more assets allows better security hypotheses to be created and tested, leading to more effective vulnerability identification.
 
-For the fastest path, pass a live URL or local source tree directly. `mosh` creates an engagement, attaches the asset, runs discovery, and prints the next command:
+For the fastest path, pass a live URL, local source tree, or HTTPS repository URL directly. `mosh` creates an engagement, attaches the asset, runs discovery, and prints the next command:
 
 ```bash
 uv run mosh https://app.example.com
 uv run mosh /path/to/repo
+uv run mosh https://github.com/example/app
 ```
 
 You can also create and attach assets explicitly:
@@ -202,6 +203,9 @@ Attached: asset_live_1 (live_url)
 
 $ uv run mosh engagement attach eng_a1b2c3d4 /path/to/repo
 Attached: asset_source_1 (source_tree)
+
+$ uv run mosh engagement attach eng_a1b2c3d4 https://github.com/example/app
+Attached: asset_repo_1 (source_repo)
 ```
 
 `mosh` infers the asset type from the locator. Use `--type` when a URL is ambiguous, for example when a GitHub URL should be treated as a live web target instead of a source repository.
@@ -243,6 +247,8 @@ Discovery writes the result of the discovery of each asset in a markdown report:
 ```text
 report/<engagement-id>/assets/<asset-id>/discovery/report.md
 ```
+
+For source assets, discovery reports include a bounded indexed file list, including source files, build files, documentation and license files, so planning can reference concrete paths instead of relying only on language counts or summaries.
 
 Live URL discovery also performs passive external OSINT. `mosh` queries crt.sh by default and uses Shodan, Censys, and SecurityTrails when their API credentials are configured. These lookups are generated only from the authorized root domain for the live URL, and every returned host or service is filtered through normal scope rules before it can become a discovery candidate or be crawled.
 
@@ -541,3 +547,18 @@ If you are working on docker tool image improvements, make sure you regularly re
 ```bash
 ./scripts/setup.sh --force-docker
 ```
+
+## Interesting read
+
+https://blog.cloudflare.com/build-your-own-vulnerability-harness/
+https://www.anthropic.com/engineering/harness-design-long-running-apps
+
+## Similar applications
+
+https://github.com/usestrix/strix/
+https://pentestgpt.com/ - https://github.com/GreyDGL/PentestGPT
+https://github.com/vxcontrol/pentagi
+https://github.com/xalgord/xalgorix
+https://github.com/GH05TCREW/PentestAgent
+https://github.com/anthropics/defending-code-reference-harness/
+https://github.com/hadriansecurity/OpenHack/

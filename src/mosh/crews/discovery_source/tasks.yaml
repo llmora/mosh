@@ -151,8 +151,12 @@ map_source_components_task:
 
     Every concrete claim must be grounded in paths, route records, manifest
     names, dependency/config entries, or evidence_refs from the source discovery
-    context. Do not invent files, routes, apps, dependencies, credentials,
-    production behavior, or vulnerabilities.
+    context. Treat the source discovery context's files list as the
+    authoritative indexed file inventory: preserve concrete paths for source
+    files, headers, manifests, lockfiles, module-definition files,
+    documentation, and license files. Do not say a file path is unknown when it
+    is present in that files list. Do not invent files, routes, apps,
+    dependencies, credentials, production behavior, or vulnerabilities.
   expected_output: >
     Confirmation that submit_source_component_map recorded a bounded,
     evidence-backed application purpose and component map.
@@ -189,8 +193,11 @@ analyze_discovery_source_gaps_task:
     Focus on missing app boundaries, likely unparsed entrypoints, framework
     patterns not covered by deterministic extraction, route mount uncertainty,
     mobile app coverage gaps, configuration blind spots, and places where
-    source evidence should later be correlated with live discovery. Do not make
-    vulnerability claims during discovery.
+    source evidence should later be correlated with live discovery. Treat the
+    source discovery context's files list as authoritative; do not report
+    missing or unknown paths for files that are already named there, and do not
+    claim the indexed file inventory is incomplete unless context_limits says
+    files_omitted is true. Do not make vulnerability claims during discovery.
   expected_output: >
     Confirmation that submit_source_gap_analysis recorded source discovery gaps,
     limitations, and follow-up recommendations.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import difflib
 import json
 import os
 import re
@@ -41,8 +42,17 @@ IGNORED_FILE_NAMES = {
 }
 
 SOURCE_SUFFIX_LANGUAGES = {
+    ".asm": "assembly",
+    ".c": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cxx": "cpp",
+    ".def": "module-definition",
     ".go": "go",
     ".gradle": "gradle",
+    ".h": "c",
+    ".hh": "cpp",
+    ".hpp": "cpp",
     ".java": "java",
     ".js": "javascript",
     ".jsx": "javascript",
@@ -52,7 +62,9 @@ SOURCE_SUFFIX_LANGUAGES = {
     ".php": "php",
     ".py": "python",
     ".rb": "ruby",
+    ".rc": "resource-script",
     ".rs": "rust",
+    ".s": "assembly",
     ".swift": "swift",
     ".ts": "typescript",
     ".tsx": "typescript",
@@ -60,12 +72,18 @@ SOURCE_SUFFIX_LANGUAGES = {
 
 MANIFEST_NAMES = {
     "cargo.toml",
+    "cmakelists.txt",
     "composer.json",
+    "configure",
     "go.mod",
+    "gnumakefile",
+    "makefile",
+    "meson.build",
     "package.json",
     "pom.xml",
     "pyproject.toml",
     "requirements.txt",
+    "sconstruct",
     "settings.gradle",
     "settings.gradle.kts",
     "package.swift",
@@ -84,6 +102,28 @@ LOCKFILE_NAMES = {
     "uv.lock",
     "yarn.lock",
 }
+
+TEXT_FILE_NAMES = {
+    "authors",
+    "changelog",
+    "changes",
+    "contributors",
+    "copying",
+    "install",
+    "license",
+    "news",
+    "notice",
+    "readme",
+    "todo",
+}
+
+TEXT_FILE_NAME_PREFIXES = (
+    "changelog",
+    "copying",
+    "license",
+    "notice",
+    "readme",
+)
 
 CONFIG_NAME_PATTERNS = (
     ".env.example",
@@ -328,9 +368,7 @@ class ReadSourceSliceTool:
         path = (root / relative_path).resolve()
         if root not in path.parents and path != root:
             raise ValueError("Source slice path escapes source root.")
-        text = _read_text_file(path)
-        if text is None:
-            raise ValueError(f"Source slice is not readable text: {relative_path}")
+        text = _read_required_source_text(root, path, relative_path)
         lines = text.splitlines()
         selected = lines[start_line - 1 : end_line]
         body = "\n".join(selected)
@@ -370,6 +408,8 @@ def build_source_index(
         "schema": SOURCE_INDEX_SCHEMA,
         "source": source_info,
         "inventory": {
+            "file_count": inventory.get("total_files"),
+            "files_truncated": bool(inventory.get("truncated")),
             "files": inventory.get("files", []),
             "apps": inventory.get("apps", []),
             "languages": inventory.get("languages", {}),
@@ -384,6 +424,7 @@ def build_source_index(
             "configuration": configuration.get("configuration", []),
             "environment_variables": configuration.get("environment_variables", []),
             "compose_topology": configuration.get("compose_topology", []),
+            "ignored_dirs": inventory.get("ignored_dirs", {}),
         },
         "evidence_refs": evidence_refs,
         "summary": source_summary(inventory, routes, dependencies, configuration),
@@ -405,6 +446,7 @@ def source_summary(
 ) -> dict[str, Any]:
     return {
         "files_indexed": int(inventory.get("total_files") or 0),
+        "files_truncated": bool(inventory.get("truncated")),
         "languages_identified": len(inventory.get("languages") or {}),
         "routes_identified": len(routes.get("routes") or []),
         "apps_identified": len(inventory.get("apps") or []),
@@ -949,6 +991,8 @@ def _file_role(path: Path) -> str:
         return "lockfile"
     if _looks_like_config(path):
         return "config"
+    if _is_text_file_name(name, suffix):
+        return "text"
     if suffix in SOURCE_SUFFIX_LANGUAGES:
         return "source"
     if suffix in TEXT_SUFFIXES:
@@ -958,6 +1002,14 @@ def _file_role(path: Path) -> str:
 
 def _language_for_path(path: Path) -> str | None:
     return SOURCE_SUFFIX_LANGUAGES.get(path.suffix.lower())
+
+
+def _is_text_file_name(name: str, suffix: str) -> bool:
+    if name in TEXT_FILE_NAMES:
+        return True
+    if suffix:
+        return False
+    return any(name.startswith(f"{prefix}-") for prefix in TEXT_FILE_NAME_PREFIXES)
 
 
 def _looks_like_config(path: Path) -> bool:
@@ -1759,6 +1811,68 @@ def _read_text_file(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _read_required_source_text(root: Path, path: Path, relative_path: str) -> str:
+    if not path.exists():
+        suggestions = _format_source_path_suggestions(root, relative_path)
+        raise FileNotFoundError(f"Source slice path not found: {relative_path}{suggestions}")
+    if not path.is_file():
+        raise ValueError(f"Source slice path is not a file: {relative_path}")
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise ValueError(f"Source slice path cannot be statted: {relative_path}: {exc}") from exc
+    if size > MAX_TEXT_FILE_BYTES:
+        raise ValueError(
+            f"Source slice is too large to read: {relative_path} "
+            f"({size} bytes, max {MAX_TEXT_FILE_BYTES} bytes)"
+        )
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Source slice is not UTF-8 readable text: {relative_path}") from exc
+    except OSError as exc:
+        raise ValueError(f"Source slice cannot be read: {relative_path}: {exc}") from exc
+
+
+def _format_source_path_suggestions(root: Path, relative_path: str) -> str:
+    suggestions = _source_path_suggestions(root, relative_path)
+    if not suggestions:
+        return ""
+    return f". Did you mean: {', '.join(suggestions)}?"
+
+
+def _source_path_suggestions(root: Path, relative_path: str, limit: int = 5) -> list[str]:
+    target = relative_path.replace("\\", "/").strip("/")
+    if not target:
+        return []
+    target_path = Path(target)
+    target_name = target_path.name.lower()
+    target_stem = target_path.stem.lower()
+    target_suffix = target_path.suffix.lower()
+    target_parent = target_path.parent.as_posix().lower() if target_path.parent != Path(".") else ""
+    scored: list[tuple[float, str]] = []
+    for path in _iter_nonignored_files(root):
+        candidate = _relative_path(root, path)
+        candidate_path = Path(candidate)
+        candidate_name = candidate_path.name.lower()
+        candidate_stem = candidate_path.stem.lower()
+        candidate_parent = candidate_path.parent.as_posix().lower() if candidate_path.parent != Path(".") else ""
+        name_score = difflib.SequenceMatcher(None, target_name, candidate_name).ratio()
+        stem_score = difflib.SequenceMatcher(None, target_stem, candidate_stem).ratio() if target_stem else 0.0
+        path_score = difflib.SequenceMatcher(None, target.lower(), candidate.lower()).ratio()
+        score = max(name_score, stem_score, path_score)
+        if target_suffix and target_suffix == candidate_path.suffix.lower():
+            score += 0.12
+        if target_parent and target_parent == candidate_parent:
+            score += 0.18
+        if target_stem and (target_stem in candidate_stem or candidate_stem in target_stem):
+            score += 0.15
+        if score >= 0.55:
+            scored.append((score, candidate))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [candidate for _, candidate in scored[:limit]]
 
 
 def _relative_path(root: Path, path: Path) -> str:

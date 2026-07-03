@@ -35,6 +35,7 @@ from mosh.engagements import (
     validate_asset_type,
 )
 from mosh.harness_improvements import iter_harness_improvements
+from mosh.source_assets import ensure_source_root
 from mosh.crews.planning.crew import SecurityTestPlanningOrchestrator
 from mosh.crews.testing.crew import (
     SecurityTestPreflightResult,
@@ -52,7 +53,7 @@ COMMANDS = {
     "report",
     "test",
 }
-SHORTCUT_DISCOVERY_ASSET_TYPES = {"live_url", "source_tree"}
+SHORTCUT_DISCOVERY_ASSET_TYPES = {"live_url", "source_tree", "source_repo"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,7 +190,7 @@ def _is_shortcut_invocation(argv: list[str]) -> bool:
 
 def _run_shortcut(config: AppConfig, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="mosh")
-    parser.add_argument("locator", help="Live URL or source tree path")
+    parser.add_argument("locator", help="Live URL, source tree path, or HTTPS source repository URL")
     parser.add_argument("--type", help=argparse.SUPPRESS)
     parser.add_argument("--max-pages", type=int, default=200, help=argparse.SUPPRESS)
     parser.add_argument("--max-depth", type=int, default=config.max_depth, help=argparse.SUPPRESS)
@@ -431,12 +432,13 @@ def _run_asset_discovery(
             report_dir=report_dir,
             engagement_steer=steer,
         )
-    if asset.type == "source_tree":
+    if asset.type in {"source_tree", "source_repo"}:
+        source_root = ensure_source_root(output_root, engagement.id, asset)
         return DiscoverySourceOrchestrator(
             config,
             output_root=output_root,
             event_sink=_print_event,
-        ).run(asset.locator, report_dir=report_dir, engagement_steer=steer)
+        ).run(str(source_root), report_dir=report_dir, engagement_steer=steer)
     raise ValueError(f"Discovery is not implemented for {asset.type} assets yet.")
 
 

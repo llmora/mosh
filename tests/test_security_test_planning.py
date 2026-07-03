@@ -586,6 +586,21 @@ class SecurityTestPlanningTests(unittest.TestCase):
                             "kind": "source_index",
                             "content": {
                                 "schema": "mosh.source-index.v1",
+                                "summary": {"files_indexed": 2, "files_truncated": False},
+                                "inventory": {
+                                    "file_count": 2,
+                                    "files_truncated": False,
+                                    "files": [
+                                        {"path": "src/lumberjack.c", "role": "source", "language": "c", "size": 200},
+                                        {
+                                            "path": "src/libesent.def",
+                                            "role": "source",
+                                            "language": "module-definition",
+                                            "size": 50,
+                                        },
+                                    ],
+                                    "languages": {"c": 1, "module-definition": 1},
+                                },
                                 "evidence_refs": [{"path": "app.py", "start_line": 1, "end_line": 2}],
                             },
                         },
@@ -600,6 +615,10 @@ class SecurityTestPlanningTests(unittest.TestCase):
             self.assertEqual(context["report_markdown"], "# Source Discovery\n")
             self.assertEqual(context["source_index"]["schema"], "mosh.source-index.v1")
             self.assertEqual(context["source_index"]["evidence_refs"][0]["path"], "app.py")
+            files = context["source_index"]["inventory"]["files"]
+            self.assertEqual([file["path"] for file in files], ["src/lumberjack.c", "src/libesent.def"])
+            self.assertFalse(context["source_index"]["context_limits"]["files_omitted"])
+            self.assertFalse(context["context_limits"]["source_files_omitted"])
             self.assertNotIn("events", context)
             self.assertNotIn("memory", context)
 

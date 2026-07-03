@@ -48,6 +48,7 @@ def render_discovery_source_report(source_index: dict[str, Any], report_content:
     )
     _add_summary_statistics(lines, summary)
     _add_languages_section(lines, inventory.get("languages"))
+    _add_files_section(lines, "Indexed Files", inventory.get("files"))
     _add_apps_section(lines, inventory.get("apps"))
     _add_component_map_sections(lines, component_map)
     _add_files_section(lines, "Entrypoints", inventory.get("entrypoints"))

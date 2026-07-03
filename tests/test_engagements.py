@@ -13,6 +13,7 @@ from mosh.engagements import (
     infer_asset_type,
     load_asset,
     load_engagement,
+    normalize_asset_locator,
     record_asset_discovery,
     save_engagement,
 )
@@ -42,6 +43,7 @@ class EngagementTests(unittest.TestCase):
 
             live_result = attach_asset(output_root, engagement.id, "https://App.Example.test/")
             source_result = attach_asset(output_root, engagement.id, str(source), label="API source")
+            repo_result = attach_asset(output_root, engagement.id, "https://github.com/Example/App/")
 
             self.assertTrue(live_result.created)
             self.assertEqual(live_result.asset.id, "asset_live_1")
@@ -50,16 +52,22 @@ class EngagementTests(unittest.TestCase):
             self.assertEqual(source_result.asset.id, "asset_source_1")
             self.assertEqual(source_result.asset.type, "source_tree")
             self.assertEqual(source_result.asset.label, "API source")
+            self.assertEqual(repo_result.asset.id, "asset_repo_1")
+            self.assertEqual(repo_result.asset.type, "source_repo")
+            self.assertEqual(repo_result.asset.locator, "https://github.com/Example/App")
             live_asset_path = asset_dir(output_root, engagement.id, "asset_live_1") / "asset.json"
             source_asset_path = asset_dir(output_root, engagement.id, "asset_source_1") / "asset.json"
+            repo_asset_path = asset_dir(output_root, engagement.id, "asset_repo_1") / "asset.json"
             self.assertTrue(live_asset_path.exists())
             self.assertTrue(source_asset_path.exists())
+            self.assertTrue(repo_asset_path.exists())
             manifest = json.loads((output_root / engagement.id / "engagement.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 manifest["assets"],
                 [
                     {"id": "asset_live_1", "created_at": live_result.asset.created_at},
                     {"id": "asset_source_1", "created_at": source_result.asset.created_at},
+                    {"id": "asset_repo_1", "created_at": repo_result.asset.created_at},
                 ],
             )
             self.assertNotIn("type", manifest["assets"][0])
@@ -69,9 +77,11 @@ class EngagementTests(unittest.TestCase):
             source_asset_payload = json.loads(source_asset_path.read_text(encoding="utf-8"))
             self.assertEqual(source_asset_payload["label"], "API source")
             self.assertEqual(source_asset_payload["type"], "source_tree")
+            repo_asset_payload = json.loads(repo_asset_path.read_text(encoding="utf-8"))
+            self.assertEqual(repo_asset_payload["type"], "source_repo")
 
             reloaded = load_engagement(output_root, engagement.id)
-            self.assertEqual([asset.id for asset in reloaded.assets], ["asset_live_1", "asset_source_1"])
+            self.assertEqual([asset.id for asset in reloaded.assets], ["asset_live_1", "asset_source_1", "asset_repo_1"])
 
     def test_attach_asset_is_idempotent_for_same_locator_and_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,10 +150,35 @@ class EngagementTests(unittest.TestCase):
 
     def test_infer_asset_type_recognizes_repositories_and_mobile_app_urls(self) -> None:
         self.assertEqual(infer_asset_type("https://github.com/example/app"), "source_repo")
-        self.assertEqual(infer_asset_type("git@gitlab.com:example/app.git"), "source_repo")
+        self.assertEqual(infer_asset_type("https://github.com/example/app.git"), "source_repo")
+        self.assertEqual(infer_asset_type("https://gitlab.com/example/platform/app"), "source_repo")
+        self.assertEqual(infer_asset_type("https://bitbucket.org/example/app"), "source_repo")
+        self.assertEqual(infer_asset_type("https://git.example.test/example/app.git"), "source_repo")
+        self.assertEqual(infer_asset_type("https://example.github.io/app"), "live_url")
+        self.assertEqual(infer_asset_type("https://git.example.test/example/app"), "live_url")
         self.assertEqual(infer_asset_type("https://apps.apple.com/us/app/example/id123"), "mobile_app")
         self.assertEqual(infer_asset_type("https://play.google.com/store/apps/details?id=example"), "mobile_app")
         self.assertEqual(infer_asset_type("https://app.example.test"), "live_url")
+        with self.assertRaisesRegex(ValueError, "only support HTTPS"):
+            infer_asset_type("git@gitlab.com:example/app.git")
+        with self.assertRaisesRegex(ValueError, "repository root"):
+            infer_asset_type("https://github.com/example/app/issues/1")
+
+    def test_normalize_source_repo_requires_https_repo_root_or_clone_url(self) -> None:
+        self.assertEqual(
+            normalize_asset_locator("https://GitHub.com/Example/App/", "source_repo"),
+            "https://github.com/Example/App",
+        )
+        self.assertEqual(
+            normalize_asset_locator("https://git.example.test/team/app.git/", "source_repo"),
+            "https://git.example.test/team/app.git",
+        )
+        with self.assertRaisesRegex(ValueError, "only support HTTPS"):
+            normalize_asset_locator("ssh://github.com/example/app.git", "source_repo")
+        with self.assertRaisesRegex(ValueError, "repository root"):
+            normalize_asset_locator("https://github.com/example/app/pull/1", "source_repo")
+        with self.assertRaisesRegex(ValueError, "Git Pages URLs are live URLs"):
+            normalize_asset_locator("https://example.github.io/app", "source_repo")
 
     def test_created_engagement_id_is_path_safe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
