@@ -66,6 +66,7 @@ Tools may be:
 
 External tools must not be installed on the host. They should run in Docker containers.
 
+The discovery tool image pins Katana at v1.7.0 and builds it with Go 1.26, the minimum version required by that Katana release. Pinning the tool release keeps later upstream Go requirements from breaking rebuilds unexpectedly.
 
 Tool image source should stay grouped by crew/tooling domain:
 

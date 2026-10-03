@@ -1,6 +1,6 @@
-FROM golang:1.25-bookworm AS katana-builder
+FROM golang:1.26-bookworm AS katana-builder
 
-RUN go install github.com/projectdiscovery/katana/cmd/katana@latest
+RUN go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0
 RUN go install github.com/SharokhAtaie/extractify@latest
 
 FROM debian:bookworm-slim
