@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
 
 class DiscoveryToolsContainerTests(unittest.TestCase):
+    def test_katana_builder_uses_compatible_go_and_pinned_release(self) -> None:
+        dockerfile = Path("tools/discovery/Dockerfile").read_text(encoding="utf-8")
+        go_version = re.search(r"^FROM golang:(\d+)\.(\d+)-bookworm AS katana-builder$", dockerfile, re.MULTILINE)
+
+        self.assertIsNotNone(go_version)
+        self.assertGreaterEqual((int(go_version[1]), int(go_version[2])), (1, 26))
+        self.assertIn("go install github.com/projectdiscovery/katana/cmd/katana@v1.7.0", dockerfile)
+
     def test_dockerfile_installs_extractify(self) -> None:
         dockerfile = Path("tools/discovery/Dockerfile").read_text(encoding="utf-8")
 
