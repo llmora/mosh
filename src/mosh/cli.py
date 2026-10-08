@@ -5,6 +5,7 @@ import json
 import sys
 from types import SimpleNamespace
 from pathlib import Path
+from typing import Callable
 
 from mosh.config import AppConfig
 from mosh.conversation import EngagementChatOrchestrator
@@ -417,14 +418,17 @@ def _run_asset_discovery(
     engagement: Engagement,
     asset: EngagementAsset,
     args: argparse.Namespace,
+    *,
+    event_sink: Callable[[Event], None] | None = None,
 ) -> Path:
     report_dir = asset_discovery_dir(output_root, engagement.id, asset.id)
     steer = load_engagement_steer(engagement_dir(output_root, engagement.id) / "engagement_template.yaml")
+    sink = event_sink or _print_event
     if asset.type == "live_url":
         return DiscoveryLiveOrchestrator(
             config,
             output_root=output_root,
-            event_sink=_print_event,
+            event_sink=sink,
         ).run(
             asset.locator,
             max_pages=args.max_pages,
@@ -437,7 +441,7 @@ def _run_asset_discovery(
         return DiscoverySourceOrchestrator(
             config,
             output_root=output_root,
-            event_sink=_print_event,
+            event_sink=sink,
         ).run(str(source_root), report_dir=report_dir, engagement_steer=steer)
     raise ValueError(f"Discovery is not implemented for {asset.type} assets yet.")
 

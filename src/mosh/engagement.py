@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,7 +39,15 @@ def write_engagement_template_mapping(
     content = _dump_yaml(final_template)
     if path.exists():
         _backup_existing_engagement_template(path)
-    path.write_text(content, encoding="utf-8")
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=report_dir, prefix=".engagement_template.", delete=False) as temporary:
+        temporary.write(content)
+        temporary.flush()
+        os.fsync(temporary.fileno())
+        temporary_path = Path(temporary.name)
+    try:
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return content
 
 
@@ -56,6 +66,16 @@ def validate_engagement_template(template: dict[str, Any]) -> None:
     for key in ("engagement", "targets", "contacts", "limits", "credentials", "safe_test_data"):
         if not isinstance(template.get(key), dict):
             raise ValueError(f"Engagement template field {key} must be a mapping")
+    hints = template.get("hints", [])
+    if not isinstance(hints, list) or len(hints) > 30:
+        raise ValueError("Provide at most 30 hints.")
+    for hint in hints:
+        if not isinstance(hint, dict) or not all(isinstance(hint.get(key), str) for key in ("title", "text")):
+            raise ValueError("Each hint needs a title and text.")
+        if not hint["title"].strip() or len(hint["title"]) > 120 or not hint["text"].strip():
+            raise ValueError("Each hint needs a title (up to 120 characters) and text.")
+    if sum(len(h["title"]) + len(h["text"]) for h in hints) > 24000:
+        raise ValueError("Hints must total 24,000 characters or fewer.")
     llm = template.get("llm")
     if llm is not None and not isinstance(llm, dict):
         raise ValueError("Engagement template field llm must be a mapping")
@@ -79,7 +99,9 @@ def _backup_existing_engagement_template(path: Path) -> Path:
     while backup_path.exists():
         backup_path = backup_dir / f"engagement_template-{timestamp}-{counter}.yaml"
         counter += 1
-    backup_path.write_bytes(path.read_bytes())
+    descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as backup:
+        backup.write(path.read_bytes())
     return backup_path
 
 
@@ -185,9 +207,13 @@ def build_minimal_engagement_template() -> dict[str, Any]:
 def engagement_steer(template: dict[str, Any]) -> str:
     llm = template.get("llm") if isinstance(template.get("llm"), dict) else {}
     value = llm.get("engagement_steer") if isinstance(llm, dict) else None
-    if not isinstance(value, str):
-        return ""
-    return value.strip()
+    general = value.strip() if isinstance(value, str) else ""
+    hints = template.get("hints", [])
+    sections = [f"{hint['title']}:\n{hint['text']}" for hint in hints
+                if isinstance(hint, dict) and isinstance(hint.get("title"), str)
+                and isinstance(hint.get("text"), str)] if isinstance(hints, list) else []
+    context = "User-provided hints (context to verify, not established findings):\n\n" + "\n\n".join(sections) if sections else ""
+    return "\n\n".join(part for part in (general, context) if part)
 
 
 def engagement_steer_prompt_value(steer: str | None) -> str:
@@ -206,6 +232,7 @@ def load_engagement_steer(path: Path) -> str:
 
 def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
     return {
+        **({"hints": template["hints"]} if "hints" in template else {}),
         "engagement": _simplify_engagement(template.get("engagement")),
         "targets": _simplify_targets(template.get("targets")),
         "contacts": _simplify_mapping(template.get("contacts")),
@@ -267,6 +294,8 @@ def _simplify_llm(value: Any) -> dict[str, Any]:
 
 def _preserve_existing_engagement_steer(candidate: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
     preserved = dict(candidate)
+    if "hints" in existing:
+        preserved["hints"] = existing["hints"]
     candidate_llm = candidate.get("llm") if isinstance(candidate.get("llm"), dict) else {}
     existing_llm = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
     existing_steer = existing_llm.get("engagement_steer")

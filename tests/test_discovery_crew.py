@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from importlib import resources
@@ -147,6 +148,26 @@ class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
         self.assertEqual(llm.kwargs["base_url"], "http://localhost:11434/v1")
         self.assertEqual(llm.kwargs["api_key"], "custom-key")
 
+    def test_llm_routes_custom_and_provider_models_in_one_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "mosh.yaml").write_text("models:\n  discovery_live:\n    crawler: custom/local-model\n", encoding="utf-8")
+            (root / ".env").write_text(
+                "MOSH_LLM_BASE_URL=http://localhost:11434/v1\n"
+                "DEEPSEEK_API_KEY=deepseek-key\nOPENROUTER_API_KEY=router-key\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(root / "mosh.yaml", root / ".env")
+
+        custom = _llm(FakeLLMCrewAI, config, config.models.discovery_live.crawler)
+        direct = _llm(FakeLLMCrewAI, config, config.models.discovery_live.reporter)
+        router = _llm(FakeLLMCrewAI, config, "openrouter/deepseek/deepseek-v4-pro")
+        self.assertEqual((custom.kwargs["model"], custom.kwargs["base_url"]), ("local-model", "http://localhost:11434/v1"))
+        self.assertEqual((direct.kwargs["model"], direct.kwargs["provider"]), ("deepseek-v4-flash", "deepseek"))
+        self.assertNotIn("base_url", direct.kwargs)
+        self.assertEqual((router.kwargs["model"], router.kwargs["base_url"]), ("deepseek/deepseek-v4-pro", config.openrouter_base_url))
+
     def test_llm_requires_custom_base_url_for_custom_model_prefix(self) -> None:
         with self.assertRaisesRegex(CrewAIUnavailable, "MOSH_LLM_BASE_URL"):
             _llm(
@@ -154,6 +175,15 @@ class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
                 AppConfig(custom_llm_api_key="custom-key", openrouter_api_key="openrouter-key"),
                 "custom/llama3.1",
             )
+
+    def test_llm_uses_local_placeholder_for_keyless_custom_endpoint(self) -> None:
+        llm = _llm(
+            FakeLLMCrewAI,
+            AppConfig(custom_llm_base_url="http://localhost:11434/v1"),
+            "custom/llama3.1",
+        )
+        self.assertEqual(llm.kwargs["base_url"], "http://localhost:11434/v1")
+        self.assertEqual(llm.kwargs["api_key"], "not-required")
 
     def test_builds_crawler_agent_with_configured_discovery_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1674,7 +1674,7 @@ def _unblock_guidance(blocker: str) -> str:
         key = blocker.removeprefix("missing safe_test_data.").strip()
         return f"add a non-empty `safe_test_data.{key}` value."
     if blocker.startswith("dependency `"):
-        return "run the dependency test first and ensure its accepted execution report is current."
+        return "complete the dependency test first and ensure its result is accepted."
     return blocker
 
 

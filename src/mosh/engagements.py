@@ -191,7 +191,7 @@ def attach_asset(
             return AttachAssetResult(engagement=engagement, asset=asset, created=False)
 
     asset = EngagementAsset(
-        id=_next_asset_id(engagement, normalized_type),
+        id=_next_asset_id(output_root, engagement, normalized_type),
         type=normalized_type,
         locator=normalized_locator,
         label=_clean_optional_text(label),
@@ -205,6 +205,23 @@ def attach_asset(
     )
     save_engagement(output_root, updated)
     return AttachAssetResult(engagement=updated, asset=asset, created=True)
+
+
+def detach_asset(output_root: Path, engagement_id: str, asset_id: str) -> Engagement:
+    engagement = load_engagement(output_root, engagement_id)
+    validate_asset_id(asset_id)
+    remaining = [asset for asset in engagement.assets if asset.id != asset_id]
+    if len(remaining) == len(engagement.assets):
+        raise ValueError(f"Unknown asset id `{asset_id}` for engagement `{engagement_id}`")
+    updated = Engagement(
+        id=engagement.id,
+        title=engagement.title,
+        created_at=engagement.created_at,
+        assets=remaining,
+        metadata=engagement.metadata,
+    )
+    save_engagement(output_root, updated)
+    return updated
 
 
 def record_asset_discovery(
@@ -400,7 +417,7 @@ def _new_engagement_id(output_root: Path) -> str:
     raise RuntimeError("Unable to allocate a unique engagement id")
 
 
-def _next_asset_id(engagement: Engagement, asset_type: str) -> str:
+def _next_asset_id(output_root: Path, engagement: Engagement, asset_type: str) -> str:
     prefix = {
         "live_url": "live",
         "source_tree": "source",
@@ -411,7 +428,7 @@ def _next_asset_id(engagement: Engagement, asset_type: str) -> str:
     index = 1
     while True:
         candidate = f"asset_{prefix}_{index}"
-        if candidate not in existing:
+        if candidate not in existing and not asset_dir(output_root, engagement.id, candidate).exists():
             return candidate
         index += 1
 

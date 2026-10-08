@@ -229,12 +229,14 @@ def _load_crewai():
 
 
 def _llm(crewai: Any, config: AppConfig, model: str, *, max_tokens: int | None = None):
-    api_key = config.llm_api_key_for_model(model)
-    if not api_key:
-        raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
     base_url = config.llm_base_url_for_model(model)
     if config.uses_custom_llm(model) and not base_url:
         raise CrewAIUnavailable("MOSH_LLM_BASE_URL is not set.")
+    api_key = config.llm_api_key_for_model(model)
+    if config.uses_custom_llm(model) and not api_key:
+        api_key = "not-required"
+    if not api_key:
+        raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
     kwargs = {
         "model": config.llm_model_name(model),
         "provider": config.llm_provider_for_model(model),

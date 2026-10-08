@@ -387,6 +387,10 @@ def _run_one_security_test(
         state.revision = revision
         state.evidence = None
         state.review = None
+        memory.record_event(
+            "orchestrator", "test_checks_started", "Running planned security checks",
+            {"test_id": test_id, "revision": revision},
+        )
         reviewer_unavailable = False
         command_start = len(state.commands)
         read_start = len(state.source_reads)
@@ -437,6 +441,10 @@ def _run_one_security_test(
                 },
                 "executor",
             )
+        memory.record_event(
+            "orchestrator", "test_evidence_ready", "Reviewing security test evidence",
+            {"test_id": test_id, "revision": revision},
+        )
         reviewer_crew = _build_reviewer_crew(crewai, config, state)
         try:
             _kickoff_capturing_tool_state(
@@ -486,6 +494,10 @@ def _run_one_security_test(
             break
 
     _cleanup_unified_source_processes(state)
+    memory.record_event(
+        "orchestrator", "test_review_ready", "Writing security test report",
+        {"test_id": test_id, "revision": state.revision},
+    )
     execution_bundle = _execution_bundle(state)
     memory.add_item(
         "security_test_execution_bundle",
@@ -1917,6 +1929,11 @@ def run_testing_preflight(
             blockers.extend(_deferred_reasons(hypothesis))
             deferred.append(item)
             continue
+        if readiness == "preflight_blocked":
+            blockers.extend(
+                _string_list(hypothesis.get("readiness_blockers"))
+                or ["The plan marks this test as needing prerequisite review before execution."]
+            )
         blockers.extend(_dependency_blockers(hypothesis, completed))
         if needs_live:
             blockers.extend(_hypothesis_blockers(hypothesis, engagement, targets))
@@ -2092,7 +2109,7 @@ def _dependency_blockers(hypothesis: dict[str, Any], completed_test_ids: set[str
     blockers = []
     for dependency in _string_list(hypothesis.get("depends_on")):
         if dependency not in completed_test_ids:
-            blockers.append(f"dependency `{dependency}` has no accepted current execution report")
+            blockers.append(f"Complete test {dependency} first to unlock this test.")
     return blockers
 
 

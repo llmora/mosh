@@ -165,10 +165,32 @@ class AppConfig:
         return self.openrouter_base_url
 
     def uses_custom_llm(self, model: str) -> bool:
-        return bool(self.custom_llm_base_url or _is_custom_model(model))
+        # Existing custom-only setups used MOSH_LLM_BASE_URL without custom/
+        # model IDs. Keep that routing until an explicit custom assignment opts
+        # the configuration into per-model routing.
+        return _is_custom_model(model) or bool(
+            self.custom_llm_base_url
+            and not self.has_explicit_custom_models()
+        )
 
     def uses_direct_deepseek(self, model: str) -> bool:
-        return bool(not self.uses_custom_llm(model) and self.deepseek_api_key and _is_deepseek_model(model))
+        return bool(
+            not self.uses_custom_llm(model)
+            and not model.strip().lower().startswith("openrouter/")
+            and self.deepseek_api_key
+            and _is_deepseek_model(model)
+        )
+
+    def model_ids(self) -> tuple[str, ...]:
+        return tuple(
+            getattr(crew, item.name)
+            for group in fields(self.models)
+            for crew in [getattr(self.models, group.name)]
+            for item in fields(crew)
+        )
+
+    def has_explicit_custom_models(self) -> bool:
+        return any(_is_custom_model(model) for model in self.model_ids())
 
     def missing_llm_api_keys_for_models(self, models: list[str]) -> list[str]:
         return self.missing_llm_settings_for_models(models)
@@ -184,8 +206,6 @@ class AppConfig:
     def _missing_llm_settings_for_model(self, model: str) -> list[str]:
         if self.uses_custom_llm(model):
             missing = []
-            if not self.custom_llm_api_key:
-                missing.append("MOSH_LLM_API_KEY")
             if not self.custom_llm_base_url:
                 missing.append("MOSH_LLM_BASE_URL")
             return missing

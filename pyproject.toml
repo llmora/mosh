@@ -9,11 +9,13 @@ description = "Model-driven Open Security Harness for agent-coordinated applicat
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "crewai==1.14.7",
+    "markdown-it-py>=4.2,<5",
     "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]
 mosh = "mosh.cli:main"
+mosh-web = "mosh.web:main"
 
 [dependency-groups]
 dev = ["pydantic>=2.0"]
@@ -23,4 +25,4 @@ where = ["src"]
 include = ["mosh*"]
 
 [tool.setuptools.package-data]
-mosh = ["crews/**/*.yaml"]
+mosh = ["crews/**/*.yaml", "web.css", "web.js"]

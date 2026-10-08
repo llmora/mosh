@@ -197,6 +197,41 @@ def SourceModeSecurityTestExecutionState(
 
 
 class SecurityTestingCrewTests(unittest.TestCase):
+    def test_each_test_emits_progress_boundaries_for_web_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir)
+            hypothesis = {"id": "API-001", "title": "Check API access", "requirements": ["No credentials required."]}
+
+            def kickoff(_crew, state, *, agent_name, **_kwargs):
+                if agent_name == "executor":
+                    state.evidence = {"status": "no-finding", "summary": "Checked access", "result": "No issue found"}
+                elif agent_name == "reviewer":
+                    state.review = {"accepted": True, "summary": "Evidence accepted"}
+
+            with patch("mosh.crews.testing.crew._build_executor_crew", return_value=object()), \
+                 patch("mosh.crews.testing.crew._build_reviewer_crew", return_value=object()), \
+                 patch("mosh.crews.testing.crew._build_reporter_crew", return_value=object()), \
+                 patch("mosh.crews.testing.crew._kickoff_capturing_tool_state", side_effect=kickoff):
+                _run_one_security_test(
+                    crewai=_FakeCrewAI, config=AppConfig(), target_url="https://example.test",
+                    source=None, source_root=None, source_context={}, evidence_links={},
+                    report_dir=report_dir, memory=memory, hypothesis=hypothesis,
+                    engagement=_engagement_template("https://example.test"),
+                    targets={"web": "https://example.test"}, plan_revision_id="revision",
+                )
+
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            progress = [(event["action"], event["data"].get("test_id")) for event in events if event["action"] in {
+                "test_checks_started", "test_evidence_ready", "test_review_ready", "report_written", "report_fallback_written",
+            }]
+            self.assertEqual(progress, [
+                ("test_checks_started", "API-001"),
+                ("test_evidence_ready", "API-001"),
+                ("test_review_ready", "API-001"),
+                ("report_fallback_written", "API-001"),
+            ])
+
     def test_load_security_test_plan_uses_structured_final_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             planning_dir = Path(directory)
@@ -331,6 +366,27 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("evidence `combined`", rendered)
         self.assertNotIn("## Combined-Evidence Tests", rendered)
 
+    def test_testing_preflight_honors_plan_readiness_blocker(self) -> None:
+        reason = "Confirm the API host is in scope before running its preflight request."
+        plan = {"test_hypotheses": [{
+            "id": "CORS-001",
+            "title": "Check response headers and CORS",
+            "execution_mode": "live",
+            "execution_readiness": "preflight_blocked",
+            "readiness_blockers": [reason],
+            "requirements": ["No credentials required."],
+        }]}
+
+        result = run_testing_preflight(plan, _engagement_template(target="https://example.test"))
+
+        self.assertEqual(result.ready, [])
+        self.assertEqual(result.blocked[0]["blockers"], [reason])
+
+        plan["test_hypotheses"][0]["readiness_blockers"] = []
+        result = run_testing_preflight(plan, _engagement_template(target="https://example.test"))
+        self.assertEqual(len(result.blocked), 1)
+        self.assertIn("prerequisite review", result.blocked[0]["blockers"][0])
+
     def test_testing_preflight_blocks_unmet_dependencies(self) -> None:
         plan = {
             "title": "Dependent plan",
@@ -367,8 +423,30 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in blocked_result.ready], ["AUTH-BASE"])
         self.assertEqual([item["id"] for item in blocked_result.blocked], ["AUTH-FOLLOWUP"])
-        self.assertIn("dependency `AUTH-BASE`", blocked_result.blocked[0]["blockers"][0])
+        self.assertEqual(
+            blocked_result.blocked[0]["blockers"],
+            ["Complete test AUTH-BASE first to unlock this test."],
+        )
         self.assertEqual([item["id"] for item in ready_result.ready], ["AUTH-BASE", "AUTH-FOLLOWUP"])
+
+    def test_credential_hint_does_not_satisfy_preflight_or_secret_redaction(self) -> None:
+        plan = {
+            "test_hypotheses": [{
+                "id": "AUTH-001", "title": "Test admin access", "priority": "high",
+                "surface": "admin", "execution_mode": "live",
+                "requirements": ["Admin credentials"],
+            }],
+        }
+        engagement = _engagement_template("https://example.test")
+        engagement["hints"] = [{"title": "Admin login", "text": "Use token sample-secret-123"}]
+        blocked = run_testing_preflight(plan, engagement)
+        self.assertIn("missing credential material for admin", blocked.blocked[0]["blockers"])
+        self.assertEqual(_redact_text("sample-secret-123", engagement), "sample-secret-123")
+
+        engagement["credentials"] = {"admin": {"token": "sample-secret-123"}}
+        ready = run_testing_preflight(plan, engagement)
+        self.assertEqual([item["id"] for item in ready.ready], ["AUTH-001"])
+        self.assertEqual(_redact_text("sample-secret-123", engagement), "[REDACTED]")
 
     def test_source_only_testing_executes_through_unified_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
