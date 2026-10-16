@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 
 from mosh.docker_tools import DockerToolResult
 from mosh.crews.discovery_live.tools import KatanaDockerCrawlerTool, parse_katana_output
@@ -21,7 +20,7 @@ class FakeDockerRunner:
         volumes=None,
     ) -> DockerToolResult:
         self.calls.append({"args": args, "input_text": input_text, "timeout": timeout, "tty": tty,
-                           "volumes": volumes, "header_file": Path(volumes[0][0]).read_text() if volumes else ""})
+                           "volumes": volumes})
         return self.result
 
 
@@ -89,11 +88,12 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
         args = runner.calls[0]["args"]
         self.assertEqual(args[args.index("-cs") + 1], r"^https://app\.example\.test(?:/|$)")
         self.assertIn("-dr", args)
-        self.assertEqual(args[args.index("-H") + 1], "/run/secrets/mosh-katana-headers")
+        self.assertEqual(args[args.index("-H") + 1], "/dev/stdin")
         self.assertNotIn(secret, str(args))
-        self.assertIn("X-Gateway-Id: fixture-client-id", runner.calls[0]["header_file"])
-        self.assertIn(f"X-Gateway-Secret: {secret}", runner.calls[0]["header_file"])
-        self.assertEqual(runner.calls[0]["volumes"][0][2], "ro")
+        self.assertIn("X-Gateway-Id: fixture-client-id", runner.calls[0]["input_text"])
+        self.assertIn(f"X-Gateway-Secret: {secret}", runner.calls[0]["input_text"])
+        self.assertIsNone(runner.calls[0]["volumes"])
+        self.assertFalse(runner.calls[0]["tty"])
         self.assertNotIn("-headless", args)
         self.assertNotIn(secret, str(result))
         tool.run("https://elsewhere.example.test/", max_pages=5, max_depth=2)

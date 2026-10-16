@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -86,18 +83,15 @@ class KatanaDockerCrawlerTool:
         if headers:
             args.extend(["-cs", rf"^{re.escape(parsed.scheme + '://' + parsed.netloc)}(?:/|$)"])
             args.append("-dr")
-            args.extend(["-H", "/run/secrets/mosh-katana-headers"])
+            args.extend(["-H", "/dev/stdin"])
         else:
             args.extend(["-headless", "-system-chrome", "-system-chrome-path", "/usr/bin/chromium", "-no-sandbox", "-headless-options", "--disable-dev-shm-usage,--disable-gpu"])
         if headers:
-            with tempfile.TemporaryDirectory(prefix="mosh-katana-headers-", dir="/tmp") as directory:
-                header_file = Path(directory) / "headers.txt"
-                header_file.write_text("".join(f"{name}: {value}\n" for name, value in headers.items()), encoding="utf-8")
-                os.chmod(header_file, 0o600)
-                result = self.runner.run(
-                    args, timeout=self.docker_timeout, tty=True,
-                    volumes=[(str(header_file), "/run/secrets/mosh-katana-headers", "ro")],
-                )
+            result = self.runner.run(
+                args,
+                input_text="".join(f"{name}: {value}\n" for name, value in headers.items()),
+                timeout=self.docker_timeout,
+            )
         else:
             result = self.runner.run(args, timeout=self.docker_timeout, tty=True)
         stdout = _redact_header_values(result.stdout, headers)
