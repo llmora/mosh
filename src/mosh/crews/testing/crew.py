@@ -23,10 +23,13 @@ from mosh.crews.discovery_live.crew import (
 from mosh.crews.events import MoshCrewAIEventListener
 from mosh.docker_tools import DockerToolResult, DockerToolRunner
 from mosh.engagement import (
+    asset_request_headers,
     engagement_steer,
     engagement_steer_prompt_value,
     load_engagement_file,
     resolve_target_mapping,
+    request_origin,
+    without_asset_request_headers,
 )
 from mosh.engagements import (
     asset_discovery_dir,
@@ -65,6 +68,7 @@ class SecurityTestExecutionState:
     engagement: dict[str, Any]
     targets: dict[str, str]
     executed_report_path: Path
+    request_headers_by_origin: dict[tuple[str, str, int | None], dict[str, str]] = field(default_factory=dict)
     engagement_steer: str = ""
     source: str | None = None
     source_root: Path | None = None
@@ -100,6 +104,7 @@ class SecurityTestingCrewRunner(Protocol):
         engagement: dict[str, Any],
         preflight: SecurityTestPreflightResult,
         executable_pending: list[dict[str, Any]],
+        request_headers_by_origin: dict[tuple[str, str, int | None], dict[str, str]] | None = None,
     ) -> None:
         pass
 
@@ -124,6 +129,7 @@ class SecurityTestingOrchestrator:
         engagement_id: str,
         *,
         hypothesis_ids: list[str] | None = None,
+        auto_refresh_feedback: bool = True,
     ) -> Path:
         selected_hypothesis_ids = _normalize_hypothesis_ids(hypothesis_ids)
         engagement = load_engagement(self.output_root, engagement_id)
@@ -149,8 +155,6 @@ class SecurityTestingOrchestrator:
         discovery_source_dir = (
             asset_discovery_dir(self.output_root, engagement.id, source_asset.id) if source_asset and source else None
         )
-        discovery_live_asset = (engagement.id, live_asset.id) if live_asset else None
-        discovery_source_asset = (engagement.id, source_asset.id) if source_asset and source else None
         planning_dir = engagement_plan_dir(self.output_root, engagement.id)
         report_dir = domain_dir / "security-testing"
         engagement_path = domain_dir / "engagement_template.yaml"
@@ -169,6 +173,10 @@ class SecurityTestingOrchestrator:
         )
         plan = load_security_test_plan(planning_dir)
         engagement_config = load_engagement_file(engagement_path)
+        request_headers_by_origin = {
+            request_origin(asset.locator): headers
+            for asset in engagement.assets if asset.type == "live_url" and (headers := asset_request_headers(engagement_config, asset.id))
+        }
         testing_directives = active_directives(self.output_root, engagement.id, stage="testing")
         if testing_directives:
             plan = _apply_testing_conversation_directives(plan, testing_directives)
@@ -217,6 +225,7 @@ class SecurityTestingOrchestrator:
             "security_test_coordinator",
         )
         executed_count = 0
+        memory.check_stop()
         if executable_pending:
             memory.record_event(
                 "orchestrator",
@@ -235,27 +244,26 @@ class SecurityTestingOrchestrator:
                 engagement_config,
                 result,
                 executable_pending,
+                request_headers_by_origin=request_headers_by_origin,
             )
+            memory.check_stop()
             executed_count += len(executable_pending)
-            refresh_targets: list[tuple[Path, tuple[str, str] | None]] = []
-            if url:
-                refresh_targets.append((discovery_dir, discovery_live_asset))
-            if discovery_source_dir and discovery_source_dir != discovery_dir:
-                refresh_targets.append((discovery_source_dir, discovery_source_asset))
-            if not refresh_targets:
-                refresh_targets.append((discovery_dir, discovery_live_asset or discovery_source_asset))
-            for index, (target_discovery_dir, discovery_asset) in enumerate(refresh_targets):
+            if auto_refresh_feedback:
                 _refresh_discovery_from_testing_feedback(
                     config=self.config,
                     output_root=self.output_root,
                     event_sink=self.event_sink,
                     planning_crew_runner=self.planning_crew_runner,
-                    discovery_dir=target_discovery_dir,
+                    refresh_targets=_feedback_refresh_targets(self.output_root, engagement),
                     report_dir=report_dir,
                     memory=memory,
                     engagement_id=engagement.id,
-                    discovery_asset=discovery_asset,
-                    refresh_planning=index == len(refresh_targets) - 1,
+                )
+            elif has_unapplied_testing_feedback(self.output_root, engagement.id):
+                memory.record_event(
+                    "orchestrator",
+                    "planning_refresh_available",
+                    "Testing found new discovery information; waiting for the user to choose whether to update the plan",
                 )
         if not executable_pending:
             memory.record_event(
@@ -270,6 +278,7 @@ class SecurityTestingOrchestrator:
                     "already_executed": sorted(_current_executed_test_ids(report_dir)),
                 },
             )
+        memory.check_stop()
         memory.record_event(
             "orchestrator",
             "complete",
@@ -283,6 +292,26 @@ class SecurityTestingOrchestrator:
                 "executed": executed_count,
                 "report_dir": str(report_dir),
             },
+        )
+        return report_dir
+
+    def apply_feedback(self, engagement_id: str) -> Path:
+        engagement = load_engagement(self.output_root, engagement_id)
+        report_dir = engagement_dir(self.output_root, engagement.id) / "security-testing"
+        events = _read_json_list(report_dir / "events.json")
+        if not any(event.get("agent") == "orchestrator" and event.get("action") == "complete" for event in events):
+            raise RuntimeError("Testing must finish before its findings can update the plan.")
+        memory = FileMemory(report_dir, event_sink=self.event_sink, reset=False)
+        memory.check_stop()
+        _refresh_discovery_from_testing_feedback(
+            config=self.config,
+            output_root=self.output_root,
+            event_sink=self.event_sink,
+            planning_crew_runner=self.planning_crew_runner,
+            refresh_targets=_feedback_refresh_targets(self.output_root, engagement),
+            report_dir=report_dir,
+            memory=memory,
+            engagement_id=engagement.id,
         )
         return report_dir
 
@@ -307,6 +336,7 @@ class CrewAISecurityTestingCrewRunner:
         engagement: dict[str, Any],
         preflight: SecurityTestPreflightResult,
         executable_pending: list[dict[str, Any]],
+        request_headers_by_origin: dict[tuple[str, str, int | None], dict[str, str]] | None = None,
     ) -> None:
         missing_settings = self.config.missing_llm_settings_for_models(
             [
@@ -323,6 +353,7 @@ class CrewAISecurityTestingCrewRunner:
         source_context = _load_unified_source_context(discovery_source_dir)
         steer = engagement_steer(engagement)
         for hypothesis in executable_pending:
+            memory.check_stop()
             _run_one_security_test(
                 crewai=crewai,
                 config=self.config,
@@ -338,7 +369,9 @@ class CrewAISecurityTestingCrewRunner:
                 engagement_steer=steer,
                 targets=preflight.targets,
                 plan_revision_id=current_plan_revision_id,
+                request_headers_by_origin=request_headers_by_origin,
             )
+        memory.check_stop()
 
 
 def _run_one_security_test(
@@ -356,6 +389,7 @@ def _run_one_security_test(
     targets: dict[str, str],
     plan_revision_id: str,
     engagement_steer: str = "",
+    request_headers_by_origin: dict[tuple[str, str, int | None], dict[str, str]] | None = None,
 ) -> None:
     test_id = _hypothesis_id(hypothesis)
     current_hypothesis_fingerprint = hypothesis_fingerprint(hypothesis)
@@ -374,6 +408,7 @@ def _run_one_security_test(
         memory=memory,
         hypothesis=hypothesis,
         engagement=engagement,
+        request_headers_by_origin=request_headers_by_origin or {},
         engagement_steer=engagement_steer,
         targets=targets,
         executed_report_path=executed_report_path,
@@ -421,7 +456,7 @@ def _run_one_security_test(
                 "revision": revision,
                 "max_attempts": max_attempts,
                 "hypothesis": json.dumps(hypothesis, sort_keys=True),
-                "engagement": json.dumps(engagement, sort_keys=True),
+                "engagement": json.dumps(without_asset_request_headers(engagement), sort_keys=True),
                 "targets": json.dumps(targets, sort_keys=True),
                 "engagement_steer": steer_prompt,
                 "source_context": json.dumps(_compact_unified_source_context(source_context), sort_keys=True),
@@ -1076,46 +1111,74 @@ def _discovery_update_fingerprint(update: dict[str, Any]) -> str:
     )
 
 
+def _feedback_refresh_targets(output_root: Path, engagement: Any) -> list[tuple[Path, tuple[str, str]]]:
+    targets: list[tuple[Path, tuple[str, str]]] = []
+    live_asset = next((asset for asset in engagement.assets if asset.type == "live_url"), None)
+    source_asset = first_source_asset(engagement.assets)
+    if live_asset:
+        targets.append((asset_discovery_dir(output_root, engagement.id, live_asset.id), (engagement.id, live_asset.id)))
+    if source_asset and readable_source_root(output_root, engagement.id, source_asset):
+        source_dir = asset_discovery_dir(output_root, engagement.id, source_asset.id)
+        if not targets or source_dir != targets[0][0]:
+            targets.append((source_dir, (engagement.id, source_asset.id)))
+    return targets
+
+
+def has_unapplied_testing_feedback(output_root: Path, engagement_id: str) -> bool:
+    engagement = load_engagement(output_root, engagement_id)
+    report_dir = engagement_dir(output_root, engagement.id) / "security-testing"
+    feedback_updates = collect_testing_discovery_updates(report_dir)
+    return _planning_refresh_incomplete(report_dir) or (
+        bool(feedback_updates) and any(
+            _new_discovery_feedback_updates(discovery_dir, feedback_updates)
+            for discovery_dir, _ in _feedback_refresh_targets(output_root, engagement)
+        )
+    )
+
+
+def _planning_refresh_incomplete(report_dir: Path) -> bool:
+    for event in reversed(_read_json_list(report_dir / "events.json")):
+        if event.get("agent") == "orchestrator" and event.get("action") in {"planning_refresh_start", "planning_refresh_complete"}:
+            return event["action"] == "planning_refresh_start"
+    return False
+
+
 def _refresh_discovery_from_testing_feedback(
     *,
     config: AppConfig,
     output_root: Path,
     event_sink: Callable[[Event], None] | None,
     planning_crew_runner: Any,
-    discovery_dir: Path,
+    refresh_targets: list[tuple[Path, tuple[str, str]]],
     report_dir: Path,
     memory: FileMemory,
     engagement_id: str,
-    discovery_asset: tuple[str, str] | None = None,
-    refresh_planning: bool = True,
 ) -> None:
     feedback_updates = collect_testing_discovery_updates(report_dir)
-    new_feedback_updates = _new_discovery_feedback_updates(discovery_dir, feedback_updates)
-    if new_feedback_updates:
-        _feed_testing_updates_to_discovery(
-            discovery_dir=discovery_dir,
-            testing_memory=memory,
-            updates=new_feedback_updates,
-            testing_report_dir=report_dir,
-        )
-        if discovery_asset:
-            record_asset_discovery(output_root, discovery_asset[0], discovery_asset[1], discovery_dir)
-        if not refresh_planning:
-            memory.record_event(
-                "orchestrator",
-                "planning_refresh_deferred",
-                "Security test planning refresh deferred until all discovery feedback targets are updated",
-                {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
-            )
-            return
+    pending_targets = [
+        (discovery_dir, discovery_asset, new_updates)
+        for discovery_dir, discovery_asset in refresh_targets
+        if (new_updates := _new_discovery_feedback_updates(discovery_dir, feedback_updates))
+    ]
+    if pending_targets or _planning_refresh_incomplete(report_dir):
         memory.record_event(
             "orchestrator",
             "planning_refresh_start",
             "Starting security test planning refresh from security-testing discovery feedback",
-            {"updates": len(new_feedback_updates), "discovery_dir": str(discovery_dir)},
+            {"updates": len(feedback_updates), "assets": len(pending_targets)},
         )
+        for discovery_dir, discovery_asset, new_feedback_updates in pending_targets:
+            memory.check_stop()
+            _feed_testing_updates_to_discovery(
+                discovery_dir=discovery_dir,
+                testing_memory=memory,
+                updates=new_feedback_updates,
+                testing_report_dir=report_dir,
+            )
+            record_asset_discovery(output_root, discovery_asset[0], discovery_asset[1], discovery_dir)
         from mosh.crews.planning.crew import SecurityTestPlanningOrchestrator
 
+        memory.check_stop()
         SecurityTestPlanningOrchestrator(
             config,
             output_root=output_root,
@@ -1126,7 +1189,7 @@ def _refresh_discovery_from_testing_feedback(
             "orchestrator",
             "planning_refresh_complete",
             "Security test planning refresh completed from security-testing discovery feedback",
-            {"updates": len(new_feedback_updates)},
+            {"updates": len(feedback_updates), "assets": len(pending_targets)},
         )
     elif feedback_updates:
         memory.record_event(
@@ -1384,6 +1447,8 @@ def _build_executor_crew(crewai: Any, config: AppConfig, state: SecurityTestExec
     tools = []
     if _has_live_execution_target(state):
         tools.append(_build_run_security_command_tool(crewai, config, state))
+        from mosh.crews.testing.source_tools import _build_request_target_http_tool
+        tools.append(_build_request_target_http_tool(crewai, config, state))
     if state.source_root is not None:
         from mosh.crews.testing.source_tools import (
             _build_read_source_slice_tool,
@@ -2744,7 +2809,7 @@ def _execution_status_for_hypothesis(report_dir: Path, hypothesis: dict[str, Any
     if metadata is None:
         return "rerun", "previous report has no execution metadata"
     if _text(metadata.get("hypothesis_fingerprint")) != hypothesis_fingerprint(hypothesis):
-        return "rerun", "hypothesis changed since the previous execution"
+        return "rerun", "Report saved for an earlier version of this test. The current plan changed it; run it again to cover the revision."
     if not bool(metadata.get("review_accepted")):
         return "rerun", "previous execution was not reviewer-accepted"
     return "current", "matching accepted execution already exists"
@@ -2821,6 +2886,10 @@ def _secret_values(engagement: dict[str, Any]) -> list[str]:
                 text = _text(credential.get(key))
                 if text:
                     values.append(text)
+    headers_by_asset = engagement.get("asset_request_headers") if isinstance(engagement.get("asset_request_headers"), dict) else {}
+    for headers in headers_by_asset.values():
+        if isinstance(headers, dict):
+            values.extend(value for value in headers.values() if isinstance(value, str) and value)
     return sorted(set(values), key=len, reverse=True)
 
 

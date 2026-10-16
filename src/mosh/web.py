@@ -1,8 +1,9 @@
-"""Small localhost interface for setup and assessment creation."""
+"""Small localhost interface for the assessment workflow."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -12,7 +13,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, fields, replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +23,8 @@ from urllib.parse import parse_qs, quote, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from mosh.config import AppConfig
+from mosh.config import AppConfig, write_model_assignments
+from mosh.docker_tools import docker_cli_env
 from mosh.engagement import build_minimal_engagement_template, load_engagement_file, write_engagement_template_mapping, validate_engagement_template
 from mosh.engagements import (
     Engagement,
@@ -37,6 +40,7 @@ from mosh.engagements import (
     record_asset_discovery,
 )
 from mosh.models import Event
+from mosh.memory import RunStopped
 from mosh.web_markdown import render_markdown_document
 
 
@@ -75,6 +79,13 @@ KEY_FIELDS = {
     "deepseek": "deepseek_api_key",
     "openrouter": "openrouter_api_key",
     "custom": "custom_llm_api_key",
+}
+MODEL_STAGES = {
+    "discovery": ("Discovery", ("discovery_live", "discovery_source")),
+    "planning": ("Planning", ("planning",)),
+    "testing": ("Testing", ("testing",)),
+    "reporting": ("Reporting", ("reporting",)),
+    "chat": ("Chat", ("chat",)),
 }
 MAX_BODY_BYTES = 64 * 1024
 DISCOVERY_STEPS = {
@@ -134,6 +145,16 @@ TESTING_PROGRESS_PHASES = {
     "test_review_ready": 2,
     "report_written": 3,
     "report_fallback_written": 3,
+}
+REPORTING_STEPS = (
+    "Preparing assessment evidence",
+    "Writing the final report",
+    "Reviewing and finalizing the report",
+)
+REPORTING_STEP_AFTER_EVENT = {
+    ("orchestrator", "engagement_steer_loaded"): 1,
+    ("writer", "report_written"): 2,
+    ("orchestrator", "complete"): 3,
 }
 
 
@@ -197,9 +218,10 @@ def _testing_updating_plan(events: list[Event]) -> bool:
 @dataclass
 class WebResponse:
     status: int = 200
-    body: str = ""
+    body: str | bytes = ""
     content_type: str = "text/html; charset=utf-8"
     location: str | None = None
+    download_filename: str | None = None
 
 
 @dataclass
@@ -231,6 +253,7 @@ class DiscoveryRun:
     error: str = ""
     failed_asset_id: str = ""
     events: list[tuple[str, Event]] = field(default_factory=list)
+    stop_requested: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -239,6 +262,8 @@ class PlanningRun:
     status: str = "running"
     error: str = ""
     events: list[Event] = field(default_factory=list)
+    from_testing: bool = False
+    stop_requested: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -246,6 +271,29 @@ class TestingRun:
     status: str = "running"
     error: str = ""
     events: list[Event] = field(default_factory=list)
+    stop_requested: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
+class ReportingRun:
+    active_step: int = 0
+    status: str = "running"
+    error: str = ""
+    events: list[Event] = field(default_factory=list)
+    stop_requested: threading.Event = field(default_factory=threading.Event)
+
+
+class StageEventSink:
+    def __init__(self, emit: Callable[[Event], None], stop_requested: threading.Event) -> None:
+        self.emit = emit
+        self.stop_requested = stop_requested
+
+    def __call__(self, event: Event) -> None:
+        self.emit(event)
+
+    def check_stop(self) -> None:
+        if self.stop_requested.is_set():
+            raise RunStopped("Stopped by you")
 
 
 class WebApp:
@@ -260,6 +308,8 @@ class WebApp:
         discovery_runner: Callable[[AppConfig, Path, Engagement, EngagementAsset, Callable[[Event], None]], Path] | None = None,
         planning_runner: Callable[[AppConfig, Path, str, Callable[[Event], None]], Path] | None = None,
         testing_runner: Callable[[AppConfig, Path, str, Callable[[Event], None]], Path] | None = None,
+        feedback_runner: Callable[[AppConfig, Path, str, Callable[[Event], None]], Path] | None = None,
+        reporting_runner: Callable[[AppConfig, Path, str, Callable[[Event], None]], Path] | None = None,
         folder_root: Path | None = None,
     ) -> None:
         self.root = root.resolve()
@@ -271,16 +321,24 @@ class WebApp:
         self.discovery_runs: dict[str, DiscoveryRun] = {}
         self.planning_runs: dict[str, PlanningRun] = {}
         self.testing_runs: dict[str, TestingRun] = {}
+        self.reporting_runs: dict[str, ReportingRun] = {}
         self._run_lock = threading.RLock()
         self.discovery_runner = discovery_runner or self._run_discovery_asset
         self.planning_runner = planning_runner or self._run_planning
         self.testing_runner = testing_runner or self._run_testing
+        self.feedback_runner = feedback_runner or self._run_feedback_refresh
+        self.reporting_runner = reporting_runner or self._run_reporting
         self.asset_checker = asset_checker or check_asset_reachability
         self.folder_root = (folder_root or Path.home()).resolve()
         self.environment_probe = environment_probe or self._probe_environment
         self.build_runner = build_runner or self._build_tool_images
         self.build_state = "idle"
+        self.build_error = ""
         self._build_lock = threading.Lock()
+        self._tool_lock = threading.Lock()
+        self._tool_checks: dict[str, bool] | None = None
+        self._tool_checking = False
+        self._tool_checked_at = 0.0
         self.provider_checker = provider_checker or check_provider_api
         self.provider_state: dict[str, tuple[str, str]] = {}
         self._provider_lock = threading.Lock()
@@ -306,11 +364,14 @@ class WebApp:
         parsed = urlsplit(target)
         path = parsed.path
         query = parse_qs(parsed.query)
+        download_format = query.get("format", [""])[0]
         step = query.get("step", [""])[0]
         if method == "GET" and path == "/web.css":
             return WebResponse(body=(Path(__file__).with_name("web.css")).read_text(encoding="utf-8"), content_type="text/css; charset=utf-8")
         if method == "GET" and path == "/web.js":
             return WebResponse(body=(Path(__file__).with_name("web.js")).read_text(encoding="utf-8"), content_type="text/javascript; charset=utf-8")
+        if method == "GET" and path == "/favicon.ico":
+            return WebResponse(body=(Path(__file__).with_name("favicon.ico")).read_bytes(), content_type="image/x-icon")
         if self.onboarding_active or not self.setup_ready():
             self.onboarding_active = True
             if method == "GET" and path == "/setup":
@@ -320,8 +381,28 @@ class WebApp:
             return self._redirect("/setup")
         if path.startswith("/setup"):
             return self._redirect("/")
+        if method == "GET" and path == "/settings/tools/status":
+            self._schedule_tool_check()
+            return WebResponse(body=json.dumps(self._tool_status_payload()), content_type="application/json; charset=utf-8")
+        if method == "POST" and path == "/settings/tools/check":
+            self._schedule_tool_check(force=True)
+            return self._redirect("/settings#local-tools")
+        if method == "POST" and path == "/settings/tools/build":
+            return self._settings_build_tools()
         if method == "GET" and path == "/":
             return self._home()
+        if method == "GET" and path == "/settings":
+            return self._settings_page(notice="Model assignments saved." if query.get("saved") else None)
+        if method == "GET" and path == "/settings/providers":
+            return self._settings_providers_page()
+        if method == "GET" and path.startswith("/settings/providers/"):
+            return self._settings_provider_form(path.removeprefix("/settings/providers/"))
+        if method == "POST" and path == "/settings/providers/connect":
+            return self._settings_provider_action(fields_data or {})
+        if method == "GET" and path.startswith("/settings/models/"):
+            return self._settings_model_page(path.removeprefix("/settings/models/"))
+        if method == "POST" and path.startswith("/settings/models/"):
+            return self._settings_model_action(path.removeprefix("/settings/models/"), fields_data or {})
         if method == "POST" and path == "/new/start":
             self.assessment_draft = AssessmentDraft()
             return self._redirect("/new?step=details")
@@ -343,16 +424,25 @@ class WebApp:
             return self._planning_action(path.removeprefix("/assessments/").removesuffix("/planning"), fields_data or {})
         if method == "POST" and path.startswith("/assessments/") and path.endswith("/testing"):
             return self._testing_action(path.removeprefix("/assessments/").removesuffix("/testing"), fields_data or {})
+        report_route_parts = path.split("/")
+        if method == "POST" and len(report_route_parts) == 4 and report_route_parts[1] == "assessments" and report_route_parts[3] == "report":
+            return self._report_action(report_route_parts[2], fields_data or {})
+        if method == "GET" and path.startswith("/assessments/") and path.endswith("/report/status"):
+            return self._report_status(path.removeprefix("/assessments/").removesuffix("/report/status"), show_logs=query.get("view", [""])[0] == "logs")
+        if method == "GET" and path.startswith("/assessments/") and path.endswith("/report/view"):
+            return self._report_view(path.removeprefix("/assessments/").removesuffix("/report/view"), download_format=download_format)
+        if method == "GET" and len(report_route_parts) == 4 and report_route_parts[1] == "assessments" and report_route_parts[3] == "report":
+            return self._report_page(report_route_parts[2], show_logs=query.get("view", [""])[0] == "logs")
         if method == "GET" and path.startswith("/assessments/") and path.endswith("/testing/status"):
             return self._testing_status(
                 path.removeprefix("/assessments/").removesuffix("/testing/status"),
                 show_logs=query.get("view", [""])[0] == "logs",
             )
         if method == "GET" and path.startswith("/assessments/") and path.endswith("/testing/preflight"):
-            return self._testing_report(path.removeprefix("/assessments/").removesuffix("/testing/preflight"), "", preflight=True)
+            return self._testing_report(path.removeprefix("/assessments/").removesuffix("/testing/preflight"), "", preflight=True, download_format=download_format)
         testing_report_parts = path.split("/")
         if method == "GET" and len(testing_report_parts) == 6 and testing_report_parts[1] == "assessments" and testing_report_parts[3:5] == ["testing", "reports"]:
-            return self._testing_report(testing_report_parts[2], testing_report_parts[5])
+            return self._testing_report(testing_report_parts[2], testing_report_parts[5], download_format=download_format)
         if method == "GET" and path.startswith("/assessments/") and path.endswith("/testing"):
             return self._testing_page(
                 path.removeprefix("/assessments/").removesuffix("/testing"),
@@ -365,7 +455,7 @@ class WebApp:
                 show_logs=query.get("view", [""])[0] == "logs",
             )
         if method == "GET" and path.startswith("/assessments/") and path.endswith("/planning/report"):
-            return self._planning_report(path.removeprefix("/assessments/").removesuffix("/planning/report"))
+            return self._planning_report(path.removeprefix("/assessments/").removesuffix("/planning/report"), download_format=download_format)
         if method == "GET" and path.startswith("/assessments/") and path.endswith("/planning"):
             return self._planning_page(
                 path.removeprefix("/assessments/").removesuffix("/planning"),
@@ -382,18 +472,21 @@ class WebApp:
             return self._discovery_page(path.removeprefix("/assessments/").removesuffix("/discovery"), show_logs=query.get("view", [""])[0] == "logs")
         if method == "POST" and path.startswith("/assessments/") and path.endswith("/guidance"):
             return self._assessment_guidance(path.removeprefix("/assessments/").removesuffix("/guidance"), fields_data or {})
+        if method == "POST" and path.startswith("/assessments/") and path.endswith("/request-headers"):
+            return self._assessment_request_headers(path.removeprefix("/assessments/").removesuffix("/request-headers"), fields_data or {})
         if method == "POST" and path.startswith("/assessments/") and path.endswith("/credentials"):
             return self._assessment_credentials(path.removeprefix("/assessments/").removesuffix("/credentials"), fields_data or {})
         if method == "POST" and path.startswith("/assessments/") and path.endswith("/test-setup"):
             return self._assessment_test_setup(path.removeprefix("/assessments/").removesuffix("/test-setup"), fields_data or {})
         report_parts = path.split("/")
         if method == "GET" and len(report_parts) == 6 and report_parts[1] == "assessments" and report_parts[3] == "discovery" and report_parts[5] == "report":
-            return self._discovery_report(report_parts[2], report_parts[4])
+            return self._discovery_report(report_parts[2], report_parts[4], download_format=download_format)
         if method == "GET" and path.startswith("/assessments/"):
             return self._assessment_detail(
                 path.removeprefix("/assessments/"),
                 hint_mode=query.get("hint", [""])[0],
                 credential_mode=query.get("credential", [""])[0],
+                headers_mode=query.get("headers", [""])[0],
             )
         return self._page("Not found", "<h1>Page not found</h1>", status=404)
 
@@ -444,21 +537,76 @@ class WebApp:
             form_class="asset-entry",
         )
 
-    def _page(self, title: str, body: str, *, status: int = 200, refresh: bool = False) -> WebResponse:
+    def _page(self, title: str, body: str, *, status: int = 200, refresh: bool = False, body_class: str = "") -> WebResponse:
         refresh_tag = '<meta http-equiv="refresh" content="3">' if refresh else ""
+        tool_warning = self._tool_warning()
+        settings_href = "/settings#local-tools" if tool_warning else "/settings"
+        settings_link = (
+            f'<a href="{settings_href}" data-settings-link>Settings'
+            f'<span class="settings-tool-warning" data-tool-warning role="img" aria-label="Local tools need attention" title="Local tools need attention"{"" if tool_warning else " hidden"}>⚠</span></a>'
+        )
         markup = (
             '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>{_h(title)} · mosh</title>{refresh_tag}'
-            '<link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head><body>'
-            f'<header class="topbar"><a class="brand" href="/">mosh</a><span class="local">Local only</span></header>'
+            f'<link rel="icon" href="/favicon.ico" type="image/x-icon"><link rel="stylesheet" href="/web.css"><script src="/web.js" defer></script></head><body class="{_h(body_class)}">'
+            '<header class="topbar"><a class="brand" href="/">mosh</a><div class="topbar-links">'
+            + ('' if self.onboarding_active else settings_link)
+            + '<span class="local">Local only</span></div></header>'
             f'{body}</body></html>'
         )
         return WebResponse(status=status, body=markup)
 
+    def _settings_frame(self, title: str, content: str, *, wide: bool = False, refresh: bool = False) -> WebResponse:
+        layout = "home" if wide else "wizard"
+        body = (
+            f'<main class="{layout} settings settings-surface">'
+            '<a class="settings-close" href="/" data-close-settings aria-label="Close settings" title="Close settings">×</a>'
+            f'{content}<div class="settings-footer"><a class="secondary" href="/" data-close-settings>Close settings</a></div></main>'
+        )
+        return self._page(title, body, refresh=refresh, body_class="settings-page")
+
+    @staticmethod
+    def _document_download(source: str, title: str, filename: str, format_name: str) -> WebResponse:
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "-", filename)
+        if format_name == "pdf":
+            from mosh.web_pdf import render_markdown_pdf
+
+            return WebResponse(body=render_markdown_pdf(source, title), content_type="application/pdf",
+                               download_filename=f"{safe_name}.pdf")
+        if format_name == "docx":
+            from mosh.web_docx import render_markdown_docx
+
+            return WebResponse(body=render_markdown_docx(source, title),
+                               content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                               download_filename=f"{safe_name}.docx")
+        return WebResponse(body=source.encode("utf-8"), content_type="text/markdown; charset=utf-8",
+                           download_filename=f"{safe_name}.md")
+
     @staticmethod
     def _error(message: str | None) -> str:
         return f'<p class="error" role="alert">{_h(message)}</p>' if message else ""
+
+    def _stop_control(self, url: str, stage: str, *, action: str = "stop") -> str:
+        dialog_id = f"stop-{re.sub(r'[^a-z0-9]+', '-', stage.lower()).strip('-')}"
+        form = self._form(
+            url,
+            f'<input type="hidden" name="confirmed" value="yes"><button class="primary" type="submit" name="action" value="{action}">Stop {stage}</button>',
+        )
+        return (
+            f'<button class="secondary" type="button" data-open-stop="{dialog_id}">Stop {stage}</button>'
+            f'<dialog class="stage-stop-dialog" id="{dialog_id}" data-stop-confirm>'
+            f'<h3>Stop {stage}?</h3>'
+            '<p>The current operation will finish before Mosh stops. Finished asset and test reports remain available.</p>'
+            f'<div class="actions"><button class="secondary" type="button" data-close-stop>Keep running</button>{form}</div>'
+            '</dialog>'
+        )
+
+    def _request_stop(self, engagement_id: str, stage: str) -> None:
+        with self._run_lock:
+            run = getattr(self, f"{stage}_runs").get(engagement_id)
+            if run and run.status == "running":
+                run.stop_requested.set()
 
     @staticmethod
     def _wizard_steps(names: list[str], current: int) -> str:
@@ -475,6 +623,7 @@ class WebApp:
             discovery_run = self.discovery_runs.get(engagement_id)
             planning_run = self.planning_runs.get(engagement_id)
             testing_run = self.testing_runs.get(engagement_id)
+            reporting_run = self.reporting_runs.get(engagement_id)
             testing_updating_plan = bool(testing_run and testing_run.status == "running" and _testing_updating_plan(testing_run.events))
         supported = [asset for asset in engagement.assets if asset.type in DISCOVERY_STEPS]
         discovered = [
@@ -483,6 +632,8 @@ class WebApp:
         ]
         if discovery_run and discovery_run.status == "running":
             discovery_state = "running"
+        elif discovery_run and discovery_run.status == "stopped":
+            discovery_state = "stopped"
         elif discovery_run and discovery_run.status == "failed":
             discovery_state = "attention"
         elif supported and len(discovered) == len(supported):
@@ -490,8 +641,10 @@ class WebApp:
         else:
             discovery_state = "waiting"
         plan_path = engagement_plan_dir(self.output_root, engagement_id) / "plan.md"
-        if planning_run and planning_run.status == "running":
+        if (planning_run and planning_run.status == "running") or testing_updating_plan:
             planning_state = "running"
+        elif planning_run and planning_run.status == "stopped":
+            planning_state = "stopped"
         elif planning_run and planning_run.status == "failed":
             planning_state = "attention"
         elif plan_path.is_file() and self._planning_current(engagement):
@@ -502,10 +655,12 @@ class WebApp:
             planning_state = "waiting"
         if testing_run and testing_run.status == "running":
             testing_state = "running"
+        elif testing_run and testing_run.status == "stopped":
+            testing_state = "stopped"
         elif testing_run and testing_run.status == "failed":
             testing_state = "attention"
         else:
-            preflight, completed = self._testing_snapshot(engagement_id)
+            preflight, completed, _ = self._testing_snapshot(engagement_id)
             if preflight is None and not completed:
                 testing_state = "waiting"
             elif not completed or preflight is None or preflight.get("blocked") or self._testing_pending_count(engagement_id, preflight) or not self._planning_current(engagement) or not self._testing_plan_matches(engagement_id, preflight):
@@ -518,21 +673,48 @@ class WebApp:
             "planning": planning_state,
             "testing": testing_state,
         }
-        labels = {"done": "Complete", "running": "In progress", "attention": "Needs attention", "waiting": "Not started"}
-        marks = {"done": "✓", "running": "", "attention": "!", "waiting": "○"}
+        report_allowed = self._report_allowed(engagement)
+        report_ready = self._final_report_ready(engagement_id)
+        if reporting_run and reporting_run.status == "running":
+            report_state = "running"
+        elif reporting_run and reporting_run.status == "stopped":
+            report_state = "stopped"
+        elif reporting_run and reporting_run.status == "failed":
+            report_state = "attention"
+        elif report_ready:
+            report_state = "done"
+        elif report_allowed:
+            report_state = "waiting"
+        else:
+            report_state = "future"
+        labels = {"done": "Complete", "running": "In progress", "stopped": "Stopped by you", "attention": "Needs attention", "waiting": "Not started"}
+        marks = {"done": "✓", "running": "", "stopped": "■", "attention": "!", "waiting": "○"}
+        stopping = {
+            "discovery": bool(discovery_run and discovery_run.status == "running" and discovery_run.stop_requested.is_set()),
+            "planning": bool(planning_run and planning_run.status == "running" and planning_run.stop_requested.is_set()),
+            "testing": bool(testing_run and testing_run.status == "running" and testing_run.stop_requested.is_set()),
+            "report": bool(reporting_run and reporting_run.status == "running" and reporting_run.stop_requested.is_set()),
+        }
         items = []
         for key, label in (("scope", "Scope"), ("discovery", "Discovery"), ("planning", "Planning"), ("testing", "Testing")):
             state = states[key]
             url = f"/assessments/{engagement_id}" + (f"/{key}" if key != "scope" else "")
             active = ' aria-current="step"' if current == key else ""
-            state_label = "Updating plan" if key == "testing" and testing_updating_plan else labels[state]
+            state_label = "Stopping" if stopping.get(key) else "Updating plan" if testing_updating_plan and key in {"planning", "testing"} else labels[state]
             items.append(
                 f'<a class="stage-item {state}{" active" if current == key else ""}" href="{_h(url)}"'
                 f' aria-label="{label}, {state_label}"{active}>'
                 f'<span class="stage-mark" aria-hidden="true">{marks[state]}</span>{label}</a>'
             )
-        for label in ("Report",):
-            items.append(f'<span class="stage-item future" aria-disabled="true"><span class="stage-mark" aria-hidden="true">○</span>{label}</span>')
+        if report_state == "future":
+            items.append('<span class="stage-item future" aria-disabled="true"><span class="stage-mark" aria-hidden="true">○</span>Report</span>')
+        else:
+            active = ' aria-current="step"' if current == "report" else ""
+            items.append(
+                f'<a class="stage-item {report_state}{" active" if current == "report" else ""}" href="/assessments/{_h(engagement_id)}/report"'
+                f' aria-label="Report, {"Stopping" if stopping["report"] else labels[report_state]}"{active}>'
+                f'<span class="stage-mark" aria-hidden="true">{marks[report_state]}</span>Report</a>'
+            )
         return f'<nav class="stage-nav" aria-label="Assessment stages">{"".join(items)}</nav>'
 
     @staticmethod
@@ -564,6 +746,7 @@ class WebApp:
                 self._start_build()
             with self._build_lock:
                 build_state = self.build_state
+                build_error = self.build_error
             if build_state == "done" and not checks["images"]:
                 checks = self.environment_probe()
             image_status = (
@@ -594,7 +777,9 @@ class WebApp:
             if build_state == "running" and not checks["images"]:
                 build_note = '<p class="hint">The Docker build may take a few minutes. Continue will be available when the tools are ready.</p>'
             if build_state == "failed" and not checks["images"]:
-                build_note = '<p class="error" role="alert">Build failed. Run <code>./scripts/setup.sh --force-docker</code> in a terminal to see the error.</p>'
+                build_note = '<p class="error" role="alert">Tool build failed. Review the build details below, then retry.</p>'
+                if build_error:
+                    build_note += f'<details class="tool-build-error"><summary>Build details</summary><pre>{_h(build_error)}</pre></details>'
             continue_control = (
                 '<a class="primary" href="/setup?step=model">Continue</a>'
                 if all(checks.values()) else
@@ -655,20 +840,7 @@ class WebApp:
                 config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
             except (OSError, ValueError) as exc:
                 return self._setup_page("model", str(exc))
-            if provider == "custom":
-                base_url = config.custom_llm_base_url or ""
-                inputs = (
-                    '<label for="base_url">Endpoint URL</label>'
-                    f'<input id="base_url" name="base_url" type="url" maxlength="2048" required value="{_h(base_url)}" placeholder="http://localhost:11434/v1">'
-                    '<label for="api_key">API key <span class="optional">Optional</span></label>'
-                    '<input id="api_key" name="api_key" type="password" autocomplete="new-password">'
-                    '<p class="hint">Connect checks the endpoint’s model list. It does not run the configured model.</p>'
-                )
-            else:
-                inputs = (
-                    '<label for="api_key">API key</label>'
-                    '<input id="api_key" name="api_key" type="password" required autocomplete="new-password">'
-                )
+            inputs = self._provider_inputs(provider, config)
             form = self._form(
                 "/setup/provider",
                 f'<input type="hidden" name="provider" value="{provider}">{inputs}'
@@ -745,7 +917,7 @@ class WebApp:
             return self._redirect("/")
         return self._page("Not found", "<h1>Page not found</h1>", status=404)
 
-    def _start_provider_check(self, provider: str, key: str, base_url: str) -> None:
+    def _start_provider_check(self, provider: str, key: str, base_url: str, *, require_idle: bool = False) -> None:
         with self._provider_lock:
             if any(state == "checking" for state, _ in self.provider_state.values()):
                 return
@@ -762,7 +934,11 @@ class WebApp:
                         {"MOSH_LLM_BASE_URL": base_url, "MOSH_LLM_API_KEY": key or None}
                         if provider == "custom" else {KEY_NAMES[provider]: key}
                     )
-                    _write_env_settings(self.root / ".env", settings)
+                    with self._run_lock:
+                        if require_idle and self._stage_running():
+                            valid, message = False, "Wait for the current stage to finish before changing providers."
+                        else:
+                            _write_env_settings(self.root / ".env", settings)
                 except Exception:
                     valid, message = False, "Could not save provider access."
             with self._provider_lock:
@@ -779,46 +955,534 @@ class WebApp:
         docker = shutil.which("docker") is not None
         if docker:
             docker = _command_ok(["docker", "info"])
-        images = docker and all(
-            _command_ok(["docker", "image", "inspect", name])
-            for name in ("mosh-discovery-tools:latest", "mosh-security-tools:latest")
+        discovery_image = docker and _command_ok(["docker", "run", "--rm", "--pull=never", "mosh-discovery-tools:latest", "true"])
+        security_image = docker and _command_ok(["docker", "run", "--rm", "--pull=never", "mosh-security-tools:latest", "true"])
+        return {
+            "uv": uv, "docker": docker, "images": discovery_image and security_image,
+            "discovery_image": discovery_image, "security_image": security_image,
+        }
+
+    def _record_tool_checks(self, checks: dict[str, bool]) -> None:
+        with self._tool_lock:
+            self._tool_checks = dict(checks)
+            self._tool_checked_at = time.monotonic()
+            self._tool_checking = False
+
+    def _tool_snapshot(self) -> tuple[dict[str, bool] | None, bool]:
+        with self._tool_lock:
+            return (dict(self._tool_checks) if self._tool_checks is not None else None, self._tool_checking)
+
+    def _schedule_tool_check(self, *, force: bool = False) -> None:
+        with self._tool_lock:
+            if self._tool_checking or (not force and time.monotonic() - self._tool_checked_at < 30):
+                return
+            self._tool_checking = True
+
+        def run() -> None:
+            try:
+                checks = self.environment_probe()
+            except Exception:
+                checks = {"uv": False, "docker": False, "images": False}
+            self._record_tool_checks(checks)
+
+        threading.Thread(target=run, daemon=True, name="mosh-tool-health").start()
+
+    def _tool_warning(self) -> bool:
+        checks, _ = self._tool_snapshot()
+        return bool(checks is not None and not all(checks.get(name, False) for name in ("uv", "docker", "images")))
+
+    def _stage_tools_ready(self, stage: str) -> bool:
+        try:
+            checks = self.environment_probe()
+        except Exception:
+            checks = {"uv": False, "docker": False, "images": False}
+        self._record_tool_checks(checks)
+        image_key = "discovery_image" if stage == "discovery" else "security_image"
+        return bool(checks.get("docker") and checks.get(image_key, checks.get("images", False)))
+
+    def _stage_tool_notice(self, stage: str) -> str:
+        checks, _ = self._tool_snapshot()
+        if checks is None:
+            return ""
+        image_key = "discovery_image" if stage == "discovery" else "security_image"
+        if checks.get("docker") and checks.get(image_key, checks.get("images", False)):
+            return ""
+        label = "Docker is unavailable" if not checks.get("docker") else (
+            "Discovery tools are unavailable" if stage == "discovery" else "Security testing tools are unavailable"
         )
-        return {"uv": uv, "docker": docker, "images": images}
+        return (
+            f'<p class="tool-attention" role="status">{_h(label)}. '
+            '<a href="/settings#local-tools" data-settings-link>Open Settings → Local tools</a> to fix this before starting.</p>'
+        )
 
     def _build_tool_images(self) -> bool:
         script = self.root / "scripts" / "setup.sh"
         if not script.is_file():
             script = Path(__file__).resolve().parents[2] / "scripts" / "setup.sh"
-        try:
-            result = subprocess.run(
-                [str(script)],
-                cwd=script.parent.parent,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=3600,
-                check=False,
-            )
-            return result.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            return False
+        with tempfile.TemporaryFile(mode="w+b") as output:
+            try:
+                result = subprocess.run(
+                    [str(script)],
+                    cwd=script.parent.parent,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    timeout=3600,
+                    check=False,
+                    env=docker_cli_env(),
+                )
+                if result.returncode == 0:
+                    return True
+                output.seek(0, os.SEEK_END)
+                output.seek(max(0, output.tell() - 6000))
+                details = output.read().decode("utf-8", errors="replace").strip()
+                with self._build_lock:
+                    self.build_error = details or f"Setup exited with status {result.returncode}."
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                with self._build_lock:
+                    self.build_error = "The tool build timed out." if isinstance(exc, subprocess.TimeoutExpired) else "Could not start the tool build."
+        return False
 
     def _start_build(self) -> None:
         with self._build_lock:
             if self.build_state == "running":
                 return
             self.build_state = "running"
+            self.build_error = ""
 
         def run() -> None:
             try:
                 result = self.build_runner()
-                if result:
-                    result = self.environment_probe()["images"]
+                checks = self.environment_probe()
+                self._record_tool_checks(checks)
+                result = bool(result and checks["images"])
             except Exception:
                 result = False
             with self._build_lock:
                 self.build_state = "done" if result else "failed"
+                if not result and not self.build_error:
+                    self.build_error = "The build finished, but the tool images could not be started."
 
         threading.Thread(target=run, daemon=True, name="mosh-tool-build").start()
+
+    def _settings_config(self) -> AppConfig:
+        return AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+
+    @staticmethod
+    def _model_route(config: AppConfig, model: str) -> tuple[str, str]:
+        if config.uses_custom_llm(model):
+            return "Custom", config.llm_model_name(model)
+        if config.uses_direct_deepseek(model):
+            return "DeepSeek", config.llm_model_name(model)
+        return "OpenRouter", config.llm_model_name(model)
+
+    @staticmethod
+    def _stage_models(config: AppConfig, stage: str) -> list[tuple[str, str, str]]:
+        return [
+            (group, item.name, getattr(crew, item.name))
+            for group in MODEL_STAGES[stage][1]
+            for crew in [getattr(config.models, group)]
+            for item in fields(crew)
+        ]
+
+    def _local_tools_section(self) -> str:
+        checks, checking = self._tool_snapshot()
+        with self._build_lock:
+            build_state = self.build_state
+            build_error = self.build_error
+        rows = []
+        for key, label in (("uv", "Python and uv"), ("docker", "Docker"), ("discovery_image", "Discovery tools"), ("security_image", "Security tools")):
+            ready = checks.get(key, checks.get("images", False)) if checks is not None else None
+            state = "ready" if ready else "missing" if ready is False else "checking"
+            status = "Ready" if ready else "Needs attention" if ready is False else "Checking…"
+            rows.append(
+                f'<div class="model-stage-row"><strong>{label}</strong><span class="tool-check {state}">{status}</span></div>'
+            )
+        note = ""
+        if build_state == "running":
+            note = '<p class="field-help tool-build-progress" role="status">Building tools… This may take a few minutes.</p>'
+        elif checking:
+            note = '<p class="field-help" role="status">Checking local tools…</p>'
+        elif checks is not None and not checks.get("uv"):
+            note = '<p class="field-help">Install uv, then check again.</p>'
+        elif checks is not None and not checks.get("docker"):
+            note = '<p class="field-help">Start Docker, then check again.</p>'
+        elif checks is not None and not checks.get("images"):
+            note = '<p class="field-help">A tool image is missing or cannot start with the current Docker context and platform.</p>'
+            if build_state == "failed":
+                note += '<p class="field-help">The last build failed. Review the details and retry.</p>'
+                if build_error:
+                    note += f'<details class="tool-build-error"><summary>Build details</summary><pre>{_h(build_error)}</pre></details>'
+        check_action = (
+            self._form("/settings/tools/check", '<button class="secondary" type="submit">Check again</button>')
+            if build_state != "running" else ""
+        )
+        build_action = (
+            self._form("/settings/tools/build", '<button class="primary" type="submit">Build tools</button>')
+            if checks is not None and checks.get("uv") and checks.get("docker") and not checks.get("images")
+            and build_state != "running" and not self._stage_running() else ""
+        )
+        return (
+            '<section id="local-tools" class="panel settings-local-tools" data-tool-status>'
+            '<h2>Local tools</h2><p class="field-help">Docker and the images used for discovery and security testing.</p>'
+            + "".join(rows) + note + f'<div class="actions">{check_action}{build_action}</div></section>'
+        )
+
+    def _tool_status_payload(self) -> dict[str, object]:
+        checks, checking = self._tool_snapshot()
+        with self._build_lock:
+            building = self.build_state == "running"
+        warning = bool(checks is not None and not all(checks.get(name, False) for name in ("uv", "docker", "images")))
+        return {
+            "warning": warning,
+            "label": "Local tools need attention" if warning else "Local tools ready",
+            "html": self._local_tools_section(),
+            "interval_ms": 2000 if checking or building else 30000,
+        }
+
+    def _settings_build_tools(self) -> WebResponse:
+        if self._stage_running():
+            return self._settings_page(notice="Wait for the current stage to finish before building tools.")
+        try:
+            checks = self.environment_probe()
+        except Exception:
+            checks = {"uv": False, "docker": False, "images": False}
+        self._record_tool_checks(checks)
+        if checks.get("uv") and checks.get("docker") and not checks.get("images"):
+            self._start_build()
+        return self._redirect("/settings#local-tools")
+
+    def _settings_page(self, *, notice: str | None = None) -> WebResponse:
+        self._schedule_tool_check()
+        try:
+            config = self._settings_config()
+        except (OSError, ValueError) as exc:
+            return self._settings_frame("Settings", f'<h1>Settings</h1>{self._error(str(exc))}', wide=True)
+        connected = [
+            label for key, label in (("deepseek", "DeepSeek"), ("openrouter", "OpenRouter"), ("custom", "Custom endpoint"))
+            if (config.custom_llm_base_url if key == "custom" else getattr(config, KEY_FIELDS[key]))
+        ]
+        provider_summary = ", ".join(connected) if connected else "No providers connected"
+        rows = []
+        for stage, (label, _) in MODEL_STAGES.items():
+            assignments = self._stage_models(config, stage)
+            effective = list(dict.fromkeys(self._model_route(config, model) for _, _, model in assignments))
+            providers = list(dict.fromkeys(name for name, _ in effective))
+            summary = (
+                f"{effective[0][0]} · {effective[0][1]}" if len(effective) == 1
+                else f"{' + '.join(providers)} · {len(effective)} models across {len(assignments)} agents"
+            )
+            rows.append(
+                f'<div class="model-stage-row"><div><strong>{_h(label)}</strong><small>{_h(summary)}</small></div>'
+                f'<a class="text-link" href="/settings/models/{stage}">Edit</a></div>'
+            )
+        legacy = (
+            '<p class="settings-note">Your custom endpoint currently serves every model. Editing a stage will keep the other stages on this endpoint.</p>'
+            if config.custom_llm_base_url and not config.has_explicit_custom_models() else ""
+        )
+        body = (
+            '<div class="settings-heading"><div><h1>Settings</h1>'
+            '<p class="intro">Manage models and the local tools used by assessments.</p></div></div>'
+            + (f'<p class="save-notice" role="status">{_h(notice)}</p>' if notice else '')
+            + '<section class="panel settings-providers"><div><h2>Connected providers</h2>'
+            f'<p>{_h(provider_summary)}</p></div><a class="text-link" href="/settings/providers">Manage providers</a></section>'
+            + self._local_tools_section()
+            + legacy
+            + '<section class="panel settings-models"><h2>Model assignments</h2>'
+            '<p class="field-help">Edit a stage to choose a provider and model for each agent, or apply one model to the whole stage.</p>'
+            + ''.join(rows) + '</section>'
+        )
+        return self._settings_frame("Settings", body, wide=True)
+
+    def _settings_providers_page(self, *, error: str | None = None) -> WebResponse:
+        config = self._settings_config()
+        with self._provider_lock:
+            checking = any(state == "checking" for state, _ in self.provider_state.values())
+            states = dict(self.provider_state)
+        rows = []
+        for key, label in (("deepseek", "DeepSeek"), ("openrouter", "OpenRouter"), ("custom", "Custom endpoint")):
+            configured = bool(config.custom_llm_base_url if key == "custom" else getattr(config, KEY_FIELDS[key]))
+            state, message = states.get(key, ("", ""))
+            status = "Checking API" if state == "checking" else "Connected" if configured else "Not connected"
+            status_class = "checking" if state == "checking" else "ready" if configured else "missing"
+            action = "" if state == "checking" else f'<a class="text-link" href="/settings/providers/{key}">{"Change" if configured else "Connect"}</a>'
+            rows.append(
+                f'<div class="model-stage-row"><div><strong>{label}</strong><small class="{status_class}">{status}</small>'
+                + (f'<small class="failed">{_h(message)}</small>' if state == "failed" else '')
+                + f'</div>{action}</div>'
+            )
+        body = (
+            '<a class="text-link" href="/settings">← Models</a>'
+            '<h1>Providers</h1><p class="intro">Connect the services available to model assignments. Keys are never displayed.</p>'
+            + self._error(error) + '<section class="panel settings-models"><h2>Connections</h2>'
+            + ''.join(rows) + '</section>'
+        )
+        return self._settings_frame("Providers", body, refresh=checking)
+
+    def _provider_inputs(self, provider: str, config: AppConfig) -> str:
+        if provider == "custom":
+            return (
+                '<label for="base_url">Endpoint URL</label>'
+                f'<input id="base_url" name="base_url" type="url" maxlength="2048" required value="{_h(config.custom_llm_base_url or "")}" placeholder="http://localhost:11434/v1">'
+                '<label for="api_key">API key <span class="optional">Optional</span></label>'
+                '<input id="api_key" name="api_key" type="password" autocomplete="new-password">'
+                '<p class="hint">Checks the endpoint’s model list. Leaving the key empty removes any saved custom key.</p>'
+            )
+        return (
+            '<label for="api_key">API key</label>'
+            '<input id="api_key" name="api_key" type="password" required autocomplete="new-password">'
+        )
+
+    def _settings_provider_form(self, provider: str, *, error: str | None = None) -> WebResponse:
+        if provider not in KEY_NAMES:
+            return self._redirect("/settings/providers")
+        config = self._settings_config()
+        label = "Custom endpoint" if provider == "custom" else provider.title()
+        form = self._form(
+            "/settings/providers/connect",
+            f'<input type="hidden" name="provider" value="{provider}">'
+            + self._provider_inputs(provider, config)
+            + '<div class="actions"><a class="text-link" href="/settings/providers">Cancel</a>'
+            '<button class="primary" type="submit">Check and save</button></div>',
+        )
+        body = (
+            f'<a class="text-link" href="/settings/providers">← Providers</a>'
+            f'<h1>{_h(label)}</h1><p class="intro">Connect this provider for future model assignments.</p>'
+            + self._error(error) + f'<section class="panel">{form}</section>'
+        )
+        return self._settings_frame(label, body)
+
+    def _settings_provider_action(self, form: dict[str, str]) -> WebResponse:
+        provider = form.get("provider", "")
+        if provider not in KEY_NAMES:
+            return self._redirect("/settings/providers")
+        if self._stage_running():
+            return self._settings_provider_form(provider, error="Wait for the current stage to finish before changing providers.")
+        key = form.get("api_key", "").strip()
+        if len(key) > 4096 or (key and not key.isprintable()) or (provider != "custom" and not key):
+            return self._settings_provider_form(provider, error="Enter a valid API key.")
+        base_url = form.get("base_url", "").strip() if provider == "custom" else ""
+        if provider == "custom" and not _valid_endpoint_url(base_url):
+            return self._settings_provider_form(provider, error="Enter an http or https endpoint URL without credentials or a query string.")
+        with self._provider_lock:
+            if any(state == "checking" for state, _ in self.provider_state.values()):
+                return self._settings_providers_page(error="Wait for the current API check to finish.")
+        self._start_provider_check(provider, key, base_url, require_idle=True)
+        return self._redirect("/settings/providers")
+
+    def _stage_running(self) -> bool:
+        with self._run_lock:
+            return any(run.status == "running" for runs in (self.discovery_runs, self.planning_runs, self.testing_runs, self.reporting_runs) for run in runs.values())
+
+    def _settings_model_page(self, stage: str, *, error: str | None = None, provider: str = "", model_id: str = "", agent_values: dict[str, str] | None = None) -> WebResponse:
+        if stage not in MODEL_STAGES:
+            return self._page("Not found", '<main class="home"><h1>Stage not found</h1></main>', status=404)
+        config = self._settings_config()
+        label = MODEL_STAGES[stage][0]
+        assignments = self._stage_models(config, stage)
+        effective = list(dict.fromkeys(self._model_route(config, model) for _, _, model in assignments))
+        if not provider and not model_id and error is None and len(effective) == 1:
+            provider = {"DeepSeek": "deepseek", "OpenRouter": "openrouter", "Custom": "custom"}[effective[0][0]]
+            model_id = effective[0][1]
+        providers = [("deepseek", "DeepSeek", bool(config.deepseek_api_key)),
+                     ("openrouter", "OpenRouter", bool(config.openrouter_api_key)),
+                     ("custom", "Custom endpoint", bool(config.custom_llm_base_url))]
+        def options_for(selected: str) -> str:
+            return '<option value="">Choose provider</option>' + ''.join(
+                f'<option value="{key}"{" selected" if selected == key else ""}{" disabled" if not connected else ""}>{name}{" · connect first" if not connected else ""}</option>'
+                for key, name, connected in providers
+            )
+
+        agent_rows = []
+        previous_group = ""
+        for group, role, model in assignments:
+            if group != previous_group:
+                group_label = "Live discovery" if group == "discovery_live" else "Source discovery" if group == "discovery_source" else label
+                agent_rows.append(f'<h3>{_h(group_label)}</h3>')
+                previous_group = group
+            route_name, route_model = self._model_route(config, model)
+            current_provider = {"DeepSeek": "deepseek", "OpenRouter": "openrouter", "Custom": "custom"}[route_name]
+            provider_name = f"provider__{group}__{role}"
+            model_name = f"model_id__{group}__{role}"
+            chosen_provider = agent_values.get(provider_name, current_provider) if agent_values else current_provider
+            chosen_model = agent_values.get(model_name, route_model) if agent_values else route_model
+            agent_rows.append(
+                '<div class="settings-agent-edit">'
+                f'<strong>{_h(role.replace("_", " ").title())}</strong>'
+                f'<label>Provider<select name="{provider_name}" required>{options_for(chosen_provider)}</select></label>'
+                f'<label>Model ID<input name="{model_name}" type="text" maxlength="200" required value="{_h(chosen_model)}" placeholder="Model name at this provider"></label>'
+                '</div>'
+            )
+        agent_form = self._form(
+            f"/settings/models/{stage}",
+            '<input type="hidden" name="mode" value="agents">'
+            + ''.join(agent_rows)
+            + '<p class="field-help">Enter each model’s exact ID at its provider. Saving changes future runs only.</p>'
+            '<div class="actions"><a class="text-link" href="/settings">Cancel</a><button class="primary" type="submit" name="action" value="review">Review changes</button></div>',
+        )
+        bulk_form = self._form(
+            f"/settings/models/{stage}",
+            f'<div class="settings-form-grid"><label>Provider<select name="provider" required>{options_for(provider)}</select></label>'
+            f'<label>Model ID<input name="model_id" type="text" maxlength="200" required value="{_h(model_id)}" placeholder="Model name at this provider"></label></div>'
+            f'<p class="field-help">This assigns one model to all {len(assignments)} agents in {_h(label)}. Enter the exact ID used by the provider. No model call is made when you save.</p>'
+            '<div class="actions"><a class="text-link" href="/settings">Cancel</a><button class="primary" type="submit" name="action" value="review">Review change</button></div>',
+        )
+        body = (
+            f'<a class="text-link" href="/settings">← Models</a>'
+            f'<h1>{_h(label)} models</h1><p class="intro">Choose a model for each agent in this stage. Changes apply to future runs.</p>'
+            + self._error(error)
+            + f'<section class="panel settings-agent-models"><h2>Agent assignments</h2>{agent_form}</section>'
+            + f'<section class="panel settings-current"><details><summary>Apply one model to all {len(assignments)} agents</summary>{bulk_form}</details></section>'
+        )
+        return self._settings_frame(f"{label} models", body)
+
+    @staticmethod
+    def _selected_model_id(provider: str, model_id: str) -> str:
+        model = model_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}", model):
+            raise ValueError("Enter a valid model ID without spaces.")
+        if provider == "custom":
+            selected = "custom/" + model.removeprefix("custom/")
+            if len(selected) > 200:
+                raise ValueError("Model ID is too long.")
+            return selected
+        if provider == "deepseek":
+            if model.startswith("openrouter/") or model.startswith("custom/"):
+                raise ValueError("Enter a DeepSeek model ID for this provider.")
+            selected = "deepseek/" + model.removeprefix("deepseek/")
+            if len(selected) > 200:
+                raise ValueError("Model ID is too long.")
+            return selected
+        if provider == "openrouter":
+            model = model.removeprefix("openrouter/")
+            if "/" not in model or model.startswith("custom/"):
+                raise ValueError("Enter an OpenRouter model ID such as provider/model-name.")
+            selected = "openrouter/" + model
+            if len(selected) > 200:
+                raise ValueError("Model ID is too long.")
+            return selected
+        raise ValueError("Choose a connected provider.")
+
+    def _model_config_digest(self, config: AppConfig) -> str:
+        content = (self.root / "mosh.yaml").read_bytes() if (self.root / "mosh.yaml").exists() else b""
+        routing = f"{bool(config.deepseek_api_key)}:{bool(config.openrouter_api_key)}:{config.custom_llm_base_url or ''}"
+        return hashlib.sha256(content + routing.encode("utf-8")).hexdigest()
+
+    def _settings_model_action(self, stage: str, form: dict[str, str]) -> WebResponse:
+        if stage not in MODEL_STAGES:
+            return self._settings_model_page(stage)
+        agent_mode = form.get("mode") == "agents"
+        provider = form.get("provider", "")
+        model_id = form.get("model_id", "").strip()
+        if self._stage_running():
+            return self._settings_model_page(stage, error="Wait for the current stage to finish before changing models.", provider=provider, model_id=model_id, agent_values=form if agent_mode else None)
+        try:
+            config = self._settings_config()
+            connected = {"deepseek": bool(config.deepseek_api_key), "openrouter": bool(config.openrouter_api_key), "custom": bool(config.custom_llm_base_url)}
+            if not agent_mode:
+                if not connected.get(provider):
+                    raise ValueError("Connect this provider before assigning its models.")
+                selected = self._selected_model_id(provider, model_id)
+            models = config.models
+            updates: dict[str, dict[str, str]] = {}
+            if config.custom_llm_base_url and not config.has_explicit_custom_models():
+                for group in (item.name for item in fields(models)):
+                    if group in MODEL_STAGES[stage][1]:
+                        continue
+                    crew = getattr(models, group)
+                    roles = {item.name: "custom/" + getattr(crew, item.name).removeprefix("custom/") for item in fields(crew)}
+                    updates[group] = roles
+                    models = replace(models, **{group: replace(crew, **roles)})
+            for group in MODEL_STAGES[stage][1]:
+                crew = getattr(models, group)
+                roles = {}
+                for item in fields(crew):
+                    if agent_mode:
+                        agent_provider = form.get(f"provider__{group}__{item.name}", "")
+                        agent_model_id = form.get(f"model_id__{group}__{item.name}", "").strip()
+                        if not connected.get(agent_provider):
+                            raise ValueError(f"Connect the provider for {item.name.replace('_', ' ')} before assigning its model.")
+                        selected = self._selected_model_id(agent_provider, agent_model_id)
+                    if not agent_mode or selected != getattr(crew, item.name):
+                        roles[item.name] = selected
+                if roles:
+                    updates[group] = roles
+                    models = replace(models, **{group: replace(crew, **roles)})
+            candidate = replace(config, models=models)
+            missing = candidate.missing_llm_settings_for_models(list(candidate.model_ids()))
+            if missing:
+                raise ValueError("Connect the providers needed by the remaining assignments: " + ", ".join(missing) + ".")
+            action = form.get("action")
+            if action == "review":
+                return self._settings_model_review(stage, provider, model_id, config, candidate, agent_values=form if agent_mode else None)
+            if action != "save" or form.get("reviewed") != "yes":
+                raise ValueError("Review the model change before saving.")
+            if form.get("source_digest") != self._model_config_digest(config):
+                raise ValueError("Model settings changed since the review. Review them again.")
+            with self._run_lock:
+                if self._stage_running():
+                    raise ValueError("Wait for the current stage to finish before changing models.")
+                write_model_assignments(self.root / "mosh.yaml", updates)
+            return self._redirect(f"/settings?saved={stage}")
+        except (OSError, ValueError) as exc:
+            return self._settings_model_page(stage, error=str(exc), provider=provider, model_id=model_id, agent_values=form if agent_mode else None)
+
+    def _settings_model_review(self, stage: str, provider: str, model_id: str, current: AppConfig, candidate: AppConfig, *, agent_values: dict[str, str] | None = None) -> WebResponse:
+        label = MODEL_STAGES[stage][0]
+        rows = []
+        outside = 0
+        for key, (stage_label, _) in MODEL_STAGES.items():
+            before = self._stage_models(current, key)
+            after = self._stage_models(candidate, key)
+            stage_changed = False
+            for (group, role, old_model), (_, _, new_model) in zip(before, after, strict=True):
+                old_route = self._model_route(current, old_model)
+                new_route = self._model_route(candidate, new_model)
+                if old_route == new_route:
+                    continue
+                stage_changed = True
+                agent_label = role.replace("_", " ").title()
+                if key == "discovery":
+                    agent_label = ("Live" if group == "discovery_live" else "Source") + " · " + agent_label
+                rows.append(
+                    f'<div class="model-review-row"><strong>{_h(stage_label)} · {_h(agent_label)}</strong>'
+                    f'<span>{_h(old_route[0])} · {_h(old_route[1])}</span><span aria-hidden="true">→</span>'
+                    f'<span>{_h(new_route[0])} · {_h(new_route[1])}</span></div>'
+                )
+            if key != stage and stage_changed:
+                outside += 1
+        warning = (
+            f'<p class="settings-note">This also changes where models run in {outside} other {"stage" if outside == 1 else "stages"}. Review every destination below.</p>'
+            if outside else ""
+        )
+        if current.custom_llm_base_url and not current.has_explicit_custom_models():
+            warning += '<p class="field-help">The other stages keep using your custom endpoint. Their assignments will be made explicit in mosh.yaml.</p>'
+        if agent_values is not None:
+            selection_fields = '<input type="hidden" name="mode" value="agents">'
+            for group, role, _ in self._stage_models(current, stage):
+                for kind in ("provider", "model_id"):
+                    name = f"{kind}__{group}__{role}"
+                    selection_fields += f'<input type="hidden" name="{name}" value="{_h(agent_values.get(name, ""))}">'
+        else:
+            selection_fields = (
+                f'<input type="hidden" name="provider" value="{_h(provider)}">'
+                f'<input type="hidden" name="model_id" value="{_h(model_id)}">'
+            )
+        confirm = self._form(
+            f"/settings/models/{stage}",
+            selection_fields +
+            f'<input type="hidden" name="source_digest" value="{self._model_config_digest(current)}">'
+            '<input type="hidden" name="reviewed" value="yes">'
+            f'<div class="actions"><a class="text-link" href="/settings/models/{stage}">Back</a>'
+            '<button class="primary" type="submit" name="action" value="save">Save assignments</button></div>',
+        )
+        body = (
+            f'<a class="text-link" href="/settings/models/{stage}">← Edit models</a>'
+            f'<h1>Review {label.lower()} models</h1><p class="intro">Confirm where future model calls will go. Existing work will not be rerun.</p>'
+            + warning + '<section class="panel"><h2>Routing changes</h2>'
+            + (''.join(rows) if rows else '<p class="empty">These assignments are already in use.</p>')
+            + '</section>' + confirm
+        )
+        return self._settings_frame("Review model change", body)
 
     def _home(self) -> WebResponse:
         entries = []
@@ -1122,11 +1786,7 @@ class WebApp:
         except (OSError, ValueError):
             return self._assessment_detail(engagement_id)
         with self._run_lock:
-            stage_running = any(run.status == "running" for run in self.discovery_runs.values()) or any(
-                run.status == "running" for run in self.planning_runs.values()
-            ) or any(
-                run.status == "running" for run in self.testing_runs.values()
-            )
+            stage_running = self._stage_running()
         if stage_running:
             return self._assessment_detail(engagement_id, asset_error="Wait for the current stage to finish before changing assets.")
         action = form.get("action", "")
@@ -1148,8 +1808,17 @@ class WebApp:
                     if not self._start_assessment_asset_check(engagement_id, kind, locator):
                         raise ValueError("Resolve the current asset check first.")
             elif action == "remove":
+                asset_id = form.get("asset_id", "")
                 with self._asset_lock:
-                    detach_asset(self.output_root, engagement_id, form.get("asset_id", ""))
+                    detach_asset(self.output_root, engagement_id, asset_id)
+                template_path = engagement_dir(self.output_root, engagement_id) / "engagement_template.yaml"
+                if template_path.exists():
+                    template = load_engagement_file(template_path)
+                    headers_by_asset = dict(template.get("asset_request_headers") or {})
+                    if asset_id in headers_by_asset:
+                        del headers_by_asset[asset_id]
+                        template["asset_request_headers"] = headers_by_asset
+                        write_engagement_template_mapping(template_path.parent, template, preserve_existing=False, reject_candidate_credentials=False)
             elif action in {"retry", "add-anyway", "dismiss"}:
                 with self._asset_lock:
                     pending = self.assessment_asset_checks.get(engagement_id)
@@ -1216,15 +1885,19 @@ class WebApp:
         except (OSError, ValueError):
             return self._assessment_detail(engagement_id)
         action = form.get("action", "")
+        if action == "stop":
+            if form.get("confirmed") != "yes":
+                return self._discovery_page(engagement_id, error="Confirm before stopping Discovery.")
+            self._request_stop(engagement_id, "discovery")
+            return self._redirect(f"/assessments/{engagement_id}/discovery")
+        if action in {"start", "retry", "refresh"} and not (action == "refresh" and form.get("confirmed") != "yes"):
+            if not self._stage_tools_ready("discovery"):
+                return self._discovery_page(engagement_id)
         supported = [asset for asset in engagement.assets if asset.type in DISCOVERY_STEPS]
         supported_ids = {asset.id for asset in supported}
         due = [asset.id for asset in supported if not (asset_discovery_dir(self.output_root, engagement_id, asset.id) / "report.md").is_file()]
         with self._run_lock:
-            if any(run.status == "running" for run in self.discovery_runs.values()) or any(
-                run.status == "running" for run in self.planning_runs.values()
-            ) or any(
-                run.status == "running" for run in self.testing_runs.values()
-            ):
+            if self._stage_running():
                 return self._discovery_page(engagement_id, error="A stage is already running. Wait for it to finish.")
             if action == "refresh" and form.get("confirmed") != "yes":
                 return self._discovery_refresh_page(engagement_id)
@@ -1258,6 +1931,8 @@ class WebApp:
         try:
             config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
             for asset_id in run.asset_ids:
+                if run.stop_requested.is_set():
+                    raise RunStopped("Stopped by you")
                 with self._run_lock:
                     run.current_asset_id = asset_id
                     run.active_step = 0
@@ -1276,6 +1951,10 @@ class WebApp:
                     run.completed_ids.add(asset_id)
             with self._run_lock:
                 run.status = "complete"
+                run.current_asset_id = ""
+        except RunStopped:
+            with self._run_lock:
+                run.status = "stopped"
                 run.current_asset_id = ""
         except Exception as exc:
             with self._run_lock:
@@ -1299,6 +1978,11 @@ class WebApp:
             engagement = load_engagement(self.output_root, engagement_id)
         except (OSError, ValueError):
             return self._planning_page(engagement_id)
+        if form.get("action") == "stop":
+            if form.get("confirmed") != "yes":
+                return self._planning_page(engagement_id, error="Confirm before stopping Planning.")
+            self._request_stop(engagement_id, "planning")
+            return self._redirect(f"/assessments/{engagement_id}/planning")
         if form.get("action") not in {"start", "retry"}:
             return self._planning_page(engagement_id, error="Choose a valid planning action.")
         supported = [asset for asset in engagement.assets if asset.type in DISCOVERY_STEPS]
@@ -1306,11 +1990,7 @@ class WebApp:
         if not supported or missing:
             return self._planning_page(engagement_id, error="Complete discovery for all supported assets before planning.")
         with self._run_lock:
-            if any(run.status == "running" for run in self.discovery_runs.values()) or any(
-                run.status == "running" for run in self.planning_runs.values()
-            ) or any(
-                run.status == "running" for run in self.testing_runs.values()
-            ):
+            if self._stage_running():
                 return self._planning_page(engagement_id, error="A stage is already running. Wait for it to finish.")
             if self._planning_current(engagement):
                 return self._redirect(f"/assessments/{engagement_id}/planning")
@@ -1327,27 +2007,35 @@ class WebApp:
 
         try:
             config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
-            report_dir = self.planning_runner(config, self.output_root, engagement_id, event_sink)
+            sink = StageEventSink(event_sink, run.stop_requested)
+            sink.check_stop()
+            report_dir = self.planning_runner(config, self.output_root, engagement_id, sink)
             if not (report_dir / "plan.md").is_file():
                 raise RuntimeError("Planning did not write a security test plan.")
             with self._run_lock:
                 run.active_step = len(PLANNING_STEPS)
                 run.status = "complete"
+        except RunStopped:
+            with self._run_lock:
+                run.status = "stopped"
         except Exception as exc:
             with self._run_lock:
                 run.status = "failed"
                 run.error = str(exc) or "Planning failed."
 
-    def _planning_report(self, engagement_id: str) -> WebResponse:
+    def _planning_report(self, engagement_id: str, *, download_format: str = "") -> WebResponse:
         try:
             engagement = load_engagement(self.output_root, engagement_id)
             report = (engagement_plan_dir(self.output_root, engagement_id) / "plan.md").read_text(encoding="utf-8")
         except (OSError, ValueError):
             return self._page("Not found", '<main class="home"><h1>Security test plan not found</h1></main>', status=404)
+        if download_format in {"pdf", "docx", "md"}:
+            return self._document_download(report, "Security test plan", f"{engagement_id}-security-test-plan", download_format)
+        download_url = f"/assessments/{_h(engagement_id)}/planning/report"
         body = (
             f'<main class="home"><a class="text-link" href="/assessments/{_h(engagement_id)}/planning">← Back to planning</a>'
             f'<h1>Security test plan</h1><p class="intro">{_h(engagement.title or engagement.id)}</p>'
-            f'{render_markdown_document(report)}</main>'
+            f'{render_markdown_document(report, download_url=download_url)}</main>'
         )
         return self._page("Security test plan", body)
 
@@ -1374,13 +2062,21 @@ class WebApp:
         report_path = engagement_plan_dir(self.output_root, engagement_id) / "plan.md"
         with self._run_lock:
             current = self.planning_runs.get(engagement_id)
-            testing_run_started = engagement_id in self.testing_runs
+            testing_run = self.testing_runs.get(engagement_id)
+            testing_run_started = testing_run is not None
+            updating_from_testing = bool(
+                (current and current.from_testing and current.status == "running")
+                or (testing_run and testing_run.status == "running" and _testing_updating_plan(testing_run.events))
+            )
             run = PlanningRun(
                 active_step=current.active_step, status=current.status, error=current.error,
-                events=list(current.events) if show_logs else [],
+                events=list(current.events) if show_logs else [], from_testing=current.from_testing,
+                stop_requested=current.stop_requested,
             ) if current else None
-        running = bool(run and run.status == "running")
-        failed = bool(run and run.status == "failed")
+        running = bool((run and run.status == "running") or updating_from_testing)
+        stopping = bool(run and run.status == "running" and run.stop_requested.is_set())
+        stopped = bool(run and run.status == "stopped")
+        failed = bool(run and run.status == "failed" and not updating_from_testing)
         report_ready = report_path.is_file()
         current_plan = report_ready and not running and self._planning_current(engagement)
         testing_started = testing_run_started or self._testing_dir(engagement_id).exists()
@@ -1389,10 +2085,16 @@ class WebApp:
             (asset_discovery_dir(self.output_root, engagement_id, asset.id) / "report.md").is_file()
             for asset in supported
         )
-        if running:
+        if stopping:
+            summary = "Stopping planning after the current model task finishes…"
+        elif stopped:
+            summary = "Planning stopped by you. Completed work remains available."
+        elif updating_from_testing:
+            summary = "Updating the plan with new information found during Testing. Test reports are already saved."
+        elif running:
             summary = "Planning in progress"
         elif failed:
-            summary = "Planning needs attention"
+            summary = "Plan update from Testing needs attention" if run and run.from_testing else "Planning needs attention"
         elif report_ready and current_plan:
             summary = "Planning complete"
         elif report_ready:
@@ -1401,10 +2103,21 @@ class WebApp:
             summary = "Discovery is complete. Ready to build a security test plan."
         else:
             summary = "Complete discovery before planning."
-        if running or not ready:
+        if running:
+            action = '<span class="stage-stopping">Stopping…</span>' if stopping else self._stop_control(planning_url, "Planning")
+        elif not ready:
             action = ""
+        elif stopped:
+            action = (
+                self._form(f"/assessments/{engagement_id}/testing", '<button class="primary" type="submit" name="action" value="replan">Restart plan update</button>')
+                if run and run.from_testing else self._form(planning_url, '<button class="primary" type="submit" name="action" value="start">Restart planning</button>')
+            )
         elif failed:
-            action = self._form(planning_url, '<button class="primary" type="submit" name="action" value="retry">Retry planning</button>')
+            action = (
+                self._form(f"/assessments/{engagement_id}/testing", '<button class="primary" type="submit" name="action" value="replan">Retry plan update</button>')
+                if run and run.from_testing else
+                self._form(planning_url, '<button class="primary" type="submit" name="action" value="retry">Retry planning</button>')
+            )
         elif report_ready and current_plan:
             action = (
                 f'<a class="primary" href="/assessments/{_h(engagement_id)}/testing">Continue to testing</a>'
@@ -1414,7 +2127,7 @@ class WebApp:
             label = "Update plan" if report_ready else "Start planning"
             action = self._form(planning_url, f'<button class="primary" type="submit" name="action" value="start">{label}</button>')
         steps = ""
-        if run:
+        if run and (not updating_from_testing or run.from_testing):
             items = "".join(
                 f'<li class="{_stage_step_class(index, run.active_step, run.status)}">{_h(label)}</li>'
                 for index, label in enumerate(PLANNING_STEPS)
@@ -1422,7 +2135,7 @@ class WebApp:
             steps = f'<ol class="discovery-steps">{items}</ol>'
         logs = ""
         if show_logs:
-            if run:
+            if run and (not updating_from_testing or run.from_testing):
                 events = [event.to_dict() for event in run.events]
             else:
                 try:
@@ -1457,13 +2170,13 @@ class WebApp:
     def _testing_dir(self, engagement_id: str) -> Path:
         return engagement_dir(self.output_root, engagement_id) / "security-testing"
 
-    def _testing_snapshot(self, engagement_id: str) -> tuple[dict | None, bool]:
+    def _testing_snapshot(self, engagement_id: str) -> tuple[dict | None, bool, bool]:
         testing_dir = self._testing_dir(engagement_id)
         try:
             memory = json.loads((testing_dir / "memory.json").read_text(encoding="utf-8"))
             events = json.loads((testing_dir / "events.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None, False
+            return None, False, False
         preflight = None
         if isinstance(memory, list):
             preflight = next(
@@ -1474,7 +2187,11 @@ class WebApp:
             isinstance(event, dict) and event.get("agent") == "orchestrator" and event.get("action") == "complete"
             for event in events
         )
-        return preflight if isinstance(preflight, dict) else None, complete
+        plan_refreshed = isinstance(events, list) and any(
+            isinstance(event, dict) and event.get("agent") == "orchestrator" and event.get("action") == "planning_refresh_complete"
+            for event in events
+        )
+        return preflight if isinstance(preflight, dict) else None, complete, plan_refreshed
 
     def _testing_plan_matches(self, engagement_id: str, preflight: dict) -> bool:
         from mosh.crews.testing.crew import plan_revision_id
@@ -1483,6 +2200,26 @@ class WebApp:
             return preflight.get("plan_revision_id") == plan_revision_id(self._testing_plan(engagement_id))
         except (OSError, ValueError, RuntimeError):
             return False
+
+    def _report_allowed(self, engagement: Engagement) -> bool:
+        preflight, completed, _ = self._testing_snapshot(engagement.id)
+        return bool(
+            completed and preflight and self._planning_current(engagement)
+            and self._testing_plan_matches(engagement.id, preflight)
+        )
+
+    def _final_report_ready(self, engagement_id: str) -> bool:
+        report_dir = engagement_dir(self.output_root, engagement_id) / "final-report"
+        if not (report_dir / "report.md").is_file():
+            return False
+        try:
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return isinstance(events, list) and any(
+            isinstance(event, dict) and event.get("agent") == "orchestrator" and event.get("action") == "complete"
+            for event in events
+        )
 
     def _testing_plan(self, engagement_id: str) -> dict:
         from mosh.conversation import active_directives
@@ -1530,7 +2267,7 @@ class WebApp:
         testing_url = f"/assessments/{engagement.id}/testing"
         hypotheses = _hypotheses(plan)
         with self._run_lock:
-            can_edit = not any(run.status == "running" for runs in (self.discovery_runs, self.planning_runs, self.testing_runs) for run in runs.values())
+            can_edit = not self._stage_running()
         phases = {}
         for event in progress_events or []:
             test_id = event.data.get("test_id")
@@ -1692,29 +2429,86 @@ class WebApp:
     def _run_testing(config: AppConfig, output_root: Path, engagement_id: str, event_sink: Callable[[Event], None]) -> Path:
         from mosh.crews.testing.crew import SecurityTestingOrchestrator
 
-        return SecurityTestingOrchestrator(config, output_root=output_root, event_sink=event_sink).run(engagement_id)
+        return SecurityTestingOrchestrator(config, output_root=output_root, event_sink=event_sink).run(
+            engagement_id, auto_refresh_feedback=False,
+        )
+
+    @staticmethod
+    def _run_feedback_refresh(config: AppConfig, output_root: Path, engagement_id: str, event_sink: Callable[[Event], None]) -> Path:
+        from mosh.crews.testing.crew import SecurityTestingOrchestrator
+
+        return SecurityTestingOrchestrator(config, output_root=output_root, event_sink=event_sink).apply_feedback(engagement_id)
 
     def _testing_action(self, engagement_id: str, form: dict[str, str]) -> WebResponse:
         try:
             engagement = load_engagement(self.output_root, engagement_id)
         except (OSError, ValueError):
             return self._testing_page(engagement_id)
-        if form.get("action") != "start":
+        action = form.get("action")
+        if action == "stop":
+            if form.get("confirmed") != "yes":
+                return self._testing_page(engagement_id, error="Confirm before stopping Testing.")
+            self._request_stop(engagement_id, "testing")
+            return self._redirect(f"/assessments/{engagement_id}/testing")
+        if action == "stop-replan":
+            if form.get("confirmed") != "yes":
+                return self._testing_page(engagement_id, error="Confirm before stopping the plan update.")
+            with self._run_lock:
+                run = self.planning_runs.get(engagement_id)
+                if run and run.from_testing and run.status == "running":
+                    run.stop_requested.set()
+            return self._redirect(f"/assessments/{engagement_id}/testing")
+        if action == "replan":
+            from mosh.crews.testing.crew import has_unapplied_testing_feedback
+
+            _, completed, _ = self._testing_snapshot(engagement_id)
+            if not completed or not has_unapplied_testing_feedback(self.output_root, engagement_id):
+                return self._testing_page(engagement_id, error="There is no new testing information to add to the plan.")
+            with self._run_lock:
+                if self._stage_running():
+                    return self._testing_page(engagement_id, error="A stage is already running. Wait for it to finish.")
+                run = PlanningRun(from_testing=True)
+                self.planning_runs[engagement_id] = run
+            threading.Thread(target=self._run_feedback_task, args=(engagement_id, run), daemon=True, name="mosh-web-feedback").start()
+            return self._redirect(f"/assessments/{engagement_id}/testing")
+        if action != "start":
             return self._testing_page(engagement_id, error="Choose a valid testing action.")
         if not (engagement_plan_dir(self.output_root, engagement_id) / "plan.md").is_file() or not self._planning_current(engagement):
             return self._testing_page(engagement_id, error="Complete or update planning before testing.")
+        if not self._stage_tools_ready("testing"):
+            return self._testing_page(engagement_id)
         with self._run_lock:
-            if any(run.status == "running" for run in self.discovery_runs.values()) or any(
-                run.status == "running" for run in self.planning_runs.values()
-            ) or any(run.status == "running" for run in self.testing_runs.values()):
+            if self._stage_running():
                 return self._testing_page(engagement_id, error="A stage is already running. Wait for it to finish.")
-            preflight, completed = self._testing_snapshot(engagement_id)
+            preflight, completed, _ = self._testing_snapshot(engagement_id)
             if completed and preflight is not None and not preflight.get("blocked") and not self._testing_pending_count(engagement_id, preflight) and self._testing_plan_matches(engagement_id, preflight):
                 return self._redirect(f"/assessments/{engagement_id}/testing")
             run = TestingRun()
             self.testing_runs[engagement_id] = run
         threading.Thread(target=self._run_testing_task, args=(engagement_id, run), daemon=True, name="mosh-web-testing").start()
         return self._redirect(f"/assessments/{engagement_id}/testing")
+
+    def _run_feedback_task(self, engagement_id: str, run: PlanningRun) -> None:
+        def event_sink(event: Event) -> None:
+            with self._run_lock:
+                run.events.append(event)
+                run.active_step = max(run.active_step, PLANNING_STEP_AFTER_EVENT.get((event.agent, event.action), 0))
+
+        try:
+            config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+            sink = StageEventSink(event_sink, run.stop_requested)
+            sink.check_stop()
+            self.feedback_runner(config, self.output_root, engagement_id, sink)
+            with self._run_lock:
+                run.status = "complete"
+                run.active_step = len(PLANNING_STEPS)
+        except RunStopped:
+            with self._run_lock:
+                run.status = "stopped"
+        except Exception as exc:
+            with self._run_lock:
+                run.status = "failed"
+                run.error = str(exc) or "Plan update failed."
 
     def _run_testing_task(self, engagement_id: str, run: TestingRun) -> None:
         def event_sink(event: Event) -> None:
@@ -1723,17 +2517,22 @@ class WebApp:
 
         try:
             config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
-            report_dir = self.testing_runner(config, self.output_root, engagement_id, event_sink)
+            sink = StageEventSink(event_sink, run.stop_requested)
+            sink.check_stop()
+            report_dir = self.testing_runner(config, self.output_root, engagement_id, sink)
             if not (report_dir / "preflight.md").is_file():
                 raise RuntimeError("Testing did not write a preflight report.")
             with self._run_lock:
                 run.status = "complete"
+        except RunStopped:
+            with self._run_lock:
+                run.status = "stopped"
         except Exception as exc:
             with self._run_lock:
                 run.status = "failed"
                 run.error = str(exc) or "Testing failed."
 
-    def _testing_report(self, engagement_id: str, report_id: str, *, preflight: bool = False) -> WebResponse:
+    def _testing_report(self, engagement_id: str, report_id: str, *, preflight: bool = False, download_format: str = "") -> WebResponse:
         try:
             engagement = load_engagement(self.output_root, engagement_id)
             testing_dir = self._testing_dir(engagement_id)
@@ -1746,14 +2545,34 @@ class WebApp:
             report = report_path.read_text(encoding="utf-8")
         except (OSError, ValueError, StopIteration):
             return self._page("Not found", '<main class="home"><h1>Testing report not found</h1></main>', status=404)
+        currency_note = ""
         if not preflight:
-            from mosh.crews.testing.crew import _strip_execution_metadata
+            from mosh.crews.testing.crew import (
+                _execution_status_for_hypothesis,
+                _hypotheses,
+                _strip_execution_metadata,
+            )
 
+            try:
+                hypothesis = next(
+                    item for item in _hypotheses(self._testing_plan(engagement_id))
+                    if str(item.get("id")) == report_id
+                )
+                status, reason = _execution_status_for_hypothesis(testing_dir, hypothesis)
+                if status == "rerun":
+                    currency_note = f'<p class="report-currency-note" role="note">{_h(reason)}</p>'
+            except (OSError, ValueError, RuntimeError, StopIteration):
+                pass
             report = _strip_execution_metadata(report)
+        if download_format in {"pdf", "docx", "md"}:
+            filename = f"{engagement_id}-testing-preflight" if preflight else f"{engagement_id}-test-{report_id}"
+            return self._document_download(report, title, filename, download_format)
+        report_url = (f"/assessments/{_h(engagement_id)}/testing/preflight" if preflight else
+                      f"/assessments/{_h(engagement_id)}/testing/reports/{quote(report_id, safe='')}")
         body = (
             f'<main class="home"><a class="text-link" href="/assessments/{_h(engagement_id)}/testing">← Back to testing</a>'
-            f'<h1>{_h(title)}</h1><p class="intro">{_h(engagement.title or engagement.id)}</p>'
-            f'{render_markdown_document(report)}</main>'
+            f'<h1>{_h(title)}</h1><p class="intro">{_h(engagement.title or engagement.id)}</p>{currency_note}'
+            f'{render_markdown_document(report, download_url=report_url)}</main>'
         )
         return self._page(title, body)
 
@@ -1773,27 +2592,86 @@ class WebApp:
         section, running = self._testing_section(engagement, show_logs=show_logs, error=None)
         return WebResponse(body=json.dumps({"html": section, "poll": running}), content_type="application/json; charset=utf-8")
 
+    def _testing_feedback_findings(self, engagement_id: str) -> str:
+        from mosh.crews.testing.crew import _hypotheses, _safe_test_id, collect_testing_discovery_updates
+
+        updates = collect_testing_discovery_updates(self._testing_dir(engagement_id))
+        if not updates:
+            return '<p>The detailed test reports contain the findings used for this plan update.</p>'
+        try:
+            titles = {
+                str(item.get("id")): str(item.get("title") or "")
+                for item in _hypotheses(self._testing_plan(engagement_id))
+            }
+        except (OSError, ValueError, RuntimeError):
+            titles = {}
+        rows = []
+        for update in updates:
+            test_id = str(update.get("test_id") or "")
+            title = titles.get(test_id, "")
+            source = " · ".join(part for part in (test_id, title) if part) or "Testing"
+            report_path = self._testing_dir(engagement_id) / "executed_tests" / f"{_safe_test_id(test_id)}.md"
+            source_html = (
+                f'<a href="/assessments/{_h(engagement_id)}/testing/reports/{quote(report_path.stem, safe="")}">{_h(source)}</a>'
+                if report_path.is_file() else _h(source)
+            )
+            rows.append(
+                f'<li><span class="testing-finding-source">{source_html}</span>'
+                f'<span class="testing-finding-detail">{_h(update.get("detail") or "")}</span></li>'
+            )
+        visible = f'<ul class="testing-findings">{"".join(rows[:3])}</ul>'
+        if len(rows) > 3:
+            visible += (
+                f'<details class="testing-more-findings"><summary>Show {len(rows) - 3} more findings</summary>'
+                f'<ul class="testing-findings">{"".join(rows[3:])}</ul></details>'
+            )
+        return visible
+
     def _testing_section(self, engagement: Engagement, *, show_logs: bool, error: str | None, open_requirements: str = "") -> tuple[str, bool]:
         engagement_id = engagement.id
         testing_url = f"/assessments/{engagement_id}/testing"
         testing_dir = self._testing_dir(engagement_id)
         with self._run_lock:
             current = self.testing_runs.get(engagement_id)
-            run = TestingRun(status=current.status, error=current.error, events=list(current.events) if show_logs else []) if current else None
+            current_feedback = self.planning_runs.get(engagement_id)
+            run = TestingRun(status=current.status, error=current.error, events=list(current.events) if show_logs else [], stop_requested=current.stop_requested) if current else None
             execution_started = bool(current and any(event.action == "execution_start" for event in current.events))
             updating_plan = bool(current and _testing_updating_plan(current.events))
             progress_events = [event for event in current.events if event.action in TESTING_PROGRESS_PHASES] if current else []
         running = bool(run and run.status == "running")
+        stopping = bool(run and run.stop_requested.is_set() and running)
+        stopped = bool(run and run.status == "stopped")
+        feedback_running = bool(current_feedback and current_feedback.from_testing and current_feedback.status == "running")
+        feedback_stopping = bool(feedback_running and current_feedback.stop_requested.is_set())
+        feedback_stopped = bool(current_feedback and current_feedback.from_testing and current_feedback.status == "stopped")
+        feedback_failed = bool(current_feedback and current_feedback.from_testing and current_feedback.status == "failed")
         failed = bool(run and run.status == "failed")
         plan_ready = (engagement_plan_dir(self.output_root, engagement_id) / "plan.md").is_file() and self._planning_current(engagement)
-        preflight, completed = self._testing_snapshot(engagement_id)
+        tool_notice = self._stage_tool_notice("testing") if plan_ready and not running else ""
+        preflight, completed, plan_refreshed = self._testing_snapshot(engagement_id)
         blocked = preflight.get("blocked", []) if preflight else []
         deferred = preflight.get("deferred", []) if preflight else []
         pending = self._testing_pending_count(engagement_id, preflight) if preflight else 0
         plan_matches = bool(preflight and self._testing_plan_matches(engagement_id, preflight))
-        if running:
+        from mosh.crews.testing.crew import has_unapplied_testing_feedback
+
+        feedback_pending = completed and has_unapplied_testing_feedback(self.output_root, engagement_id)
+        report_ready = (engagement_dir(self.output_root, engagement_id) / "final-report" / "report.md").is_file()
+        if feedback_stopping:
+            summary = "Stopping the plan update after the current task finishes…"
+        elif feedback_running:
+            summary = "Updating Discovery and Planning with findings from the completed tests."
+        elif stopping:
+            summary = "Stopping testing after the current test finishes…"
+        elif stopped:
+            summary = "Testing stopped by you. Completed test reports remain available."
+        elif feedback_stopped:
+            summary = "Plan update stopped by you. Completed test reports remain available."
+        elif feedback_failed:
+            summary = "The plan update needs attention. Your completed test reports are saved."
+        elif running:
             if updating_plan:
-                summary = "Tests finished. Updating discovery and the security test plan from test results."
+                summary = "Test reports are saved. Findings from Testing updated Discovery; Planning is now generating a revised plan."
             elif execution_started:
                 summary = "Executing and reviewing ready security tests"
             else:
@@ -1802,10 +2680,16 @@ class WebApp:
             summary = "Testing needs attention"
         elif not plan_ready:
             summary = "Complete or update planning before testing."
+        elif feedback_pending and not report_ready:
+            summary = "Testing finished and reports are saved. New findings can refine the plan."
         elif completed and preflight and plan_matches and not blocked and not pending:
             summary = "Testing complete"
         elif completed and preflight and not plan_matches:
-            summary = "The plan or testing guidance changed after the last run. Run testing for the updated inputs."
+            summary = (
+                "Testing finished and saved reports. Test findings led Mosh to update Discovery and Planning; review the revised tests below."
+                if plan_refreshed else
+                "Testing finished and saved reports. The plan or testing guidance changed; review the revised tests below."
+            )
         elif completed and blocked:
             summary = f"Testing finished with {len(blocked)} blocked test(s)"
         elif completed and pending:
@@ -1814,10 +2698,46 @@ class WebApp:
             summary = "The previous testing run did not finish. Review the preflight and retry."
         else:
             summary = "Ready to run security tests."
+        feedback_note = ""
+        if feedback_running:
+            feedback_note = (
+                '<div class="testing-feedback-note"><strong>Updating the plan</strong>'
+                '<p>Mosh is adding test findings to Discovery, then refining the hypotheses in Planning. Your completed test reports are preserved.</p></div>'
+            )
+        elif feedback_pending and not report_ready:
+            feedback_note = (
+                '<div class="testing-feedback-note"><strong>New findings from testing</strong>'
+                '<p>Testing recorded these new details about the assets:</p>'
+                + self._testing_feedback_findings(engagement_id)
+                + '<p><strong>Update discovery and plan</strong> adds these details to the Discovery reports. Planning then reviews the updated evidence and may add, change, or remove tests. Discovery and completed tests are not repeated; if the plan changes, Testing checks the revised plan before reporting.</p>'
+                + '<p><strong>Continue to reporting</strong> keeps the current plan and completed test reports. The final report can include the test findings, but no further tests are planned from them.</p>'
+                '<div class="testing-feedback-actions">'
+                + self._form(testing_url, f'<button class="secondary" type="submit" name="action" value="replan">{"Retry plan update" if feedback_failed else "Update discovery and plan"}</button>')
+                + f'<a class="primary" href="/assessments/{_h(engagement_id)}/report">Continue to reporting</a></div></div>'
+            )
+        elif running and updating_plan:
+            feedback_note = (
+                '<div class="testing-feedback-note"><strong>What happens next</strong>'
+                '<p>The saved reports cover the tests just run. Planning may revise those tests using the new findings; revised tests will show Needs rerun.</p></div>'
+            )
+        elif completed and plan_refreshed and not plan_matches:
+            feedback_note = (
+                '<div class="testing-feedback-note"><strong>Mosh refined the plan</strong>'
+                '<p>Testing uncovered new details about the assets. Mosh added those findings to Discovery, reconsidered the testing approach, and refined the hypotheses. '
+                'Your completed reports remain available. Tests affected by the revised plan are marked Needs rerun so you can review the changes and decide what to run next.</p></div>'
+            )
         action = ""
-        if plan_ready and not running and not (completed and preflight and plan_matches and not blocked and not pending):
+        if running:
+            action = '<span class="stage-stopping">Stopping…</span>' if stopping else self._stop_control(testing_url, "Testing")
+        elif feedback_running:
+            action = '<span class="stage-stopping">Stopping…</span>' if feedback_stopping else self._stop_control(testing_url, "Plan update", action="stop-replan")
+        elif plan_ready and not tool_notice and not feedback_pending and (stopped or not (completed and preflight and plan_matches and not blocked and not pending)):
             label = "Retry testing" if failed or (preflight and not completed) else "Run remaining tests" if completed else "Start testing"
+            if stopped:
+                label = "Run remaining tests"
             action = self._form(testing_url, f'<button class="primary" type="submit" name="action" value="start">{label}</button>')
+        elif completed and not feedback_pending and not feedback_running and plan_matches and not blocked and not pending and not report_ready:
+            action = f'<a class="primary" href="/assessments/{_h(engagement_id)}/report">Continue to reporting</a>'
         results = ""
         if plan_ready:
             results += self._planned_tests(engagement, progress_events=progress_events, run_active=running, run_failed=failed, open_requirements=open_requirements)
@@ -1848,21 +2768,192 @@ class WebApp:
             f'{self._stage_nav(engagement, "testing")}<div class="discovery-heading"><div><h2>Testing</h2>'
             f'<p class="discovery-summary">{_h(summary)}</p></div>{action}</div>'
             + self._error(error) + (self._error(run.error[:500]) if failed else "")
-            + results + logs + '</section>'
+            + (self._error(current_feedback.error[:500]) if feedback_failed else "")
+            + tool_notice + feedback_note + results + logs + '</section>'
+        )
+        return section, running or feedback_running
+
+    @staticmethod
+    def _run_reporting(config: AppConfig, output_root: Path, engagement_id: str, event_sink: Callable[[Event], None]) -> Path:
+        from mosh.crews.reporting.crew import FinalReportingOrchestrator
+
+        return FinalReportingOrchestrator(config, output_root=output_root, event_sink=event_sink).run(engagement_id)
+
+    def _report_action(self, engagement_id: str, form: dict[str, str]) -> WebResponse:
+        try:
+            engagement = load_engagement(self.output_root, engagement_id)
+        except (OSError, ValueError):
+            return self._report_page(engagement_id)
+        if form.get("action") == "stop":
+            if form.get("confirmed") != "yes":
+                return self._report_page(engagement_id, error="Confirm before stopping Reporting.")
+            self._request_stop(engagement_id, "reporting")
+            return self._redirect(f"/assessments/{engagement_id}/report")
+        if form.get("action") != "start":
+            return self._report_page(engagement_id, error="Choose a valid reporting action.")
+        if not self._report_allowed(engagement):
+            return self._report_page(engagement_id, error="Finish Testing for the current plan before creating the final report.")
+        with self._run_lock:
+            if self._stage_running():
+                return self._report_page(engagement_id, error="A stage is already running. Wait for it to finish.")
+            if self._final_report_ready(engagement_id):
+                return self._redirect(f"/assessments/{engagement_id}/report")
+            run = ReportingRun()
+            self.reporting_runs[engagement_id] = run
+        threading.Thread(target=self._run_reporting_task, args=(engagement_id, run), daemon=True, name="mosh-web-reporting").start()
+        return self._redirect(f"/assessments/{engagement_id}/report")
+
+    def _run_reporting_task(self, engagement_id: str, run: ReportingRun) -> None:
+        def event_sink(event: Event) -> None:
+            with self._run_lock:
+                run.events.append(event)
+                run.active_step = max(run.active_step, REPORTING_STEP_AFTER_EVENT.get((event.agent, event.action), 0))
+
+        try:
+            config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+            sink = StageEventSink(event_sink, run.stop_requested)
+            sink.check_stop()
+            report_dir = self.reporting_runner(config, self.output_root, engagement_id, sink)
+            if not (report_dir / "report.md").is_file():
+                raise RuntimeError("Reporting did not write a final report.")
+            with self._run_lock:
+                run.status = "complete"
+                run.active_step = len(REPORTING_STEPS)
+        except RunStopped:
+            with self._run_lock:
+                run.status = "stopped"
+        except Exception as exc:
+            with self._run_lock:
+                run.status = "failed"
+                run.error = str(exc) or "Reporting failed."
+
+    def _report_page(self, engagement_id: str, *, show_logs: bool = False, error: str | None = None) -> WebResponse:
+        try:
+            engagement = load_engagement(self.output_root, engagement_id)
+        except (OSError, ValueError):
+            return self._page("Not found", '<main class="home"><h1>Assessment not found</h1></main>', status=404)
+        section, _ = self._report_section(engagement, show_logs=show_logs, error=error)
+        return self._page("Report", f'<main class="home">{section}</main>')
+
+    def _report_status(self, engagement_id: str, *, show_logs: bool) -> WebResponse:
+        try:
+            engagement = load_engagement(self.output_root, engagement_id)
+        except (OSError, ValueError):
+            return WebResponse(404, '{"error":"Assessment not found"}', "application/json; charset=utf-8")
+        section, running = self._report_section(engagement, show_logs=show_logs, error=None)
+        return WebResponse(body=json.dumps({"html": section, "poll": running}), content_type="application/json; charset=utf-8")
+
+    def _report_section(self, engagement: Engagement, *, show_logs: bool, error: str | None) -> tuple[str, bool]:
+        from mosh.crews.testing.crew import has_unapplied_testing_feedback
+
+        engagement_id = engagement.id
+        report_url = f"/assessments/{engagement_id}/report"
+        report_dir = engagement_dir(self.output_root, engagement_id) / "final-report"
+        report_ready = self._final_report_ready(engagement_id)
+        report_allowed = self._report_allowed(engagement)
+        stage_running = self._stage_running()
+        with self._run_lock:
+            current = self.reporting_runs.get(engagement_id)
+            run = ReportingRun(active_step=current.active_step, status=current.status, error=current.error,
+                               events=list(current.events) if show_logs else [], stop_requested=current.stop_requested) if current else None
+        running = bool(run and run.status == "running")
+        stopping = bool(running and run.stop_requested.is_set())
+        stopped = bool(run and run.status == "stopped")
+        failed = bool(run and run.status == "failed")
+        if stopping:
+            summary = "Stopping reporting after the current model task finishes…"
+        elif running:
+            summary = "Writing and reviewing the final report."
+        elif stopped:
+            summary = "Reporting stopped by you. Completed work remains available."
+        elif failed:
+            summary = "Reporting needs attention."
+        elif report_ready:
+            summary = "Final report ready."
+        elif report_allowed:
+            summary = "Ready to create a final report from the completed tests."
+        else:
+            summary = "Finish Testing for the current plan before creating the final report."
+        action = ""
+        if running:
+            action = '<span class="stage-stopping">Stopping…</span>' if stopping else self._stop_control(report_url, "Reporting")
+        elif report_ready:
+            action = f'<a class="primary" href="{_h(report_url)}/view">View report</a>'
+        elif report_allowed and not running and not stage_running:
+            action = self._form(report_url, f'<button class="primary" type="submit" name="action" value="start">{"Restart reporting" if stopped else "Retry reporting" if failed else "Start reporting"}</button>')
+        note = ""
+        if report_allowed and not report_ready and has_unapplied_testing_feedback(self.output_root, engagement_id):
+            note = (
+                '<p class="field-help">Testing found new information that has not been added to Discovery or Planning. '
+                'This report will use the completed test results and the current plan.</p>'
+            )
+        steps = ""
+        if run:
+            items = "".join(
+                f'<li class="{_stage_step_class(index, run.active_step, run.status)}">{_h(label)}</li>'
+                for index, label in enumerate(REPORTING_STEPS)
+            )
+            steps = f'<ol class="discovery-steps">{items}</ol>'
+        logs = ""
+        if show_logs:
+            if run:
+                events = [event.to_dict() for event in run.events]
+            else:
+                try:
+                    stored = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+                    events = stored if isinstance(stored, list) else []
+                except (OSError, ValueError):
+                    events = []
+            entries = "".join(
+                f'<li>{self._log_time(event)}<span class="log-source">{_h(event.get("agent", ""))}</span>'
+                f'<span class="log-message">{_h(event.get("message", ""))}</span></li>'
+                for event in events if isinstance(event, dict)
+            )
+            logs = self._log_console(entries, open_logs=True)
+        elif run or (report_dir / "events.json").is_file():
+            logs = self._log_console("", open_logs=False)
+        poll_url = report_url + "/status" + ("?view=logs" if show_logs else "")
+        poll_attrs = f' data-poll-url="{_h(poll_url)}" data-poll-ms="2000"' if running else ""
+        section = (
+            f'<section id="report-status" class="panel discovery" data-status-url="{_h(report_url)}/status"{poll_attrs}>'
+            f'{self._stage_nav(engagement, "report")}<div class="discovery-heading"><div><h2>Report</h2>'
+            f'<p class="discovery-summary">{_h(summary)}</p></div>{action}</div>'
+            + self._error(error) + (self._error(run.error[:500]) if failed else "") + note + steps + logs + '</section>'
         )
         return section, running
 
-    def _discovery_report(self, engagement_id: str, asset_id: str) -> WebResponse:
+    def _report_view(self, engagement_id: str, *, download_format: str = "") -> WebResponse:
+        try:
+            engagement = load_engagement(self.output_root, engagement_id)
+            if not self._final_report_ready(engagement_id):
+                raise FileNotFoundError("Final report is not complete")
+            markdown = (engagement_dir(self.output_root, engagement_id) / "final-report" / "report.md").read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return self._page("Not found", '<main class="home"><h1>Final report not found</h1></main>', status=404)
+        if download_format in {"pdf", "docx", "md"}:
+            return self._document_download(markdown, "Final report", f"{engagement_id}-final-report", download_format)
+        download_url = f"/assessments/{_h(engagement_id)}/report/view"
+        body = (
+            f'<main class="home"><a class="text-link" href="/assessments/{_h(engagement_id)}/report">← Back to Report</a>'
+            f'<h1>Final report</h1><p class="intro">{_h(engagement.title or engagement.id)}</p>'
+            f'{render_markdown_document(markdown, download_url=download_url)}</main>'
+        )
+        return self._page("Final report", body)
+
+    def _discovery_report(self, engagement_id: str, asset_id: str, *, download_format: str = "") -> WebResponse:
         try:
             engagement = load_engagement(self.output_root, engagement_id)
             asset = next(item for item in engagement.assets if item.id == asset_id)
             report = (asset_discovery_dir(self.output_root, engagement_id, asset_id) / "report.md").read_text(encoding="utf-8")
         except (OSError, ValueError, StopIteration):
             return self._page("Not found", '<main class="home"><h1>Discovery report not found</h1></main>', status=404)
+        if download_format in {"pdf", "docx", "md"}:
+            return self._document_download(report, "Discovery report", f"{engagement_id}-discovery-{asset_id}", download_format)
+        download_url = f"/assessments/{_h(engagement_id)}/discovery/{_h(asset_id)}/report"
         body = (
             f'<main class="home"><a class="text-link" href="/assessments/{_h(engagement_id)}/discovery">← Back to discovery</a>'
             f'<h1>Discovery report</h1><p class="intro">{_h(ASSET_TYPES.get(asset.type, asset.type))} · {_h(asset.locator)}</p>'
-            f'{render_markdown_document(report)}</main>'
+            f'{render_markdown_document(report, download_url=download_url)}</main>'
         )
         return self._page("Discovery report", body)
 
@@ -1920,14 +3011,22 @@ class WebApp:
                 completed_ids=set(current.completed_ids), active_step=current.active_step,
                 status=current.status, error=current.error, failed_asset_id=current.failed_asset_id,
                 events=list(current.events) if show_logs else [],
+                stop_requested=current.stop_requested,
             ) if current else None
         supported = [asset for asset in engagement.assets if asset.type in DISCOVERY_STEPS]
         due = [asset for asset in supported if not (asset_discovery_dir(self.output_root, engagement_id, asset.id) / "report.md").is_file()]
         running = bool(run and run.status == "running")
+        stopping = bool(running and run.stop_requested.is_set())
+        stopped = bool(run and run.status == "stopped")
         run_failed = bool(run and run.status == "failed" and any(asset.id == run.failed_asset_id for asset in supported))
-        if running:
+        tool_notice = self._stage_tool_notice("discovery") if supported and not running else ""
+        if stopping:
+            summary = "Stopping discovery after the current asset finishes…"
+        elif running:
             position = run.asset_ids.index(run.current_asset_id) + 1 if run.current_asset_id in run.asset_ids else 1
             summary = f"Discovering asset {position} of {len(run.asset_ids)}"
+        elif stopped:
+            summary = "Discovery stopped by you. Completed asset reports remain available."
         elif run_failed:
             summary = "Discovery needs attention"
         elif supported and not due:
@@ -1938,12 +3037,12 @@ class WebApp:
             summary = "Discovery is not available for these assets"
         else:
             summary = "Add an asset to begin discovery"
-        action = ""
-        if not running and supported:
+        action = ('<span class="stage-stopping">Stopping…</span>' if stopping else self._stop_control(discovery_url, "Discovery")) if running else ""
+        if not running and supported and not tool_notice:
             if run_failed:
                 action = self._form(discovery_url, '<button class="primary" type="submit" name="action" value="retry">Retry remaining</button>')
             elif due:
-                label = "Start discovery" if len(due) == len(supported) else "Discover remaining"
+                label = "Run remaining" if stopped else "Start discovery" if len(due) == len(supported) else "Discover remaining"
                 action = self._form(discovery_url, f'<button class="primary" type="submit" name="action" value="start">{label}</button>')
         rows = []
         for asset in engagement.assets:
@@ -2008,7 +3107,7 @@ class WebApp:
             logs = self._log_console("".join(entries), open_logs=True)
         elif run or any((asset_discovery_dir(self.output_root, engagement_id, asset.id) / "events.json").exists() for asset in supported):
             logs = self._log_console("", open_logs=False)
-        refresh = f'<a class="text-link" href="{_h(discovery_url)}/refresh">Refresh discovery</a>' if supported and not due and not running and not (planning_run and planning_run.status == "running") else ""
+        refresh = f'<a class="text-link" href="{_h(discovery_url)}/refresh">Refresh discovery</a>' if supported and not due and not running and not tool_notice and not (planning_run and planning_run.status == "running") else ""
         failure = self._error(run.error[:500]) if run_failed else ""
         poll_url = discovery_url + "/status"
         if show_logs:
@@ -2017,7 +3116,7 @@ class WebApp:
         section = (
             f'<section id="discovery-status" class="panel discovery" data-status-url="{_h(discovery_url)}/status"{poll_attrs}>{self._stage_nav(engagement, "discovery")}<div class="discovery-heading"><div><h2>Discovery</h2>'
             f'<p class="discovery-summary">{_h(summary)}</p></div>{action}</div>'
-            + self._error(error) + failure
+            + self._error(error) + failure + tool_notice
             + ("<p class=\"field-help\">Discovery may contact attached live targets and configured model providers.</p>" if not running and due else "")
             + "".join(rows)
             + (f'<div class="discovery-footer">{refresh}</div>' if refresh else "")
@@ -2025,14 +3124,71 @@ class WebApp:
         )
         return section, running
 
+    def _assessment_request_headers(self, engagement_id: str, form: dict[str, str]) -> WebResponse:
+        try:
+            engagement = load_engagement(self.output_root, engagement_id)
+        except (OSError, ValueError):
+            return self._assessment_detail(engagement_id)
+        asset_id = form.get("asset_id", "")
+        mode = f"new:{asset_id}"
+        try:
+            if not any(asset.id == asset_id and asset.type == "live_url" for asset in engagement.assets):
+                raise ValueError("Choose a live URL asset.")
+            with self._run_lock:
+                if self._stage_running():
+                    raise ValueError("Wait for the current stage to finish before changing request headers.")
+            template_path = engagement_dir(self.output_root, engagement_id) / "engagement_template.yaml"
+            template = load_engagement_file(template_path) if template_path.exists() else build_minimal_engagement_template()
+            headers_by_asset = dict(template.get("asset_request_headers") or {})
+            headers = dict(headers_by_asset.get(asset_id) or {})
+            if form.get("action") == "save":
+                name = form.get("header_name", "").strip()
+                value = form.get("header_value", "")
+                previous_name = form.get("previous_name", "")
+                if previous_name:
+                    mode = f"edit:{asset_id}:{previous_name}"
+                    if previous_name not in headers:
+                        raise ValueError("Choose a request header to edit.")
+                    del headers[previous_name]
+                if not name or not value:
+                    raise ValueError("Enter a header name and value.")
+                if any(existing.lower() == name.lower() for existing in headers):
+                    raise ValueError("That header already exists. Edit it instead.")
+                headers[name] = value
+                headers_by_asset[asset_id] = headers
+                notice = "Request header saved. It will be used in future Discovery and Testing requests to this site."
+            elif form.get("action") == "remove":
+                name = form.get("header_name", "")
+                mode = f"remove:{asset_id}:{name}"
+                if name not in headers:
+                    raise ValueError("Choose a request header to remove.")
+                if form.get("confirmed") != "yes":
+                    return self._assessment_detail(engagement_id, headers_mode=mode)
+                del headers[name]
+                if headers:
+                    headers_by_asset[asset_id] = headers
+                else:
+                    headers_by_asset.pop(asset_id, None)
+                notice = "Request header removed."
+            else:
+                raise ValueError("Choose a valid request header action.")
+            template["asset_request_headers"] = headers_by_asset
+            validate_engagement_template(template)
+            write_engagement_template_mapping(template_path.parent, template, preserve_existing=False, reject_candidate_credentials=False)
+            return self._assessment_detail(engagement_id, headers_notice=notice)
+        except ValueError as exc:
+            return self._assessment_detail(engagement_id, headers_mode=mode, headers_error=str(exc))
+        except OSError:
+            return self._assessment_detail(engagement_id, headers_mode=mode, headers_error="Could not save request headers. Try again.")
+
     def _assessment_guidance(self, engagement_id: str, form: dict[str, str]) -> WebResponse:
         try:
             load_engagement(self.output_root, engagement_id)
         except (OSError, ValueError):
             return self._assessment_detail(engagement_id)
         with self._run_lock:
-            if any(run.status == "running" for run in self.testing_runs.values()):
-                return self._assessment_detail(engagement_id, error="Wait for testing to finish before changing guidance.")
+            if self._stage_running():
+                return self._assessment_detail(engagement_id, error="Wait for the current stage to finish before changing guidance.")
         template_path = self.output_root / engagement_id / "engagement_template.yaml"
         try:
             template = load_engagement_file(template_path) if template_path.exists() else build_minimal_engagement_template()
@@ -2082,7 +3238,7 @@ class WebApp:
         except (OSError, ValueError):
             return self._assessment_detail(engagement_id)
         with self._run_lock:
-            if any(run.status == "running" for runs in (self.discovery_runs, self.planning_runs, self.testing_runs) for run in runs.values()):
+            if self._stage_running():
                 message = "Wait for the current stage to finish before changing credentials."
                 return self._scope_edit_result(engagement_id, form, error=message, credential_error=message)
         template_path = engagement_dir(self.output_root, engagement_id) / "engagement_template.yaml"
@@ -2144,7 +3300,7 @@ class WebApp:
         except (OSError, ValueError):
             return self._assessment_detail(engagement_id)
         with self._run_lock:
-            if any(run.status == "running" for runs in (self.discovery_runs, self.planning_runs, self.testing_runs) for run in runs.values()):
+            if self._stage_running():
                 message = "Wait for the current stage to finish before changing test setup."
                 return self._scope_edit_result(engagement_id, form, error=message, setup_error=message)
         template_path = engagement_dir(self.output_root, engagement_id) / "engagement_template.yaml"
@@ -2354,7 +3510,62 @@ class WebApp:
             + '</div>'
         )
 
-    def _assessment_detail(self, engagement_id: str, *, hint_mode: str = "", credential_mode: str = "", hint_draft=None, notes_draft=None, error=None, notice=None, asset_error=None, credential_error=None, credential_notice=None, setup_error=None, setup_notice=None) -> WebResponse:
+    def _request_headers_section(self, engagement: Engagement, template: dict, mode: str, error: str | None, notice: str | None) -> str:
+        live_assets = [asset for asset in engagement.assets if asset.type == "live_url"]
+        if not live_assets:
+            return ""
+        detail_url = f"/assessments/{engagement.id}"
+        action_url = detail_url + "/request-headers"
+        headers_by_asset = template.get("asset_request_headers") or {}
+        rows = []
+        for asset in live_assets:
+            headers = headers_by_asset.get(asset.id) or {}
+            rows.append(
+                '<div class="credential-row"><span><strong>' + _h(asset.locator) + '</strong>'
+                f'<small>{len(headers)} {"header" if len(headers) == 1 else "headers"} configured</small></span>'
+                f'<a class="text-link" href="{_h(detail_url)}?headers=new:{_h(asset.id)}">+ Add header</a></div>'
+            )
+            for name in headers:
+                encoded_name = quote(name, safe="")
+                rows.append(
+                    '<div class="credential-row"><span><strong>' + _h(name) + '</strong><small>Value saved</small></span>'
+                    f'<span class="hint-actions"><a class="text-link" href="{_h(detail_url)}?headers=edit:{_h(asset.id)}:{encoded_name}">Edit</a>'
+                    f'<a class="text-link" href="{_h(detail_url)}?headers=remove:{_h(asset.id)}:{encoded_name}">Remove</a></span></div>'
+                )
+        editor = ""
+        if mode.startswith(("new:", "edit:", "remove:")):
+            action, _, remainder = mode.partition(":")
+            asset_id, _, name = remainder.partition(":")
+            if any(asset.id == asset_id for asset in live_assets):
+                hidden = f'<input type="hidden" name="asset_id" value="{_h(asset_id)}">'
+                headers = headers_by_asset.get(asset_id) or {}
+                if action == "new" or action == "edit" and name in headers:
+                    previous = f'<input type="hidden" name="previous_name" value="{_h(name)}">' if action == "edit" else ""
+                    editor = (
+                        f'<div class="credential-editor"><h3>{"Edit" if action == "edit" else "Add"} request header</h3>'
+                        '<p class="field-help">The saved value stays hidden. Enter a new value when editing.</p>'
+                        + self._form(action_url, hidden + previous
+                            + f'<label for="request-header-name">Header name</label><input id="request-header-name" name="header_name" type="text" maxlength="128" autocomplete="off" required value="{_h(name if action == "edit" else "")}" placeholder="For example, Authorization">'
+                            + '<label for="request-header-value">Value</label><input id="request-header-value" name="header_value" type="password" maxlength="4096" autocomplete="off" required>'
+                            + f'<div class="actions"><a class="text-link" href="{_h(detail_url)}">Cancel</a><button class="primary" type="submit" name="action" value="save">Save header</button></div>')
+                        + '</div>'
+                    )
+                elif action == "remove" and name in headers:
+                    editor = (
+                        f'<div class="credential-editor"><h3>Remove {_h(name)}?</h3>'
+                        '<p class="field-help">Future requests will no longer include this header. Local template backups may still contain earlier values.</p>'
+                        + self._form(action_url, hidden + f'<input type="hidden" name="header_name" value="{_h(name)}"><input type="hidden" name="confirmed" value="yes">'
+                            + f'<div class="actions"><a class="text-link" href="{_h(detail_url)}">Cancel</a><button class="secondary" type="submit" name="action" value="remove">Remove header</button></div>')
+                        + '</div>'
+                    )
+        return (
+            '<section class="panel request-headers"><h2>Request headers (optional)</h2>'
+            '<p class="field-help">Add headers needed to access a live site, such as a gateway token. Discovery and structured HTTP requests in Testing use them only for that asset’s exact origin. Values are hidden and never sent to the model. Saving does not contact the site.</p>'
+            + self._error(error) + (f'<p class="save-notice" role="status">{_h(notice)}</p>' if notice else '')
+            + ''.join(rows) + editor + '</section>'
+        )
+
+    def _assessment_detail(self, engagement_id: str, *, hint_mode: str = "", credential_mode: str = "", headers_mode: str = "", hint_draft=None, notes_draft=None, error=None, notice=None, asset_error=None, headers_error=None, headers_notice=None, credential_error=None, credential_notice=None, setup_error=None, setup_notice=None) -> WebResponse:
         try:
             engagement = load_engagement(self.output_root, engagement_id)
         except (OSError, ValueError):
@@ -2436,15 +3647,17 @@ class WebApp:
             + self._asset_entry_form(assets_url, f"/assessments/{engagement_id}/folders")
             + check_notice + '</section>'
         )
+        access_hint = " Add site request headers above." if any(asset.type == "live_url" for asset in engagement.assets) else ""
         body = (
             f'<main class="home"><a class="text-link" href="/">← All assessments</a><h1>{_h(engagement.title or engagement.id)}</h1>'
             + self._stage_nav(engagement, "scope")
             + assets_section
+            + self._request_headers_section(engagement, template, headers_mode, headers_error, headers_notice)
             + f'<section class="panel guidance"><h2>Assessment guidance (optional)</h2>'
             '<p class="guidance-intro">Mosh discovers each asset automatically from its content, so guidance is optional. Use this space to highlight key functionality, note relevant account roles, or point to sections worth reviewing. This guidance steers the security test for this assessment. You can edit it or add hints as the assessment progresses.</p>'
             f'{self._error(error)}' + (f'<p class="save-notice" role="status">{_h(notice)}</p>' if notice else '')
             + notes_form
-            + '<div class="hints-section"><h3>Hints</h3><p class="field-help">Add facts or questions worth checking. Hints are leads, not confirmed findings; they guide analysis but do not provide test access. Add credentials and other required information below.</p>'
+            + '<div class="hints-section"><h3>Hints</h3><p class="field-help">Add facts or questions worth checking. Hints are leads, not confirmed findings; they guide analysis but do not provide test access.' + access_hint + ' Add test credentials and other required information below.</p>'
             + (hint_rows or '<p class="empty">No hints yet.</p>') + editor + add_hint + '</div></section>'
             + self._testing_setup_section(engagement, template, setup_error, setup_notice, credential_mode, credential_error, credential_notice)
             + '</main>'
@@ -2454,7 +3667,7 @@ class WebApp:
 
 def _command_ok(command: list[str]) -> bool:
     try:
-        return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4, check=False).returncode == 0
+        return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4, check=False, env=docker_cli_env() if command[0] == "docker" else None).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
@@ -2620,7 +3833,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             self._send(app.handle("POST", self.path, {key: values[0] for key, values in parsed.items()}, dict(self.headers)))
 
         def _send(self, response: WebResponse) -> None:
-            body = response.body.encode("utf-8")
+            body = response.body if isinstance(response.body, bytes) else response.body.encode("utf-8")
             self.send_response(response.status)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -2628,6 +3841,8 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+            if response.download_filename:
+                self.send_header("Content-Disposition", f'attachment; filename="{response.download_filename}"')
             if response.location:
                 self.send_header("Location", response.location)
             self.end_headers()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -293,6 +295,52 @@ def _load_agent_model_config(path: Path) -> AgentModelConfig:
             crew_overrides[key] = value.strip()
         overrides[crew_name] = replace(crew_config, **crew_overrides)
     return replace(defaults, **overrides)
+
+
+def write_model_assignments(path: Path, assignments: dict[str, dict[str, str]]) -> None:
+    """Update selected model keys without discarding other YAML lines or comments."""
+    _load_agent_model_config(path)
+    defaults = AgentModelConfig()
+    for group, roles in assignments.items():
+        if group not in {item.name for item in fields(defaults)}:
+            raise ValueError(f"Unknown model crew `{group}`.")
+        valid_roles = {item.name for item in fields(getattr(defaults, group))}
+        for role, model in roles.items():
+            if role not in valid_roles or not _valid_model_id(model):
+                raise ValueError(f"Invalid model assignment for `{group}.{role}`.")
+
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    if not any(re.fullmatch(r"models:\s*(?:#.*)?", line) for line in lines):
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append("models:")
+    for group, roles in assignments.items():
+        group_start = next((i for i, line in enumerate(lines) if re.fullmatch(rf"  {re.escape(group)}:\s*(?:#.*)?", line)), None)
+        if group_start is None:
+            lines.append(f"  {group}:")
+            group_start = len(lines) - 1
+        for role, model in roles.items():
+            group_end = next((i for i in range(group_start + 1, len(lines)) if lines[i].strip() and not lines[i].lstrip().startswith("#") and len(lines[i]) - len(lines[i].lstrip(" ")) <= 2), len(lines))
+            role_index = next((i for i in range(group_start + 1, group_end) if re.match(rf"^    {re.escape(role)}:\s*", lines[i])), None)
+            if role_index is None:
+                lines.insert(group_end, f"    {role}: {model}")
+            else:
+                comment = lines[role_index].partition("#")[2]
+                lines[role_index] = f"    {role}: {model}" + (f"  #{comment}" if comment else "")
+    content = "\n".join(lines).rstrip() + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=".mosh-models-", delete=False) as temporary:
+        temporary.write(content)
+        temporary_path = Path(temporary.name)
+    try:
+        _load_agent_model_config(temporary_path)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _valid_model_id(model: str) -> bool:
+    return bool(model and len(model) <= 200 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/+@-]*", model))
 
 
 def _parse_mosh_yaml(text: str, path: Path) -> dict[str, Any]:

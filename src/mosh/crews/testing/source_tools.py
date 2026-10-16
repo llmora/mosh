@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from mosh.config import AppConfig
+from mosh.engagement import request_origin
 from mosh.crews.discovery_source.tools import (
     ReadSourceSliceTool,
     _iter_nonignored_files,
@@ -19,13 +22,14 @@ from mosh.crews.discovery_source.tools import (
 )
 from mosh.crews.testing.crew import (
     _append_command_log,
+    _disallowed_hosts,
     _hypothesis_id,
     _redact_result,
     _redact_text,
     _text,
     _truncate,
 )
-from mosh.docker_tools import DockerToolResult, DockerToolRunner
+from mosh.docker_tools import DockerToolResult, DockerToolRunner, docker_cli_env
 
 
 LOCAL_RUNTIME_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"}
@@ -326,18 +330,23 @@ def _build_start_source_process_tool(crewai: Any, config: AppConfig, state: Any)
     return StartSourceProcessTool()
 
 
-def _build_request_local_http_tool(crewai: Any, config: AppConfig, state: Any):
+def _build_request_target_http_tool(crewai: Any, config: AppConfig, state: Any):
+    return _build_request_local_http_tool(crewai, config, state, target_only=True)
+
+
+def _build_request_local_http_tool(crewai: Any, config: AppConfig, state: Any, *, target_only: bool = False):
     class LocalHttpInput(crewai.BaseModel):
-        url: str = crewai.Field(..., description="Local URL to request, such as http://host.docker.internal:8000/path.")
+        url: str = crewai.Field(..., description="Engagement target URL to request." if target_only else "Local URL to request, such as http://host.docker.internal:8000/path.")
         purpose: str = crewai.Field(..., description="Why this request is needed for the current hypothesis.")
         method: str = crewai.Field("GET", description="HTTP method.")
-        headers: dict[str, Any] | str | None = crewai.Field(None, description="Optional headers.")
+        headers: dict[str, Any] | str | None = crewai.Field(None, description="Optional headers supplied for this request.")
+        include_asset_headers: bool = crewai.Field(True, description="Apply saved headers for this target origin. Set false for an unauthenticated check.")
         body: str | None = crewai.Field(None, description="Optional request body.")
         timeout: int | None = crewai.Field(None, description="Optional request timeout in seconds.")
 
     class RequestLocalHttpTool(crewai.BaseTool):
-        name: str = "request_local_http"
-        description: str = "Send an HTTP request to a local source runtime and capture response evidence."
+        name: str = "request_target_http" if target_only else "request_local_http"
+        description: str = ("Send a scoped HTTP request to an engagement target and capture response evidence, applying its saved headers by default." if target_only else "Send an HTTP request to a local source runtime and capture response evidence.")
         args_schema: type[crewai.BaseModel] = LocalHttpInput
 
         def _run(
@@ -346,10 +355,26 @@ def _build_request_local_http_tool(crewai: Any, config: AppConfig, state: Any):
             purpose: str,
             method: str = "GET",
             headers: Any = None,
+            include_asset_headers: bool = True,
             body: str | None = None,
             timeout: int | None = None,
         ) -> str:
-            blocked_hosts = _source_command_disallowed_hosts(url, state.targets)
+            try:
+                parsed_url = urlparse(url)
+                parsed_url.port  # Validate an explicit port before checking the target.
+                invalid_target_url = target_only and (
+                    parsed_url.scheme not in {"http", "https"}
+                    or not parsed_url.hostname
+                    or parsed_url.username is not None
+                    or parsed_url.password is not None
+                )
+            except ValueError:
+                parsed_url = None
+                invalid_target_url = True
+            if target_only:
+                blocked_hosts = ["invalid URL"] if invalid_target_url else _disallowed_hosts(url, state.targets)
+            else:
+                blocked_hosts = _source_command_disallowed_hosts(url, state.targets)
             if blocked_hosts:
                 record = {
                     "blocked": True,
@@ -358,14 +383,17 @@ def _build_request_local_http_tool(crewai: Any, config: AppConfig, state: Any):
                     "purpose": purpose,
                     "exit_code": 126,
                     "stdout": "",
-                    "stderr": "Local HTTP requests may target localhost, host.docker.internal, or explicit engagement targets only.",
+                    "stderr": "HTTP requests may target explicit engagement targets only." if target_only else "Local HTTP requests may target localhost, host.docker.internal, or explicit engagement targets only.",
                 }
                 state.local_requests.append(record)
                 return json.dumps(record, sort_keys=True)
             header_map = _validated_headers(headers)
+            configured_headers = (getattr(state, "request_headers_by_origin", {}) or {}).get(request_origin(url), {}) if include_asset_headers else {}
+            if configured_headers:
+                header_map = {key: value for key, value in header_map.items() if key.lower() not in {name.lower() for name in configured_headers}}
             method = _validated_method(method)
             request_timeout = min(max(int(timeout or 15), 1), 120)
-            command_parts = ["curl", "-i", "-sS", "--max-time", str(request_timeout), "-X", method]
+            command_parts = ["curl", "-i", "-sS", "--max-redirs", "0", "--max-time", str(request_timeout), "-X", method]
             for key, value in sorted(header_map.items()):
                 command_parts.extend(["-H", f"{key}: {value}"])
             if body is not None:
@@ -373,18 +401,29 @@ def _build_request_local_http_tool(crewai: Any, config: AppConfig, state: Any):
             command_parts.append(url)
             shell_command = " ".join(shlex.quote(part) for part in command_parts)
             runner = DockerToolRunner(config.security_tool_image)
-            result = runner.run(
-                ["bash", "-lc", shell_command],
-                timeout=request_timeout + 5,
-                volumes=[(str(state.workspace_dir.resolve()), "/work")],
-                workdir="/work",
-            )
+            volumes = [(str(state.workspace_dir.resolve()), "/work")]
+            if configured_headers:
+                with tempfile.TemporaryDirectory(prefix="mosh-request-headers-", dir="/tmp") as directory:
+                    header_file = Path(directory) / "headers.txt"
+                    header_file.write_text("".join(f"{key}: {value}\n" for key, value in configured_headers.items()), encoding="utf-8")
+                    os.chmod(header_file, 0o600)
+                    command_with_headers = command_parts[:-1] + ["-H", "@/run/secrets/mosh-request-headers", command_parts[-1]]
+                    shell_command = " ".join(shlex.quote(part) for part in command_with_headers)
+                    result = runner.run(
+                        ["bash", "-lc", shell_command], timeout=request_timeout + 5,
+                        volumes=[*volumes, (str(header_file), "/run/secrets/mosh-request-headers", "ro")], workdir="/work",
+                    )
+            else:
+                result = runner.run(
+                    ["bash", "-lc", shell_command], timeout=request_timeout + 5,
+                    volumes=volumes, workdir="/work",
+                )
             redacted = _redact_result(result, state.engagement)
             record = {
                 "purpose": purpose,
                 "method": method,
                 "url": _redact_text(url, state.engagement),
-                "headers": _redacted_env(header_map, state.engagement),
+                "headers": _redacted_env({**header_map, **{key: "[configured]" for key in configured_headers}}, state.engagement),
                 "body_present": body is not None,
                 "exit_code": redacted.exit_code,
                 "stdout": _truncate(redacted.stdout),
@@ -392,9 +431,9 @@ def _build_request_local_http_tool(crewai: Any, config: AppConfig, state: Any):
             }
             state.local_requests.append(record)
             state.memory.record_event(
-                "source_executor",
+                "executor" if target_only else "source_executor",
                 "tool_result",
-                "request_local_http completed",
+                "request_target_http completed" if target_only else "request_local_http completed",
                 {
                     "test_id": _hypothesis_id(state.hypothesis),
                     "method": method,
@@ -656,7 +695,10 @@ def _validated_headers(value: Any) -> dict[str, str]:
         name = _text(key)
         if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name):
             raise ValueError(f"Invalid HTTP header name: {name}")
-        headers[name] = _text(item)
+        header_value = _text(item)
+        if not header_value.isascii() or not header_value.isprintable():
+            raise ValueError(f"Invalid HTTP header value for {name}.")
+        headers[name] = header_value
     if len(headers) > 50:
         raise ValueError("Too many headers for one local request.")
     return headers
@@ -697,6 +739,7 @@ def _run_docker_cli(command: list[str], timeout: int) -> DockerToolResult:
             capture_output=True,
             timeout=timeout,
             check=False,
+            env=docker_cli_env(),
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""

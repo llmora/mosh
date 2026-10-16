@@ -8,10 +8,12 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from mosh.cli import main
-from mosh.engagement import load_engagement_file, write_engagement_template
+from mosh.cli import _run_asset_discovery, main
+from mosh.config import AppConfig
+from mosh.engagement import build_minimal_engagement_template, load_engagement_file, write_engagement_template, write_engagement_template_mapping
 from mosh.engagements import attach_asset, asset_dir, asset_discovery_dir, create_engagement, load_engagement
 from mosh.harness_improvements import record_harness_improvement
 from tests.fakes import (
@@ -112,6 +114,20 @@ def _write_discovery_source(discovery_dir: Path) -> None:
 
 
 class CliTests(unittest.TestCase):
+    def test_discovery_passes_headers_for_matching_live_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root, "Protected site")
+            asset = attach_asset(output_root, engagement.id, "https://app.example.test", asset_type="live_url").asset
+            template = build_minimal_engagement_template()
+            template["asset_request_headers"] = {asset.id: {"X-Gateway-Id": "fixture-id", "X-Gateway-Secret": "fixture-secret"}}
+            write_engagement_template_mapping(output_root / engagement.id, template, preserve_existing=False, reject_candidate_credentials=False)
+            with patch("mosh.cli.DiscoveryLiveOrchestrator") as orchestrator:
+                _run_asset_discovery(AppConfig(), output_root, engagement, asset, SimpleNamespace(max_pages=3, max_depth=1))
+            self.assertEqual(orchestrator.return_value.run.call_args.kwargs["request_headers"], {
+                "X-Gateway-Id": "fixture-id", "X-Gateway-Secret": "fixture-secret",
+            })
+
     def test_cli_without_arguments_prints_help_and_exits_nonzero(self) -> None:
         stderr = io.StringIO()
 

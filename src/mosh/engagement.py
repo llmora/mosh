@@ -66,6 +66,23 @@ def validate_engagement_template(template: dict[str, Any]) -> None:
     for key in ("engagement", "targets", "contacts", "limits", "credentials", "safe_test_data"):
         if not isinstance(template.get(key), dict):
             raise ValueError(f"Engagement template field {key} must be a mapping")
+    headers_by_asset = template.get("asset_request_headers", {})
+    if not isinstance(headers_by_asset, dict) or len(headers_by_asset) > 30:
+        raise ValueError("Asset request headers must be a mapping with at most 30 assets.")
+    for asset_id, headers in headers_by_asset.items():
+        if not isinstance(asset_id, str) or not re.fullmatch(r"asset_live_[0-9]+", asset_id):
+            raise ValueError("Request headers must refer to a live URL asset.")
+        if not isinstance(headers, dict) or not headers or len(headers) > 30:
+            raise ValueError("Each live asset needs 1 to 30 request headers.")
+        names: set[str] = set()
+        for name, value in headers.items():
+            if not isinstance(name, str) or len(name) > 128 or not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name) or name.lower() in {"host", "content-length", "proxy-authorization"}:
+                raise ValueError("Enter a valid request header name.")
+            if name.lower() in names:
+                raise ValueError("Header names must be unique, ignoring case.")
+            names.add(name.lower())
+            if not isinstance(value, str) or not value or len(value) > 4096 or not value.isascii() or not value.isprintable() or "\r" in value or "\n" in value:
+                raise ValueError("Header values must be single-line ASCII text (up to 4096 characters).")
     hints = template.get("hints", [])
     if not isinstance(hints, list) or len(hints) > 30:
         raise ValueError("Provide at most 30 hints.")
@@ -106,6 +123,8 @@ def _backup_existing_engagement_template(path: Path) -> Path:
 
 
 def _validate_no_new_secret_values(candidate: dict[str, Any], existing: dict[str, Any]) -> None:
+    if candidate.get("asset_request_headers") and candidate.get("asset_request_headers") != existing.get("asset_request_headers", {}):
+        raise ValueError("Refined template must not change asset request headers")
     credentials = candidate.get("credentials") if isinstance(candidate.get("credentials"), dict) else {}
     existing_credentials = existing.get("credentials") if isinstance(existing.get("credentials"), dict) else {}
     for role, values in credentials.items():
@@ -160,6 +179,7 @@ def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str
             }
             for role in roles
         },
+        "asset_request_headers": {},
         "safe_test_data": {
             "marker_prefix": "SECTEST-DO-NOT-PROCESS",
             "email": None,
@@ -197,6 +217,7 @@ def build_minimal_engagement_template() -> dict[str, Any]:
         },
         "limits": {},
         "credentials": {},
+        "asset_request_headers": {},
         "safe_test_data": {},
         "llm": {
             "engagement_steer": None,
@@ -230,6 +251,34 @@ def load_engagement_steer(path: Path) -> str:
         return ""
 
 
+def asset_request_headers(template: dict[str, Any], asset_id: str) -> dict[str, str]:
+    headers_by_asset = template.get("asset_request_headers", {})
+    headers = headers_by_asset.get(asset_id) if isinstance(headers_by_asset, dict) else None
+    if headers is None:
+        return {}
+    validate_engagement_template(template)
+    return dict(headers)
+
+
+def request_origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(url)
+    return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or (443 if parsed.scheme.lower() == "https" else 80))
+
+
+def without_asset_request_headers(template: dict[str, Any]) -> dict[str, Any]:
+    """Exclude request header values from analysis and chat context."""
+    return {key: value for key, value in template.items() if key != "asset_request_headers"}
+
+
+def engagement_context_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return _dump_yaml(without_asset_request_headers(load_engagement_file(path)))
+    except (OSError, ValueError):
+        return ""
+
+
 def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
     return {
         **({"hints": template["hints"]} if "hints" in template else {}),
@@ -238,6 +287,7 @@ def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
         "contacts": _simplify_mapping(template.get("contacts")),
         "limits": _simplify_mapping(template.get("limits")),
         "credentials": _simplify_credentials(template.get("credentials")),
+        "asset_request_headers": _simplify_mapping(template.get("asset_request_headers")),
         "safe_test_data": _simplify_safe_test_data(template.get("safe_test_data")),
         "llm": _simplify_llm(template.get("llm")),
     }

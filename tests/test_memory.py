@@ -6,10 +6,45 @@ import threading
 import unittest
 from pathlib import Path
 
-from mosh.memory import FileMemory
+from mosh.memory import FileMemory, RunStopped
 
 
 class FileMemoryTests(unittest.TestCase):
+    def test_stop_checkpoint_uses_optional_sink_without_interrupting_event_write(self) -> None:
+        class Sink:
+            def __init__(self) -> None:
+                self.stopping = False
+
+            def __call__(self, event) -> None:
+                pass
+
+            def check_stop(self) -> None:
+                if self.stopping:
+                    raise RunStopped("Stopped by you")
+
+        with tempfile.TemporaryDirectory() as directory:
+            sink = Sink()
+            memory = FileMemory(Path(directory), event_sink=sink)
+            memory.check_stop()
+            sink.stopping = True
+            memory.record_event("agent", "saved", "Current task saved")
+            with self.assertRaises(RunStopped):
+                memory.check_stop()
+            self.assertEqual(json.loads(memory.events_path.read_text(encoding="utf-8"))[0]["action"], "saved")
+
+    def test_reopen_preserves_existing_events_and_items(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            first = FileMemory(report_dir)
+            first.add_item("finding", {"id": "TEST-1"}, "agent")
+            reopened = FileMemory(report_dir, reset=False)
+            reopened.record_event("orchestrator", "complete", "Done")
+
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            items = json.loads((report_dir / "memory.json").read_text(encoding="utf-8"))
+            self.assertEqual([event["action"] for event in events], ["memory_write", "complete"])
+            self.assertEqual([item["kind"] for item in items], ["finding"])
+
     def test_records_events_and_memory_items_as_json_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             events = []

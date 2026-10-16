@@ -16,6 +16,7 @@ from mosh.crews.discovery_source.crew import DiscoverySourceOrchestrator
 from mosh.engagement import (
     ENGAGEMENT_STEER_MAX_CHARS,
     build_minimal_engagement_template,
+    asset_request_headers,
     engagement_steer,
     load_engagement_steer,
     load_engagement_file,
@@ -422,7 +423,9 @@ def _run_asset_discovery(
     event_sink: Callable[[Event], None] | None = None,
 ) -> Path:
     report_dir = asset_discovery_dir(output_root, engagement.id, asset.id)
-    steer = load_engagement_steer(engagement_dir(output_root, engagement.id) / "engagement_template.yaml")
+    template_path = engagement_dir(output_root, engagement.id) / "engagement_template.yaml"
+    template = load_engagement_file(template_path) if template_path.exists() else build_minimal_engagement_template()
+    steer = engagement_steer(template)
     sink = event_sink or _print_event
     if asset.type == "live_url":
         return DiscoveryLiveOrchestrator(
@@ -435,6 +438,7 @@ def _run_asset_discovery(
             max_depth=args.max_depth,
             report_dir=report_dir,
             engagement_steer=steer,
+            request_headers=asset_request_headers(template, asset.id),
         )
     if asset.type in {"source_tree", "source_repo"}:
         source_root = ensure_source_root(output_root, engagement.id, asset)

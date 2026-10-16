@@ -17,7 +17,41 @@ Using LLMs to test the security of an application is a lot more than just pointi
 - **Test execution:** run ready tests through controlled Docker-backed tooling using explicit engagement settings.
 - **Reporting:** write Markdown reports, structured event logs, and shared memory so findings are reviewable and reproducible.
 
-When more advanced LLM models are released, you do not need to modify the harness, just configure `mosh` to use the new models instead so you can immediate benefit from new frontier model capabilities.
+When more advanced LLM models are released, you do not need to modify the harness. Configure `mosh` to use the new models and benefit from their capabilities.
+
+## See mosh in action
+
+The local web interface guides you from defining the scope to reviewing the evidence. These screenshots show a sample assessment with illustrative content.
+
+### Define your assessment
+
+Add a live application, source tree, or repository. Mosh discovers what is there; you can add optional guidance to focus the security test.
+
+![New assessment wizard showing the Details step](assets/screenshots/new-assessment.jpg)
+
+### Follow discovery as it happens
+
+See concise progress for each asset, with detailed logs available when you need them. Discovery feeds a plan of security hypotheses tailored to the application.
+
+![Discovery workspace showing three progress steps for a live URL](assets/screenshots/discovery-progress.jpg)
+
+### Inspect discovery evidence
+
+Open the discovery report to review what Mosh found before planning the tests.
+
+![Discovery report with a contents index and Download menu](assets/screenshots/discovery-report.jpg)
+
+### See the assessment through to completion
+
+The stage row shows when Scope, Discovery, Planning, Testing, and Report are complete.
+
+![Sample assessment with all five stages complete and the final report ready](assets/screenshots/completed-assessment.jpg)
+
+### Review and export the final report
+
+Read the findings and next steps with a navigable contents list, then download the report as Markdown, PDF, or Word.
+
+![Illustrative final report with executive summary, findings, contents index, and Download menu](assets/screenshots/final-report.jpg)
 
 ## Installation
 
@@ -40,15 +74,23 @@ cd mosh
 ./scripts/setup.sh
 ```
 
-The setup script runs `uv sync` to install dependencies in a `.venv` virtual environment, then builds the Docker tool images.
+The setup script runs `uv sync` to install dependencies in a `.venv` virtual environment, then builds the Docker tool images. It verifies that each local image starts with the active Docker context without pulling from a registry. Mosh ignores a shell-wide `DOCKER_DEFAULT_PLATFORM` override for its tool images, so local images with different architectures can run on a host that supports them. If an image cannot start, setup rebuilds it and checks again.
 
-3. Use `uv run` to execute the CLI without activating the environment:
+3. Start the local web interface:
+
+```bash
+uv run mosh-web
+```
+
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The first-run wizard checks the local tools and connects a model provider. Create an assessment, add an authorized live URL or source asset, then move through Scope, Discovery, Planning, Testing, and Report. Keep this terminal running while a stage is active. The web server listens on your machine only.
+
+You can also use the CLI without activating the environment:
 
 ```bash
 uv run mosh https://app.example.com
 ```
 
-All command examples in this README use `uv run mosh` so they work without activating the virtual environment. If you prefer to activate the environment manually, run:
+The CLI examples below use `uv run mosh`. If you prefer to activate the environment manually, run:
 
 ```bash
 source .venv/bin/activate
@@ -58,7 +100,7 @@ After activation, you can omit `uv run` and use `mosh ...`.
 
 ## Configuration
 
-Set an LLM API key before running the CLI. `mosh` reads configuration from exported environment variables and from an optional `.env` file in the directory where you run the CLI. Exported environment variables take precedence over values in `.env`, and `.env` is intended for local settings only.
+Web mode connects providers in its first-run wizard and lets you change providers and models in Settings. For CLI use or manual configuration, `mosh` reads exported environment variables and an optional `.env` file in the directory where you run it. Exported variables take precedence over `.env`, which is intended for local settings only.
 
 For the default direct DeepSeek setup, open an account at deepseek.com and generate an API key:
 
@@ -181,27 +223,39 @@ For example, you can use `custom/llama3.1` for discovery and leave planning on t
 
 ## Local web interface
 
-Start the localhost interface from the repository directory:
+Start the localhost interface from the repository directory if it is not already running:
 
 ```bash
 uv run mosh-web
 ```
 
-Open `http://127.0.0.1:8765`. The server binds only to `127.0.0.1`; `--port` changes the local port.
+Open `http://127.0.0.1:8765`. The server binds only to `127.0.0.1`; `--port` changes the local port. The browser tab uses the Mosh favicon.
 
-When required model API settings are missing, a dedicated first-run wizard checks Python/uv and Docker. If either tool image is missing and Docker is ready, it starts the image build automatically, shows progress, and offers a retry if the build fails. Continue becomes available when all environment checks are ready. The wizard then offers **Connect** for DeepSeek, OpenRouter, and a custom OpenAI-compatible endpoint; all three can be connected. Custom setup asks for its URL and an optional API key. Connect shows **Checking API**, checks access without running a model, and saves a successful connection to the local `.env` file immediately. A failed check leaves `.env` unchanged and offers Retry. **Finish setup** becomes available on the Providers screen when the saved access covers the model IDs in `mosh.yaml` (or the defaults). The check confirms API access only; it does not test the configured model IDs or generate a response.
+When required model API settings are missing, a dedicated first-run wizard checks Python/uv and Docker. If either tool image is missing or cannot start with the active Docker context and platform, it starts the image build automatically, shows progress, and offers a retry if the build fails. Continue becomes available when all environment checks are ready. The wizard then offers **Connect** for DeepSeek, OpenRouter, and a custom OpenAI-compatible endpoint; all three can be connected. Custom setup asks for its URL and an optional API key. Connect shows **Checking API**, checks access without running a model, and saves a successful connection to the local `.env` file immediately. A failed check leaves `.env` unchanged and offers Retry. **Finish setup** becomes available on the Providers screen when the saved access covers the model IDs in `mosh.yaml` (or the defaults). The check confirms API access only; it does not test the configured model IDs or generate a response.
+
+After setup, open **Settings** from the top bar to see the providers and effective models used by Discovery, Planning, Testing, Reporting, and Chat. Settings appears in a focused panel; use the X or **Close settings** from any Settings screen to return to the page you came from. Opening Settings directly closes to Assessments. **Manage providers** can connect or replace DeepSeek, OpenRouter, or a custom endpoint without repeating onboarding. Select **Edit** on a stage to choose a provider and model ID for each agent; Discovery separates its live and source agents. You can also apply one model to every agent in the stage. Review the agent-level routing changes before saving. When editing an older custom-only setup, the editor makes the other stages' custom assignments explicit so they stay on the same endpoint. The editor checks that required provider connections exist; it does not call the chosen models. It writes changed assignments to `mosh.yaml` and preserves unrelated lines and comments. Changes apply to future runs, without starting or replacing an assessment run.
+
+Settings also shows **Local tools**. Mosh checks Docker and both tool images while the web app is open. If one becomes unavailable, a warning appears beside Settings. Open **Local tools** to check again or rebuild missing images. A failed build shows its diagnostic output under **Build details** so you can see why it stopped. Discovery and Testing show a link there and wait for their required image before starting; saved reports remain available.
 
 After setup, **New assessment** opens a separate wizard for a name, one or more live URLs, local source trees, or HTTPS repository URLs, and authorization confirmation. For a local source tree, select that asset type and use **Choose folder** to browse under your home folder. The wizard confirms that local folders exist. When you add a website or repository, it briefly checks reachability and shows the result on the Review step. A failed check offers **Retry check** or **Add anyway**; assets added anyway are marked **Not verified**. The check may contact the URL you entered, but it does not start discovery. Finishing creates the same engagement and asset files as the CLI. You can later open the assessment to add or remove assets. The same folder picker and reachability check are available there. Removing an asset takes it out of future runs while leaving existing generated files on disk.
 
-The assessment page holds assets and optional guidance. A compact stage row links Scope, Discovery, Planning, and Testing, and shows the upcoming Report stage. A running stage shows a spinner; completed stages show checkmarks. Select **Discovery** in that row, then **Start discovery** to run assets without reports. The Discovery view shows the active asset and a few meaningful steps: crawling, technology identification, and report writing for websites; file and route indexing, dependency inspection, component analysis, and report writing for source assets. The active step has a spinner, and completed steps have checkmarks. Status updates in place without reloading the page. Expand **Detailed logs** at the bottom for a timestamped, console-style event stream; select **Hide logs** to close it without leaving the page. Completed assets offer **View report**, which renders the Markdown report with headings, tables, lists, links, and code blocks; a failed run offers **Retry remaining**. The browser tab can be closed while discovery runs, but keep `mosh-web` running until it finishes.
+### Assessment guidance (optional)
+
+Mosh discovers assets from their content, so you can leave guidance empty. In **Scope**, use **General guidance** for priorities and **Add hint** for key functionality, account roles, or sections worth reviewing. Hints are leads to verify, not confirmed findings. You can edit or delete them as the assessment progresses; saving a hint does not start a run.
+
+If a planned test needs credentials, permissions, a target URL, or safe test data, use **Requested test information** in Scope or **Add required details** beside that test. These forms save the information needed by testing. A password or token in a hint does not satisfy those requirements. Saved credentials and test data are not displayed again. Scope errors appear in dismissible notices at the top of the page.
+
+If a live asset needs custom HTTP headers, add them under **Scope → Request headers**. You can add, replace, and remove headers for each live URL. Mosh applies them to that URL's origin during Discovery and to structured HTTP requests during Testing. Values stay in the local `engagement_template.yaml`, are hidden in the web interface, and are excluded from model prompts and saved tool output. Saving does not contact the site or start a run. Arbitrary security-tool commands do not receive the headers automatically; use the Testing HTTP request tool for requests that need them. For CLI use, add `asset_request_headers: {asset_live_1: {X-Gateway-Token: your-value}}` to the assessment's `engagement_template.yaml`.
+
+The assessment page holds assets and optional guidance. A compact stage row links Scope, Discovery, Planning, and Testing, and opens Report after Testing is complete. A running stage shows a spinner; completed stages show checkmarks. Select **Discovery** in that row, then **Start discovery** to run assets without reports. The Discovery view shows the active asset and a few meaningful steps: crawling, technology identification, and report writing for websites; file and route indexing, dependency inspection, component analysis, and report writing for source assets. The active step has a spinner, and completed steps have checkmarks. Status updates in place without reloading the page. Expand **Detailed logs** at the bottom for a timestamped, console-style event stream; select **Hide logs** to close it without leaving the page. Completed assets offer **View report**, which renders the Markdown report with headings, tables, lists, links, and code blocks; a failed run offers **Retry remaining**. The browser tab can be closed while discovery runs, but keep `mosh-web` running until it finishes.
 
 When discovery is complete, select **Planning** in the stage row, then **Start planning**. Planning examines the discovered assets, identifies potential security issues, and turns them into testable hypotheses with checks tailored to the assessment. It writes the security test plan; tests run later. Its progress updates in place, and its **Detailed logs** panel opens and closes at the bottom of the page. **View plan** opens the rendered Markdown plan; a failed run offers **Retry planning**. If discovery or guidance changes, use **Update plan** in Planning. **Refresh discovery** remains in Discovery for rerunning existing assets after their content or discovery guidance changes. It opens a confirmation page before any run starts because current discovery reports and logs may be replaced. The stage row handles navigation between sections. After planning completes for the first time, **Continue to testing** also opens Testing; it does not start a test run. Start, Retry, and Update run work on their respective stage pages.
 
-When planning is complete, select **Continue to testing** (or **Testing** in the stage row). Planning's tests are listed with their current status and a short, expandable status guide. **Complete** means the test has run and produced a result for the current plan. A blocker may be a missing credential, permission, target, source asset, earlier test result, or prerequisite named by the plan. For supported missing inputs, select **Add required details** on the blocked test to enter the specific credential, permission, target URL, or safe test data it needs. The form saves to Scope and returns to the test; it does not start testing. Asset and other scope blockers link to Scope for review. **Requested test information** in Scope also shows the plan's missing inputs. Hints remain optional guidance about what to examine; they do not satisfy required inputs. This preview reads the current plan and engagement settings; it does not run tests or contact assets. Select **Start testing** to run ready tests and save a report for each. As each test runs, its row shows three steps: running planned checks, reviewing evidence, and writing the test report. The active step spins and completed steps show checkmarks; a requested revision can return a test to the checks step. Queued tests stay compact. Previous reports remain accessible even when the current plan blocks a test. A ready test whose previous result no longer applies shows Needs rerun. The brief status and detailed logs update in place. **View preflight** remains available after a run. After adding missing information, select **Run remaining tests**. If the plan changes, run Testing again to handle newly planned hypotheses.
+When planning is complete, select **Continue to testing** (or **Testing** in the stage row). Planning's tests are listed with their current status and a short, expandable status guide. **Complete** means the test has run and produced a result for the current plan. A blocker may be a missing credential, permission, target, source asset, earlier test result, or prerequisite named by the plan. For supported missing inputs, select **Add required details** on the blocked test to enter the specific credential, permission, target URL, or safe test data it needs. The form saves to Scope and returns to the test; it does not start testing. Asset and other scope blockers link to Scope for review. **Requested test information** in Scope also shows the plan's missing inputs. Hints remain optional guidance about what to examine; they do not satisfy required inputs. This preview reads the current plan and engagement settings; it does not run tests or contact assets. Select **Start testing** to run ready tests and save a report for each. As each test runs, its row shows three steps: running planned checks, reviewing evidence, and writing the test report. The active step spins and completed steps show checkmarks; a requested revision can return a test to the checks step. Queued tests stay compact. Previous reports remain accessible even when the current plan blocks a test. When testing finds new information, it saves the reports and waits for your choice. The decision panel lists the actual new details from each test, with links to the relevant test reports. **Update discovery and plan** adds those details to the Discovery reports and runs Planning again without repeating Discovery or completed tests; it may add, change, or remove tests, and a changed plan needs another Testing pass before reporting. **Continue to reporting** keeps the current plan and completed reports and opens the Report stage without planning further tests from those details. The brief status and detailed logs update in place. **View preflight** remains available after a run. After adding missing information, select **Run remaining tests**. If the plan changes, run Testing again to handle newly planned hypotheses.
 
-After test reports are written, Testing may still update discovery and the security test plan from new findings. The stage keeps its spinner and says **Updating plan** until that work finishes; the individual tests can already show Complete.
+The choice remains available after restarting the web server. If you update the plan, Planning shows a spinner while it runs, and the saved test reports stay available. If you continue to Report, select **Start reporting** to write and review the final report from the completed tests. Report shows three event-driven steps—preparing assessment evidence, writing the final report, and reviewing it—with a spinner on the active step and ticks on completed steps. Progress and detailed logs update in place, and **View report** opens the rendered document. Every Markdown document view has a contents index for jumping to sections and a **Download** menu with PDF, Word (DOCX), and Markdown. Downloads are generated from the current Markdown when requested. The CLI testing command retains its automatic discovery and planning feedback behavior.
 
-The web interface currently covers setup, assessment creation, discovery, planning, and testing. Final reporting and document review still use the CLI and files described below.
+While a web stage is running, select **Stop** and confirm to end it at the next safe boundary. The page shows **Stopping…** until the current asset, test, or model task finishes, then **Stopped by you**. Finished asset and test reports remain available. Discovery and Testing can run the remaining work; Planning and Reporting can restart. Keep `mosh-web` running while the stop request finishes. Stopping cannot interrupt a model request or tool operation already underway.
 
 ## Running a security scan
 
@@ -569,12 +623,6 @@ If you are working on docker tool image improvements, make sure you regularly re
 
 mosh is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
 
-If you are working on docker tool image improvements, make sure you regularly rebuild the images:
-
-```bash
-./scripts/setup.sh --force-docker
-```
-
 ## Interesting read
 
 https://blog.cloudflare.com/build-your-own-vulnerability-harness/
@@ -589,13 +637,3 @@ https://github.com/xalgord/xalgorix
 https://github.com/GH05TCREW/PentestAgent
 https://github.com/anthropics/defending-code-reference-harness/
 https://github.com/hadriansecurity/OpenHack/
-
-### Assessment guidance (optional)
-
-Mosh discovers assets automatically from their content, so assessment guidance is optional. Use **General guidance** to highlight key functionality and overall priorities, and **Add hint** to note relevant account roles or specific sections worth reviewing. Each hint has your own title and multiline text. Hints are leads to verify, not confirmed findings. They guide what Mosh examines but do not satisfy required test inputs. This guidance steers the security test for the assessment; you can edit it or add hints as the assessment progresses. Save each hint to add it to the list; its row offers **Edit** and **Delete**. Save general guidance separately.
-
-When a planned test needs information before it can run, use **Requested test information** in Scope. It lists the current plan's missing inputs and lets you add credentials by account role, testing permissions, target URLs, and safe test data through small forms. Saved credentials and test data are not displayed again. These structured values satisfy testing preflight checks and allow credential redaction; putting a password or token in a hint does neither.
-
-Form errors appear in a dismissible notice at the top of the page, including when an active stage prevents a Scope change.
-
-Guidance is stored in the assessment’s existing engagement template and is used by subsequent analysis runs. Planning regeneration preserves user hints. Saving guidance does not start discovery or change testing permissions; start discovery from its section on the assessment page.

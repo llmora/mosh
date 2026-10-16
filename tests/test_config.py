@@ -6,10 +6,40 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mosh.config import AppConfig
+from mosh.config import AppConfig, write_model_assignments
 
 
 class AppConfigTests(unittest.TestCase):
+    def test_model_assignment_writer_preserves_other_groups_and_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mosh.yaml"
+            path.write_text(
+                "# selected by the user\nmodels:\n  planning:\n"
+                "    planner: deepseek/old # keep this note\n"
+                "  testing:\n    executor: openrouter/example/test\n",
+                encoding="utf-8",
+            )
+            write_model_assignments(path, {
+                "planning": {"planner": "custom/local-planner", "reviewer": "custom/local-planner"},
+                "chat": {"assistant": "deepseek/deepseek-v4-flash"},
+            })
+
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("# selected by the user", content)
+            self.assertIn("planner: custom/local-planner  # keep this note", content)
+            self.assertIn("executor: openrouter/example/test", content)
+            self.assertEqual(AppConfig.from_env(path, Path(directory) / ".env").models.planning.reviewer, "custom/local-planner")
+            self.assertEqual(AppConfig.from_env(path, Path(directory) / ".env").models.chat.assistant, "deepseek/deepseek-v4-flash")
+
+    def test_model_assignment_writer_rejects_invalid_values_without_editing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mosh.yaml"
+            path.write_text("models:\n  planning:\n    planner: deepseek/old\n", encoding="utf-8")
+            original = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Invalid model assignment"):
+                write_model_assignments(path, {"planning": {"planner": "custom/bad # comment"}})
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def _missing_dotenv_path(self) -> Path:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

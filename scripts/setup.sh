@@ -27,6 +27,10 @@ for arg in "$@"; do
   esac
 done
 
+# Managed tool images can be mixed architecture; use each local image's
+# architecture rather than a shell-wide Docker default platform.
+unset DOCKER_DEFAULT_PLATFORM
+
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
@@ -62,6 +66,11 @@ image_needs_rebuild() {
 
   if ! docker image inspect "$image" >/dev/null 2>&1; then
     echo "$image: image missing"
+    return 0
+  fi
+
+  if ! docker run --rm --pull=never "$image" true >/dev/null 2>&1; then
+    echo "$image: image cannot run with the current Docker context and platform"
     return 0
   fi
 
@@ -109,6 +118,13 @@ build_image_if_needed() {
     docker build -t "$image" -f "$dockerfile" "$ROOT_DIR"
   else
     echo "$image: current"
+  fi
+
+  local run_error
+  if ! run_error="$(docker run --rm --pull=never "$image" true 2>&1)"; then
+    printf '%s\n' "$run_error" >&2
+    echo "$image: Docker cannot run the image. Check the Docker context and DOCKER_DEFAULT_PLATFORM." >&2
+    exit 1
   fi
 }
 

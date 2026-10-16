@@ -55,8 +55,12 @@ execute_security_test_task:
     unrelated substitute test.
 
     Use any available bounded tool that is needed for the planned hypothesis:
-    - run_security_command for live target checks from the disposable Docker
-      workspace.
+    - request_target_http for live HTTP checks. It applies saved headers for
+      the matching asset origin unless include_asset_headers is false. Use this
+      tool when a target needs configured request headers; never ask for their
+      values or copy them into a command. It does not follow redirects.
+    - run_security_command for other live checks from the disposable Docker
+      workspace. Saved request headers are not added to arbitrary commands.
     - source_search and read_source_slice for bounded source inspection.
     - write_workspace_file and run_source_command for focused local harnesses,
       dependency checks, or source-derived experiments with /source mounted

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -18,7 +20,7 @@ from unittest.mock import Mock, patch
 from dotenv import dotenv_values
 
 from mosh.engagements import load_engagement
-from mosh.web import WebApp, check_asset_reachability, check_provider_api, main
+from mosh.web import DiscoveryRun, PlanningRun, ReportingRun, TestingRun, WebApp, check_asset_reachability, check_provider_api, main
 
 
 class WebTestCase(unittest.TestCase):
@@ -71,6 +73,28 @@ class WebTestCase(unittest.TestCase):
 
 
 class WebSetupTests(WebTestCase):
+    def test_environment_probe_requires_runnable_images(self) -> None:
+        commands = []
+
+        def command_ok(command):
+            commands.append(command)
+            return command != ["docker", "run", "--rm", "--pull=never", "mosh-discovery-tools:latest", "true"]
+
+        with patch("mosh.web.shutil.which", return_value="/usr/local/bin/tool"), patch("mosh.web._command_ok", side_effect=command_ok):
+            checks = self.app._probe_environment()
+
+        self.assertTrue(checks["docker"])
+        self.assertFalse(checks["images"])
+        self.assertIn(["docker", "run", "--rm", "--pull=never", "mosh-discovery-tools:latest", "true"], commands)
+
+    def test_environment_probe_ignores_global_platform_override(self) -> None:
+        with patch.dict(os.environ, {"DOCKER_DEFAULT_PLATFORM": "linux/amd64"}), patch("mosh.web.shutil.which", return_value="/usr/local/bin/tool"), patch("mosh.web.subprocess.run") as run:
+            run.return_value.returncode = 0
+            checks = self.app._probe_environment()
+        self.assertTrue(checks["images"])
+        self.assertEqual(run.call_count, 3)
+        self.assertTrue(all("DOCKER_DEFAULT_PLATFORM" not in call.kwargs["env"] for call in run.call_args_list))
+
     def test_connect_shows_checking_then_saves_only_after_success(self) -> None:
         started = threading.Event()
         release = threading.Event()
@@ -408,6 +432,20 @@ class WebSetupTests(WebTestCase):
         self.assertEqual(run.call_args.args[0], [str(script)])
         self.assertEqual(run.call_args.kwargs["cwd"], script.parent.parent)
 
+    def test_build_failure_keeps_diagnostics_for_web_page(self) -> None:
+        def fail_build(*args, **kwargs):
+            kwargs["stdout"].write(b"Docker build failed: invalid repository signature <check>\n")
+            return Mock(returncode=1)
+
+        with patch.dict(os.environ, {"DOCKER_DEFAULT_PLATFORM": "linux/amd64"}), patch("mosh.web.subprocess.run", side_effect=fail_build) as run:
+            self.assertFalse(self.app._build_tool_images())
+        self.assertNotIn("DOCKER_DEFAULT_PLATFORM", run.call_args.kwargs["env"])
+        self.assertIn("invalid repository signature", self.app.build_error)
+        self.app.build_state = "failed"
+        self.app._record_tool_checks({"uv": True, "docker": True, "images": False})
+        self.assertIn("Build details", self.app._local_tools_section())
+        self.assertIn("&lt;check&gt;", self.app._local_tools_section())
+
     def test_external_host_origin_and_missing_form_token_are_rejected(self) -> None:
         self.assertEqual(self.get("/setup", host="example.com").status, 403)
         self.assertEqual(self.get("/setup", host="127.0.0.1.evil.test").status, 403)
@@ -427,7 +465,496 @@ class WebSetupTests(WebTestCase):
         self.assertEqual(server.call_args.args[0], ("127.0.0.1", 8765))
 
 
+class WebSettingsTests(WebTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.ready()
+        self.app.onboarding_active = False
+
+    def _review_digest(self, body: str) -> str:
+        match = re.search(r'name="source_digest" value="([a-f0-9]+)"', body)
+        self.assertIsNotNone(match)
+        return match.group(1)
+
+    def test_settings_show_effective_models_and_link_from_header(self) -> None:
+        page = self.get("/settings").body
+        self.assertIn('<a href="/settings" data-settings-link>Settings', page)
+        self.assertIn("Connected providers", page)
+        self.assertIn("DeepSeek", page)
+        self.assertIn("Model assignments", page)
+        self.assertIn('href="/settings/models/planning"', page)
+        self.assertIn("2 models across 5 agents", page)
+        discovery_editor = self.get("/settings/models/discovery").body
+        self.assertIn("Live discovery", discovery_editor)
+        self.assertIn("Source discovery", discovery_editor)
+        self.assertIn('name="model_id__discovery_live__crawler" type="text" maxlength="200" required value="deepseek-v4-flash"', discovery_editor)
+
+    def test_missing_tool_image_appears_in_settings_and_can_be_rebuilt(self) -> None:
+        images = {"ready": False}
+        builds = []
+        self.app.environment_probe = lambda: {
+            "uv": True, "docker": True, "images": images["ready"],
+            "discovery_image": images["ready"], "security_image": True,
+        }
+
+        def build() -> bool:
+            builds.append(1)
+            images["ready"] = True
+            return True
+
+        self.app.build_runner = build
+        self.app._record_tool_checks(self.app.environment_probe())
+        page = self.get("/settings").body
+        self.assertIn('href="/settings#local-tools" data-settings-link', page)
+        self.assertIn('id="local-tools"', page)
+        self.assertIn('action="/settings/tools/build"', page)
+        self.assertIn('action="/settings/tools/check"', page)
+        self.assertIn('Discovery tools</strong><span class="tool-check missing"', page)
+        self.assertIn('Security tools</strong><span class="tool-check ready"', page)
+        self.assertTrue(json.loads(self.get("/settings/tools/status").body)["warning"])
+
+        self.assertEqual(self.post("/settings/tools/build").location, "/settings#local-tools")
+        deadline = time.monotonic() + 2
+        while self.app.build_state == "running" and time.monotonic() < deadline:
+            time.sleep(.001)
+        self.assertEqual(self.app.build_state, "done")
+        self.assertEqual(builds, [1])
+        status = json.loads(self.get("/settings/tools/status").body)
+        self.assertFalse(status["warning"])
+        self.assertIn('Discovery tools</strong><span class="tool-check ready"', status["html"])
+        self.assertNotIn('action="/settings/tools/build"', status["html"])
+
+    def test_docker_unavailable_explains_fix_and_disables_build(self) -> None:
+        docker = {"ready": False}
+        self.app.environment_probe = lambda: {"uv": True, "docker": docker["ready"], "images": docker["ready"]}
+        self.app._record_tool_checks(self.app.environment_probe())
+        page = self.get("/settings").body
+        self.assertIn("Start Docker, then check again", page)
+        self.assertNotIn('action="/settings/tools/build"', page)
+        self.assertTrue(json.loads(self.get("/settings/tools/status").body)["warning"])
+        docker["ready"] = True
+        self.assertEqual(self.post("/settings/tools/check").location, "/settings#local-tools")
+        deadline = time.monotonic() + 2
+        while self.app._tool_snapshot()[1] and time.monotonic() < deadline:
+            time.sleep(.001)
+        self.assertFalse(json.loads(self.get("/settings/tools/status").body)["warning"])
+
+    def test_settings_pages_can_close_to_previous_page_or_assessments(self) -> None:
+        for path in ("/settings", "/settings/providers", "/settings/providers/deepseek", "/settings/models/planning"):
+            with self.subTest(path=path):
+                page = self.get(path).body
+                self.assertIn('<body class="settings-page">', page)
+                self.assertIn('class="settings-close" href="/" data-close-settings aria-label="Close settings"', page)
+                self.assertIn('class="settings-footer"><a class="secondary" href="/" data-close-settings>Close settings</a>', page)
+        review = self.post("/settings/models/planning", {
+            "action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+        }).body
+        self.assertIn('aria-label="Close settings"', review)
+        self.assertIn('>Close settings</a>', review)
+
+    def test_stage_change_reviews_and_saves_only_that_stage(self) -> None:
+        config_path = self.root / "mosh.yaml"
+        config_path.write_text(
+            "# user note\nmodels:\n  planning:\n    planner: deepseek/deepseek-v4-flash\n"
+            "  testing:\n    reviewer: deepseek/deepseek-v4-pro\n",
+            encoding="utf-8",
+        )
+        editor = self.get("/settings/models/planning").body
+        self.assertIn("Agent assignments", editor)
+        self.assertIn('name="provider__planning__planner"', editor)
+        self.assertIn("This assigns one model to all 5 agents", editor)
+        reviewed = self.post("/settings/models/planning", {
+            "action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+        }).body
+        self.assertIn("Review planning models", reviewed)
+        self.assertIn("Routing changes", reviewed)
+        self.assertIn("Save assignments", reviewed)
+        self.assertNotIn("other stages", reviewed)
+        self.assertIn("planner: deepseek/deepseek-v4-flash", config_path.read_text(encoding="utf-8"))
+
+        saved = self.post("/settings/models/planning", {
+            "action": "save", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+            "reviewed": "yes", "source_digest": self._review_digest(reviewed),
+        })
+        self.assertEqual(saved.location, "/settings?saved=planning")
+        content = config_path.read_text(encoding="utf-8")
+        self.assertIn("# user note", content)
+        self.assertIn("planner: deepseek/deepseek-v4-pro", content)
+        self.assertIn("engagement_refiner: deepseek/deepseek-v4-pro", content)
+        self.assertIn("reviewer: deepseek/deepseek-v4-pro", content)
+        self.assertIn("Model assignments saved", self.get(saved.location).body)
+
+    def test_individual_agent_assignments_review_and_save_only_changed_roles(self) -> None:
+        from mosh.config import AppConfig
+
+        (self.root / ".env").write_text("DEEPSEEK_API_KEY=deep-key\nOPENROUTER_API_KEY=router-key\n", encoding="utf-8")
+        editor = self.get("/settings/models/planning").body
+        self.assertIn('name="provider__planning__planner"', editor)
+        self.assertIn('name="model_id__planning__evidence_linker"', editor)
+        self.assertIn("Apply one model to all 5 agents", editor)
+        config = self.app._settings_config()
+        form = {"mode": "agents", "action": "review"}
+        for group, role, model in self.app._stage_models(config, "planning"):
+            route_provider, route_model = self.app._model_route(config, model)
+            form[f"provider__{group}__{role}"] = route_provider.lower()
+            form[f"model_id__{group}__{role}"] = route_model
+        form["provider__planning__planner"] = "openrouter"
+        form["model_id__planning__planner"] = "anthropic/claude-sonnet-4"
+        form["model_id__planning__reviewer"] = "deepseek-v4-flash"
+
+        reviewed = self.post("/settings/models/planning", form).body
+        self.assertIn("Planning · Planner", reviewed)
+        self.assertIn("Planning · Reviewer", reviewed)
+        self.assertNotIn("Planning · Evidence Linker", reviewed)
+        self.assertIn('name="mode" value="agents"', reviewed)
+        saved = self.post("/settings/models/planning", {
+            **form, "action": "save", "reviewed": "yes", "source_digest": self._review_digest(reviewed),
+        })
+        self.assertEqual(saved.location, "/settings?saved=planning")
+        config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+        self.assertEqual(config.models.planning.planner, "openrouter/anthropic/claude-sonnet-4")
+        self.assertEqual(config.models.planning.reviewer, "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.models.planning.evidence_linker, "deepseek/deepseek-v4-flash")
+        content = (self.root / "mosh.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("evidence_linker:", content)
+        self.assertNotIn("testing:", content)
+
+    def test_individual_agent_validation_keeps_entered_values(self) -> None:
+        config = self.app._settings_config()
+        form = {"mode": "agents", "action": "review"}
+        for group, role, model in self.app._stage_models(config, "planning"):
+            route_provider, route_model = self.app._model_route(config, model)
+            form[f"provider__{group}__{role}"] = route_provider.lower()
+            form[f"model_id__{group}__{role}"] = route_model
+        form["provider__planning__planner"] = "openrouter"
+        form["model_id__planning__planner"] = "anthropic/claude-sonnet-4"
+        page = self.post("/settings/models/planning", form).body
+        self.assertIn("Connect the provider for planner", page)
+        self.assertIn('name="model_id__planning__planner" type="text" maxlength="200" required value="anthropic/claude-sonnet-4"', page)
+        self.assertFalse((self.root / "mosh.yaml").exists())
+
+    def test_individual_edit_preserves_legacy_custom_routes(self) -> None:
+        from mosh.config import AppConfig
+
+        (self.root / ".env").write_text(
+            "DEEPSEEK_API_KEY=deep-key\nMOSH_LLM_BASE_URL=http://localhost:11434/v1\n",
+            encoding="utf-8",
+        )
+        config = self.app._settings_config()
+        form = {"mode": "agents", "action": "review"}
+        for group, role, model in self.app._stage_models(config, "planning"):
+            route_provider, route_model = self.app._model_route(config, model)
+            form[f"provider__{group}__{role}"] = route_provider.lower()
+            form[f"model_id__{group}__{role}"] = route_model
+        form["provider__planning__planner"] = "deepseek"
+        form["model_id__planning__planner"] = "deepseek-v4-pro"
+        reviewed = self.post("/settings/models/planning", form).body
+        self.assertIn("other stages keep using your custom endpoint", reviewed)
+        saved = self.post("/settings/models/planning", {
+            **form, "action": "save", "reviewed": "yes", "source_digest": self._review_digest(reviewed),
+        })
+        self.assertEqual(saved.location, "/settings?saved=planning")
+        updated = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+        self.assertIsNone(updated.llm_base_url_for_model(updated.models.planning.planner))
+        self.assertEqual(updated.llm_base_url_for_model(updated.models.planning.reviewer), "http://localhost:11434/v1")
+        self.assertEqual(updated.llm_base_url_for_model(updated.models.testing.executor), "http://localhost:11434/v1")
+
+    def test_legacy_custom_editor_preserves_other_stage_routes(self) -> None:
+        from mosh.config import AppConfig
+
+        (self.root / ".env").write_text("MOSH_LLM_BASE_URL=http://localhost:11434/v1\n", encoding="utf-8")
+        self.assertIn("custom endpoint currently serves every model", self.get("/settings").body)
+        blocked = self.post("/settings/models/planning", {
+            "action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+        }).body
+        self.assertIn("Connect this provider before assigning", blocked)
+        self.assertFalse((self.root / "mosh.yaml").exists())
+
+        self.post("/settings/providers/connect", {"provider": "deepseek", "api_key": "deep-key"})
+        self.wait_for_check("deepseek")
+        reviewed = self.post("/settings/models/planning", {
+            "action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+        }).body
+        self.assertIn("other stages keep using your custom endpoint", reviewed)
+        self.assertIn("Custom", reviewed)
+        self.assertIn("DeepSeek", reviewed)
+        self.assertNotIn("also changes where models run in", reviewed)
+        saved = self.post("/settings/models/planning", {
+            "action": "save", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+            "reviewed": "yes", "source_digest": self._review_digest(reviewed),
+        })
+        self.assertEqual(saved.location, "/settings?saved=planning")
+        config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+        self.assertTrue(config.has_explicit_custom_models())
+        self.assertIsNone(config.llm_base_url_for_model(config.models.planning.planner))
+        self.assertEqual(config.llm_base_url_for_model(config.models.testing.executor), "http://localhost:11434/v1")
+        self.assertEqual(config.llm_model_name(config.models.testing.executor), "deepseek/deepseek-v4-flash")
+
+    def test_model_save_rejects_stale_review_and_active_stage(self) -> None:
+        from mosh.web import TestingRun
+
+        reviewed = self.post("/settings/models/chat", {
+            "action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+        }).body
+        (self.root / "mosh.yaml").write_text("# changed in another window\n", encoding="utf-8")
+        stale = self.post("/settings/models/chat", {
+            "action": "save", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+            "reviewed": "yes", "source_digest": self._review_digest(reviewed),
+        }).body
+        self.assertIn("changed since the review", stale)
+        self.assertNotIn("assistant:", (self.root / "mosh.yaml").read_text(encoding="utf-8"))
+
+        self.app.testing_runs["running"] = TestingRun(status="running")
+        running = self.post("/settings/models/chat", {
+            "action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro",
+        }).body
+        self.assertIn("Wait for the current stage", running)
+        self.assertNotIn("assistant:", (self.root / "mosh.yaml").read_text(encoding="utf-8"))
+
+    def test_provider_connection_is_available_after_onboarding(self) -> None:
+        page = self.get("/settings/providers").body
+        self.assertIn("DeepSeek", page)
+        self.assertIn("Not connected", page)
+        self.assertIn('href="/settings/providers/custom"', page)
+        self.assertIn('name="base_url"', self.get("/settings/providers/custom").body)
+        self.assertEqual(self.post("/settings/providers/connect", {
+            "provider": "custom", "base_url": "http://localhost:11434/v1", "api_key": "",
+        }).location, "/settings/providers")
+        self.wait_for_check("custom")
+        saved = dotenv_values(self.root / ".env")
+        self.assertEqual(saved["DEEPSEEK_API_KEY"], "test-key")
+        self.assertEqual(saved["MOSH_LLM_BASE_URL"], "http://localhost:11434/v1")
+        self.assertNotIn("MOSH_LLM_API_KEY", saved)
+
+    def test_stage_editor_can_explicitly_choose_openrouter_for_deepseek_model(self) -> None:
+        from mosh.config import AppConfig
+
+        self.post("/settings/providers/connect", {"provider": "openrouter", "api_key": "router-key"})
+        self.wait_for_check("openrouter")
+        reviewed = self.post("/settings/models/testing", {
+            "action": "review", "provider": "openrouter", "model_id": "deepseek/deepseek-v4-pro",
+        }).body
+        self.assertIn("OpenRouter · deepseek/deepseek-v4-pro", reviewed)
+        saved = self.post("/settings/models/testing", {
+            "action": "save", "provider": "openrouter", "model_id": "deepseek/deepseek-v4-pro",
+            "reviewed": "yes", "source_digest": self._review_digest(reviewed),
+        })
+        self.assertEqual(saved.location, "/settings?saved=testing")
+        config = AppConfig.from_env(self.root / "mosh.yaml", self.root / ".env")
+        self.assertEqual(config.models.testing.executor, "openrouter/deepseek/deepseek-v4-pro")
+        self.assertEqual(config.llm_base_url_for_model(config.models.testing.executor), config.openrouter_base_url)
+
+    def test_failed_provider_replacement_keeps_current_key(self) -> None:
+        self.app.provider_checker = lambda provider, key, base_url: (False, "API key was rejected.")
+        self.post("/settings/providers/connect", {"provider": "deepseek", "api_key": "bad-key"})
+        self.wait_for_check("deepseek")
+        page = self.get("/settings/providers").body
+        self.assertIn("API key was rejected", page)
+        self.assertNotIn("bad-key", page)
+        self.assertEqual(dotenv_values(self.root / ".env")["DEEPSEEK_API_KEY"], "test-key")
+
+    def test_settings_forms_keep_localhost_origin_and_csrf_checks(self) -> None:
+        response = self.app.handle("POST", "/settings/models/chat", {"action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro"}, {"Host": "127.0.0.1:8765"})
+        self.assertEqual(response.status, 403)
+        response = self.post("/settings/models/chat", {"action": "review", "provider": "deepseek", "model_id": "deepseek-v4-pro"}, origin="http://evil.example")
+        self.assertEqual(response.status, 403)
+
+
 class WebAssessmentTests(WebTestCase):
+    def test_missing_discovery_image_blocks_run_and_links_to_settings(self) -> None:
+        from mosh.engagements import attach_asset, create_engagement
+
+        self.ready()
+        engagement = create_engagement(self.app.output_root, "Missing discovery tools")
+        attach_asset(self.app.output_root, engagement.id, "https://app.example.test")
+        self.app.environment_probe = lambda: {
+            "uv": True, "docker": True, "images": False,
+            "discovery_image": False, "security_image": True,
+        }
+        url = f"/assessments/{engagement.id}/discovery"
+        page = self.post(url, {"action": "start"}).body
+        self.assertIn("Discovery tools are unavailable", page)
+        self.assertIn('href="/settings#local-tools" data-settings-link', page)
+        self.assertNotIn("Start discovery</button>", page)
+        self.assertNotIn(engagement.id, self.app.discovery_runs)
+
+    def test_missing_security_image_blocks_testing_run(self) -> None:
+        from mosh.engagements import attach_asset, create_engagement, engagement_plan_dir
+
+        self.ready()
+        engagement = create_engagement(self.app.output_root, "Missing security tools")
+        attach_asset(self.app.output_root, engagement.id, "https://app.example.test")
+        plan_dir = engagement_plan_dir(self.app.output_root, engagement.id)
+        plan_dir.mkdir(parents=True)
+        (plan_dir / "plan.md").write_text("# Plan\n", encoding="utf-8")
+        self.app._planning_current = lambda _: True
+        self.app.environment_probe = lambda: {
+            "uv": True, "docker": True, "images": False,
+            "discovery_image": True, "security_image": False,
+        }
+        url = f"/assessments/{engagement.id}/testing"
+        page = self.post(url, {"action": "start"}).body
+        self.assertIn("Security testing tools are unavailable", page)
+        self.assertIn('href="/settings#local-tools" data-settings-link', page)
+        self.assertNotIn(engagement.id, self.app.testing_runs)
+
+    def test_stop_discovery_finishes_current_asset_and_runs_remaining_later(self) -> None:
+        from mosh.engagements import asset_discovery_dir, attach_asset, create_engagement
+
+        engagement = create_engagement(self.app.output_root, "Stop discovery")
+        first = attach_asset(self.app.output_root, engagement.id, "https://first.example.test").asset
+        second = attach_asset(self.app.output_root, engagement.id, "https://second.example.test").asset
+        entered = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        calls = []
+
+        def discover(config, output_root, current_engagement, asset, event_sink):
+            calls.append(asset.id)
+            if asset.id == first.id:
+                entered.set()
+                release.wait(2)
+            report_dir = asset_discovery_dir(output_root, current_engagement.id, asset.id)
+            report_dir.mkdir(parents=True, exist_ok=True)
+            (report_dir / "report.md").write_text(f"# {asset.id}", encoding="utf-8")
+            return report_dir
+
+        self.app.discovery_runner = discover
+        url = f"/assessments/{engagement.id}/discovery"
+        self.post(url, {"action": "start"})
+        self.assertTrue(entered.wait(1))
+        running = self.get(url + "?view=logs").body
+        self.assertIn('data-open-stop="stop-discovery"', running)
+        self.assertIn('data-stop-confirm', running)
+        self.assertIn("Finished asset and test reports remain available", running)
+        self.assertIn("Confirm before stopping Discovery", self.post(url, {"action": "stop"}).body)
+        self.assertFalse(self.app.discovery_runs[engagement.id].stop_requested.is_set())
+        self.post(url, {"action": "stop", "confirmed": "yes"})
+        self.assertEqual(self.app.discovery_runs[engagement.id].status, "running")
+        self.assertIn("Stopping discovery", self.get(url).body)
+        self.assertTrue(json.loads(self.get(url + "/status").body)["poll"])
+        release.set()
+        self.wait_for_discovery(engagement.id)
+        self.assertEqual(self.app.discovery_runs[engagement.id].status, "stopped")
+        self.assertEqual(calls, [first.id])
+        self.assertTrue((asset_discovery_dir(self.app.output_root, engagement.id, first.id) / "report.md").is_file())
+        self.assertIn("Stopped by you", self.get(url).body)
+        self.assertIn("Run remaining", self.get(url).body)
+        self.post(url, {"action": "start"})
+        self.wait_for_discovery(engagement.id)
+        self.assertEqual(calls, [first.id, second.id])
+        self.assertEqual(self.app.discovery_runs[engagement.id].status, "complete")
+
+    def test_stop_model_stages_waits_for_runner_checkpoint(self) -> None:
+        from mosh.engagements import attach_asset, create_engagement, asset_discovery_dir
+
+        engagement = create_engagement(self.app.output_root, "Stop stages")
+        asset = attach_asset(self.app.output_root, engagement.id, "https://app.example.test").asset
+        discovery_dir = asset_discovery_dir(self.app.output_root, engagement.id, asset.id)
+        discovery_dir.mkdir(parents=True, exist_ok=True)
+        (discovery_dir / "report.md").write_text("# Discovery", encoding="utf-8")
+        for stage, run_type, task_name, runner_name, path in (
+            ("planning", PlanningRun, "_run_planning_task", "planning_runner", "planning"),
+            ("testing", TestingRun, "_run_testing_task", "testing_runner", "testing"),
+            ("reporting", ReportingRun, "_run_reporting_task", "reporting_runner", "report"),
+        ):
+            with self.subTest(stage=stage):
+                entered = threading.Event()
+                release = threading.Event()
+                self.addCleanup(release.set)
+
+                def runner(config, output_root, engagement_id, sink):
+                    entered.set()
+                    release.wait(2)
+                    sink.check_stop()
+                    raise AssertionError("Runner continued after stop")
+
+                setattr(self.app, runner_name, runner)
+                run = run_type()
+                getattr(self.app, f"{stage}_runs")[engagement.id] = run
+                thread = threading.Thread(target=getattr(self.app, task_name), args=(engagement.id, run))
+                thread.start()
+                self.addCleanup(thread.join, 2)
+                self.assertTrue(entered.wait(1))
+                url = f"/assessments/{engagement.id}/{path}"
+                self.assertIn("data-open-stop", self.get(url).body)
+                self.post(url, {"action": "stop", "confirmed": "yes"})
+                self.assertEqual(run.status, "running")
+                self.assertIn("Stopping", self.get(url).body)
+                release.set()
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(run.status, "stopped")
+                self.assertIn("stopped by you", self.get(url).body.lower())
+
+        feedback = PlanningRun(from_testing=True)
+        self.app.planning_runs[engagement.id] = feedback
+        testing_url = f"/assessments/{engagement.id}/testing"
+        self.assertIn('value="stop-replan"', self.get(testing_url).body)
+        self.post(testing_url, {"action": "stop-replan", "confirmed": "yes"})
+        self.assertTrue(feedback.stop_requested.is_set())
+
+    def test_markdown_views_offer_contents_and_three_download_formats(self) -> None:
+        from mosh.engagements import asset_discovery_dir, attach_asset, create_engagement, engagement_dir, engagement_plan_dir
+        from mosh.web import make_handler
+
+        self.ready()
+        engagement = create_engagement(self.app.output_root, "PDF export")
+        asset = attach_asset(self.app.output_root, engagement.id, "https://app.example.test").asset
+        discovery_dir = asset_discovery_dir(self.app.output_root, engagement.id, asset.id)
+        planning_dir = engagement_plan_dir(self.app.output_root, engagement.id)
+        testing_dir = engagement_dir(self.app.output_root, engagement.id) / "security-testing"
+        final_dir = engagement_dir(self.app.output_root, engagement.id) / "final-report"
+        for directory in (discovery_dir, planning_dir, testing_dir / "executed_tests", final_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+        source = "# Report title\n\n## Findings\n\nA **confirmed** finding.\n\n| Area | Status |\n| --- | --- |\n| Login | Reviewed |\n"
+        (discovery_dir / "report.md").write_text(source, encoding="utf-8")
+        (planning_dir / "plan.md").write_text(source, encoding="utf-8")
+        (testing_dir / "preflight.md").write_text(source, encoding="utf-8")
+        (testing_dir / "executed_tests" / "AUTH-001.md").write_text(source, encoding="utf-8")
+        (final_dir / "report.md").write_text(source, encoding="utf-8")
+        (final_dir / "events.json").write_text(json.dumps([{"agent": "orchestrator", "action": "complete"}]), encoding="utf-8")
+        base = f"/assessments/{engagement.id}"
+        paths = (
+            (f"{base}/discovery/{asset.id}/report", "discovery"),
+            (f"{base}/planning/report", "security-test-plan"),
+            (f"{base}/testing/preflight", "testing-preflight"),
+            (f"{base}/testing/reports/AUTH-001", "test-AUTH-001"),
+            (f"{base}/report/view", "final-report"),
+        )
+        for path, filename_part in paths:
+            with self.subTest(path=path):
+                page = self.get(path)
+                self.assertIn('aria-label="Contents"', page.body)
+                self.assertIn('href="#section-2">Findings</a>', page.body)
+                self.assertIn('<summary class="secondary">Download</summary>', page.body)
+                for format_name in ("pdf", "docx", "md"):
+                    with self.subTest(path=path, format=format_name):
+                        self.assertIn(f'href="{path}?format={format_name}" download', page.body)
+                        response = self.get(path + f"?format={format_name}")
+                        self.assertEqual(response.status, 200)
+                        self.assertIn(filename_part, response.download_filename)
+                        self.assertTrue(response.download_filename.endswith(f".{format_name}"))
+                        if format_name == "pdf":
+                            self.assertEqual(response.content_type, "application/pdf")
+                            self.assertTrue(response.body.startswith(b"%PDF-"))
+                        elif format_name == "docx":
+                            self.assertEqual(response.content_type, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                            self.assertTrue(zipfile.is_zipfile(io.BytesIO(response.body)))
+                        else:
+                            self.assertEqual(response.content_type, "text/markdown; charset=utf-8")
+                            self.assertEqual(response.body, source.encode("utf-8"))
+                        sender = Mock()
+                        sender.wfile = io.BytesIO()
+                        make_handler(self.app)._send(sender, response)
+                        headers = dict(call.args for call in sender.send_header.call_args_list)
+                        self.assertEqual(headers["Content-Type"], response.content_type)
+                        self.assertTrue(headers["Content-Disposition"].startswith('attachment; filename="'))
+                        self.assertEqual(sender.wfile.getvalue(), response.body)
+        for format_name in ("pdf", "docx", "md"):
+            self.assertEqual(self.get(f"{base}/discovery/unknown/report?format={format_name}").status, 404)
+            self.assertEqual(self.get(f"{base}/testing/reports/unknown?format={format_name}").status, 404)
+
     def test_repository_label_names_git_and_transport(self) -> None:
         from mosh.web import ASSET_TYPES
         self.assertEqual(ASSET_TYPES["source_repo"], "Git repository (HTTPS)")
@@ -479,6 +1006,69 @@ class WebAssessmentTests(WebTestCase):
                 return
             time.sleep(.001)
         self.fail("Testing did not finish")
+
+    def wait_for_reporting(self, engagement_id: str) -> None:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            run = self.app.reporting_runs.get(engagement_id)
+            if run and run.status != "running":
+                return
+            time.sleep(.001)
+        self.fail("Reporting did not finish")
+
+    def completed_testing_with_feedback(self):
+        from mosh.crews.testing.crew import hypothesis_fingerprint, plan_revision_id
+        from mosh.engagement import build_minimal_engagement_template
+        from mosh.engagements import asset_discovery_dir, attach_asset, create_engagement, engagement_dir, engagement_plan_dir
+        from mosh.memory import FileMemory
+
+        engagement = create_engagement(self.app.output_root, "Feedback choice")
+        asset = attach_asset(self.app.output_root, engagement.id, "https://app.example.test").asset
+        discovery_dir = asset_discovery_dir(self.app.output_root, engagement.id, asset.id)
+        discovery_dir.mkdir(parents=True)
+        (discovery_dir / "report.md").write_text("# Original discovery\n", encoding="utf-8")
+        (discovery_dir / "memory.json").write_text("[]", encoding="utf-8")
+        plan_dir = engagement_plan_dir(self.app.output_root, engagement.id)
+        plan_dir.mkdir(parents=True)
+        (plan_dir / "plan.md").write_text("# Original plan\n", encoding="utf-8")
+        plan = {"test_hypotheses": [{"id": "AUTH-001", "title": "Check authorization", "requirements": ["No credentials required."]}]}
+        (plan_dir / "memory.json").write_text(json.dumps([{"kind": "security_test_plan_final", "content": {"structured": plan}}]), encoding="utf-8")
+        template = build_minimal_engagement_template()
+        template["engagement"].update(authorization_confirmed=True, active_testing_allowed=True)
+        template["targets"]["production"]["web"] = asset.locator
+        (engagement_dir(self.app.output_root, engagement.id) / "engagement_template.yaml").write_text(json.dumps(template), encoding="utf-8")
+        self.app._planning_current = lambda _: True
+        runs = []
+
+        def testing_runner(config, output_root, engagement_id, event_sink):
+            runs.append(engagement_id)
+            report_dir = output_root / engagement_id / "security-testing"
+            memory = FileMemory(report_dir, event_sink=event_sink)
+            memory.add_item("testing_preflight", {
+                "ready": [{"id": "AUTH-001", "hypothesis_fingerprint": hypothesis_fingerprint(plan["test_hypotheses"][0])}],
+                "blocked": [], "plan_revision_id": plan_revision_id(plan),
+            }, "security_test_coordinator")
+            (report_dir / "preflight.md").write_text("# Preflight\n", encoding="utf-8")
+            executed_dir = report_dir / "executed_tests"
+            executed_dir.mkdir()
+            (executed_dir / "AUTH-001.md").write_text(
+                '<!-- mosh-execution ' + json.dumps({"test_id": "AUTH-001", "review_accepted": True,
+                    "hypothesis_fingerprint": hypothesis_fingerprint(plan["test_hypotheses"][0]), "status": "no-finding"})
+                + ' -->\n# Completed test\n', encoding="utf-8",
+            )
+            memory.add_item("security_test_execution_bundle", {
+                "test_id": "AUTH-001", "final_evidence": {"discovery_updates": [
+                    {"type": "endpoint", "detail": "A newly identified test endpoint."}
+                ]},
+            }, "security_test_coordinator")
+            memory.record_event("orchestrator", "complete", "Security testing completed")
+            return report_dir
+
+        self.app.testing_runner = testing_runner
+        testing_url = f"/assessments/{engagement.id}/testing"
+        self.assertEqual(self.post(testing_url, {"action": "start"}).location, testing_url)
+        self.wait_for_testing(engagement.id)
+        return engagement, plan_dir, discovery_dir, runs
 
     def test_discovery_shows_asset_steps_logs_and_reports(self) -> None:
         from mosh.engagements import asset_discovery_dir, attach_asset, create_engagement
@@ -587,7 +1177,7 @@ class WebAssessmentTests(WebTestCase):
         report = self.get(f"{detail_url}/discovery/{live.id}/report")
         self.assertEqual(report.status, 200)
         self.assertIn('<article class="markdown-document">', report.body)
-        self.assertIn("<h1>Report</h1>", report.body)
+        self.assertIn('<h1 id="section-1">Report</h1>', report.body)
         self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", report.body)
         self.assertNotIn("<script>unsafe</script>", report.body)
         self.assertEqual(self.get(f"{detail_url}/discovery/asset_live_99/report").status, 404)
@@ -616,6 +1206,16 @@ class WebAssessmentTests(WebTestCase):
         self.assertIn(".stage-item.running .stage-mark, .discovery-steps li.current::before { animation: none; }", stylesheet)
         self.assertIn("animation: discovery-spin", stylesheet)
         self.assertIn('.discovery-steps li.done::before { content: "✓"; }', stylesheet)
+
+    def test_favicon_uses_packaged_brand_icon(self) -> None:
+        favicon = self.get("/favicon.ico")
+        self.assertEqual(favicon.status, 200)
+        self.assertEqual(favicon.content_type, "image/x-icon")
+        self.assertEqual(
+            favicon.body,
+            (Path(__file__).parents[1] / "assets/brand/favicon/favicon.ico").read_bytes(),
+        )
+        self.assertIn('<link rel="icon" href="/favicon.ico" type="image/x-icon">', self.get("/").body)
 
     def test_discovery_failure_and_retry_only_remaining_asset(self) -> None:
         from mosh.engagements import asset_discovery_dir, attach_asset, create_engagement
@@ -813,7 +1413,7 @@ class WebAssessmentTests(WebTestCase):
         self.assertFalse(json.loads(self.get(planning_url + "/status").body)["poll"])
         self.assertNotIn("View plan", self.get(detail_url).body)
         report = self.get(planning_url + "/report")
-        self.assertIn("<h1>Security test plan</h1>", report.body)
+        self.assertIn('<h1 id="section-1">Security test plan</h1>', report.body)
         self.assertIn('<div class="markdown-table-wrap"><table>', report.body)
         self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", report.body)
         self.assertNotIn("<script>unsafe</script>", report.body)
@@ -920,15 +1520,24 @@ class WebAssessmentTests(WebTestCase):
         self.assertIn("View preflight", status["html"])
         self.assertIn("already running", self.post(testing_url, {"action": "start"}).body)
         self.assertIn("Wait for the current stage", self.post(f"/assessments/{engagement.id}/assets", {"action": "remove", "asset_id": asset.id}).body)
-        self.assertIn("Wait for testing to finish", self.post(f"/assessments/{engagement.id}/guidance", {"action": "save-notes", "notes": "changed"}).body)
+        self.assertIn("Wait for the current stage to finish", self.post(f"/assessments/{engagement.id}/guidance", {"action": "save-notes", "notes": "changed"}).body)
         self.assertIn("Starting unified security test execution", self.get(testing_url + "?view=logs").body)
         release.set()
         self.assertTrue(planning_refresh_started.wait(1))
         refreshing = self.get(testing_url).body
-        self.assertIn("Tests finished. Updating discovery and the security test plan from test results.", refreshing)
+        self.assertIn("Test reports are saved. Findings from Testing updated Discovery; Planning is now generating a revised plan.", refreshing)
+        self.assertIn('aria-label="Planning, Updating plan"', refreshing)
+        self.assertIn('class="stage-item running"', refreshing)
         self.assertIn('aria-label="Testing, Updating plan" aria-current="step"', refreshing)
+        self.assertIn("The saved reports cover the tests just run", refreshing)
         self.assertIn("1 complete", refreshing)
         self.assertTrue(json.loads(self.get(testing_url + "/status").body)["poll"])
+        planning_url = f"/assessments/{engagement.id}/planning"
+        planning_refresh = self.get(planning_url).body
+        self.assertIn("Updating the plan with new information found during Testing", planning_refresh)
+        self.assertIn('aria-label="Planning, Updating plan" aria-current="step"', planning_refresh)
+        self.assertNotIn("Update plan</button>", planning_refresh)
+        self.assertTrue(json.loads(self.get(planning_url + "/status").body)["poll"])
         finish_planning_refresh.set()
         self.wait_for_testing(engagement.id)
         complete = self.get(testing_url).body
@@ -937,11 +1546,12 @@ class WebAssessmentTests(WebTestCase):
         self.assertIn("AUTH-001", complete)
         self.assertIn("1 complete", complete)
         self.assertIn("View report", complete)
+        self.assertIn("Continue to reporting", complete)
         self.assertNotIn("Start testing", complete)
         self.assertFalse(json.loads(self.get(testing_url + "/status").body)["poll"])
-        self.assertIn("<h1>Preflight</h1>", self.get(testing_url + "/preflight").body)
+        self.assertIn('<h1 id="section-1">Preflight</h1>', self.get(testing_url + "/preflight").body)
         report = self.get(testing_url + "/reports/AUTH-001")
-        self.assertIn("<h1>Authorization result</h1>", report.body)
+        self.assertIn('<h1 id="section-1">Authorization result</h1>', report.body)
         self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", report.body)
         self.assertNotIn("mosh-execution", report.body)
         self.assertEqual(self.get(testing_url + "/reports/missing").status, 404)
@@ -959,8 +1569,208 @@ class WebAssessmentTests(WebTestCase):
         (plan_dir / "memory.json").write_text(json.dumps([{"kind": "security_test_plan_final", "content": {"structured": updated_plan}}]), encoding="utf-8")
         updated = self.get(testing_url).body
         self.assertIn('aria-label="Testing, Needs attention" aria-current="step"', updated)
-        self.assertIn("The plan or testing guidance changed after the last run", updated)
+        self.assertIn("Testing finished and saved reports. Test findings led Mosh to update Discovery and Planning", updated)
+        self.assertIn("Mosh refined the plan", updated)
+        self.assertIn("Testing uncovered new details about the assets", updated)
+        self.assertIn("reconsidered the testing approach, and refined the hypotheses", updated)
+        self.assertIn("review the changes and decide what to run next", updated)
         self.assertIn("Run remaining tests", updated)
+        revised_plan = {"test_hypotheses": [{"id": "AUTH-001", "title": "Check revised authorization"}]}
+        (plan_dir / "memory.json").write_text(json.dumps([{"kind": "security_test_plan_final", "content": {"structured": revised_plan}}]), encoding="utf-8")
+        revised = self.get(testing_url).body
+        self.assertIn("Needs rerun", revised)
+        self.assertIn("Report saved for an earlier version of this test", revised)
+        earlier_report = self.get(testing_url + "/reports/AUTH-001").body
+        self.assertIn("Authorization result", earlier_report)
+        self.assertIn('class="report-currency-note" role="note"', earlier_report)
+        self.assertIn("Report saved for an earlier version of this test", earlier_report)
+
+    def test_testing_feedback_choice_survives_restart_and_can_continue_to_reporting(self) -> None:
+        from mosh.crews.reporting.crew import build_final_report_bundle
+        from mosh.memory import FileMemory
+
+        engagement, plan_dir, discovery_dir, runs = self.completed_testing_with_feedback()
+        testing_url = f"/assessments/{engagement.id}/testing"
+        report_url = f"/assessments/{engagement.id}/report"
+        before = self.get(testing_url).body
+        self.assertIn("New findings from testing", before)
+        self.assertIn("A newly identified test endpoint.", before)
+        self.assertIn("AUTH-001 · Check authorization", before)
+        self.assertIn(f'/assessments/{engagement.id}/testing/reports/AUTH-001', before)
+        self.assertIn("adds these details to the Discovery reports", before)
+        self.assertIn("may add, change, or remove tests", before)
+        self.assertIn("Discovery and completed tests are not repeated", before)
+        self.assertIn("Testing checks the revised plan before reporting", before)
+        self.assertIn("no further tests are planned from them", before)
+        self.assertIn("Update discovery and plan", before)
+        self.assertIn("Continue to reporting", before)
+        self.assertIn('aria-label="Report, Not started"', before)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual((discovery_dir / "report.md").read_text(encoding="utf-8"), "# Original discovery\n")
+        self.assertEqual((plan_dir / "plan.md").read_text(encoding="utf-8"), "# Original plan\n")
+
+        restarted = WebApp(self.root, folder_root=self.root)
+        restarted._planning_current = lambda _: True
+        self.assertIn("Continue to reporting", restarted.handle("GET", testing_url, headers={"Host": "127.0.0.1:8765"}).body)
+
+        bundles = []
+
+        def reporting_runner(config, output_root, engagement_id, event_sink):
+            bundle = build_final_report_bundle(output_root, engagement_id)
+            bundles.append(bundle)
+            report_dir = output_root / engagement_id / "final-report"
+            memory = FileMemory(report_dir, event_sink=event_sink)
+            (report_dir / "report.md").write_text("# Final report\n\n<script>unsafe</script>\n", encoding="utf-8")
+            memory.record_event("orchestrator", "complete", "Final report generation completed")
+            return report_dir
+
+        self.app.reporting_runner = reporting_runner
+        self.assertIn("has not been added to Discovery or Planning", self.get(report_url).body)
+        self.assertEqual(self.post(report_url, {"action": "start"}).location, report_url)
+        self.wait_for_reporting(engagement.id)
+        self.assertEqual(self.app.reporting_runs[engagement.id].status, "complete")
+        self.assertEqual([item["id"] for item in bundles[0]["executed_tests"]], ["AUTH-001"])
+        self.assertIn('aria-label="Report, Complete" aria-current="step"', self.get(report_url).body)
+        self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", self.get(report_url + "/view").body)
+        self.assertEqual(self.post(report_url, {"action": "start"}).location, report_url)
+        self.assertEqual(len(bundles), 1)
+        self.assertIn("View report", restarted.handle("GET", report_url, headers={"Host": "127.0.0.1:8765"}).body)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual((discovery_dir / "report.md").read_text(encoding="utf-8"), "# Original discovery\n")
+        self.assertEqual((plan_dir / "plan.md").read_text(encoding="utf-8"), "# Original plan\n")
+        self.assertNotIn("New findings from testing", self.get(testing_url).body)
+
+    def test_testing_feedback_choice_shows_all_findings_and_escapes_details(self) -> None:
+        engagement, _, _, _ = self.completed_testing_with_feedback()
+        memory_path = self.app.output_root / engagement.id / "security-testing" / "memory.json"
+        items = json.loads(memory_path.read_text(encoding="utf-8"))
+        bundle = next(item["content"] for item in items if item["kind"] == "security_test_execution_bundle")
+        bundle["final_evidence"]["discovery_updates"].extend(
+            {"type": "endpoint", "detail": detail}
+            for detail in ("Second endpoint", "Third endpoint", "Fourth endpoint", "<script>unsafe</script>")
+        )
+        memory_path.write_text(json.dumps(items), encoding="utf-8")
+
+        body = self.get(f"/assessments/{engagement.id}/testing").body
+        self.assertIn("Show 2 more findings", body)
+        self.assertIn("Fourth endpoint", body)
+        self.assertIn("&lt;script&gt;unsafe&lt;/script&gt;", body)
+        self.assertNotIn("<script>unsafe</script>", body)
+
+    def test_reporting_shows_event_driven_steps(self) -> None:
+        from mosh.memory import FileMemory
+
+        engagement, _, _, _ = self.completed_testing_with_feedback()
+        report_url = f"/assessments/{engagement.id}/report"
+        started, evidence_ready, written = (threading.Event() for _ in range(3))
+        next_evidence, next_writer, next_review = (threading.Event() for _ in range(3))
+        self.addCleanup(next_evidence.set)
+        self.addCleanup(next_writer.set)
+        self.addCleanup(next_review.set)
+
+        def reporting_runner(config, output_root, engagement_id, event_sink):
+            report_dir = output_root / engagement_id / "final-report"
+            memory = FileMemory(report_dir, event_sink=event_sink)
+            memory.record_event("orchestrator", "start", "Starting final report generation")
+            started.set()
+            next_evidence.wait(2)
+            memory.record_event("orchestrator", "engagement_steer_loaded", "Assessment evidence is ready")
+            evidence_ready.set()
+            next_writer.wait(2)
+            (report_dir / "report.md").write_text("# Final report\n", encoding="utf-8")
+            memory.record_event("writer", "report_written", "Final report written")
+            written.set()
+            next_review.wait(2)
+            memory.record_event("reviewer", "review_submitted", "Final report reviewed")
+            memory.record_event("orchestrator", "complete", "Final report generation completed")
+            return report_dir
+
+        self.app.reporting_runner = reporting_runner
+        self.assertEqual(self.post(report_url, {"action": "start"}).location, report_url)
+        self.assertTrue(started.wait(1))
+        first = self.get(report_url).body
+        self.assertIn('<li class="current">Preparing assessment evidence</li>', first)
+        self.assertIn('<li class="waiting">Writing the final report</li>', first)
+        self.assertTrue(json.loads(self.get(report_url + "/status").body)["poll"])
+
+        next_evidence.set()
+        self.assertTrue(evidence_ready.wait(1))
+        second = self.get(report_url).body
+        self.assertIn('<li class="done">Preparing assessment evidence</li>', second)
+        self.assertIn('<li class="current">Writing the final report</li>', second)
+
+        next_writer.set()
+        self.assertTrue(written.wait(1))
+        third = self.get(report_url).body
+        self.assertIn('<li class="done">Writing the final report</li>', third)
+        self.assertIn('<li class="current">Reviewing and finalizing the report</li>', third)
+
+        next_review.set()
+        self.wait_for_reporting(engagement.id)
+        finished = self.get(report_url).body
+        self.assertIn('<li class="done">Reviewing and finalizing the report</li>', finished)
+        self.assertNotIn('<li class="current">', finished)
+        self.assertFalse(json.loads(self.get(report_url + "/status").body)["poll"])
+
+    def test_reporting_marks_failed_active_step(self) -> None:
+        from mosh.web import ReportingRun
+
+        engagement, _, _, _ = self.completed_testing_with_feedback()
+        self.app.reporting_runs[engagement.id] = ReportingRun(
+            active_step=1, status="failed", error="Writer unavailable",
+        )
+        body = self.get(f"/assessments/{engagement.id}/report").body
+        self.assertIn('<li class="done">Preparing assessment evidence</li>', body)
+        self.assertIn('<li class="failed">Writing the final report</li>', body)
+        self.assertIn('<li class="waiting">Reviewing and finalizing the report</li>', body)
+        self.assertIn("Retry reporting", body)
+
+    def test_testing_feedback_choice_replans_without_running_tests_again(self) -> None:
+        from mosh.crews.testing.crew import collect_testing_discovery_updates
+        from mosh.memory import FileMemory
+
+        engagement, plan_dir, discovery_dir, runs = self.completed_testing_with_feedback()
+        testing_url = f"/assessments/{engagement.id}/testing"
+        saved_report = (self.app.output_root / engagement.id / "security-testing" / "executed_tests" / "AUTH-001.md").read_text(encoding="utf-8")
+        started = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        refreshes = []
+
+        def feedback_runner(config, output_root, engagement_id, event_sink):
+            refreshes.append(engagement_id)
+            started.set()
+            release.wait(2)
+            report_dir = output_root / engagement_id / "security-testing"
+            memory = FileMemory(report_dir, event_sink=event_sink, reset=False)
+            memory.record_event("orchestrator", "planning_refresh_start", "Updating plan")
+            updates = collect_testing_discovery_updates(report_dir)
+            (discovery_dir / "memory.json").write_text(json.dumps([{
+                "kind": "testing_discovery_feedback", "content": {"updates": updates},
+            }]), encoding="utf-8")
+            (discovery_dir / "report.md").write_text("# Updated discovery\n", encoding="utf-8")
+            revised = {"test_hypotheses": [{"id": "AUTH-001", "title": "Check revised authorization", "requirements": ["No credentials required."]}]}
+            (plan_dir / "memory.json").write_text(json.dumps([{"kind": "security_test_plan_final", "content": {"structured": revised}}]), encoding="utf-8")
+            memory.record_event("orchestrator", "planning_refresh_complete", "Plan updated")
+            return report_dir
+
+        self.app.feedback_runner = feedback_runner
+        self.assertEqual(self.post(testing_url, {"action": "replan"}).location, testing_url)
+        self.assertTrue(started.wait(1))
+        updating = self.get(testing_url).body
+        self.assertIn("Updating Discovery and Planning", updating)
+        self.assertIn('aria-label="Planning, In progress"', updating)
+        self.assertTrue(json.loads(self.get(testing_url + "/status").body)["poll"])
+        release.set()
+        self.wait_for_planning(engagement.id)
+        updated = self.get(testing_url).body
+        self.assertIn("Needs rerun", updated)
+        self.assertNotIn("New findings from testing", updated)
+        self.assertEqual(refreshes, [engagement.id])
+        self.assertEqual(len(runs), 1)
+        self.assertEqual((self.app.output_root / engagement.id / "security-testing" / "executed_tests" / "AUTH-001.md").read_text(encoding="utf-8"), saved_report)
+        self.assertIn('aria-disabled="true"', updated)
+        self.assertIn("Finish Testing for the current plan", self.post(f"/assessments/{engagement.id}/report", {"action": "start"}).body)
 
     def test_testing_blocked_preflight_can_retry_and_failed_run_shows_error(self) -> None:
         from mosh.crews.testing.crew import plan_revision_id
@@ -1256,7 +2066,7 @@ class WebAssessmentTests(WebTestCase):
             result = self.app._run_testing(config, self.app.output_root, "eng_12345678", sink)
         self.assertEqual(result, self.root / "report" / "security-testing")
         self.assertEqual(orchestrator.call_args.kwargs, {"output_root": self.app.output_root, "event_sink": sink})
-        orchestrator.return_value.run.assert_called_once_with("eng_12345678")
+        orchestrator.return_value.run.assert_called_once_with("eng_12345678", auto_refresh_feedback=False)
 
     def test_testing_waits_for_current_plan(self) -> None:
         from mosh.engagements import attach_asset, create_engagement, engagement_plan_dir
@@ -1395,6 +2205,54 @@ class WebAssessmentTests(WebTestCase):
         self.assertEqual(self.post(assets_url, {"action": "add-anyway"}).status, 303)
         attached = load_engagement(self.app.output_root, engagement.id).assets
         self.assertEqual([(asset.type, asset.locator) for asset in attached], [("source_repo", "https://github.com/example/repo")])
+
+    def test_live_asset_headers_are_saved_hidden_editable_and_removed_with_asset(self) -> None:
+        from mosh.engagement import load_engagement_file
+        from mosh.engagements import attach_asset, create_engagement
+
+        engagement = create_engagement(self.app.output_root, "Protected site")
+        asset = attach_asset(self.app.output_root, engagement.id, "https://app.example.test", asset_type="live_url").asset
+        detail_url = f"/assessments/{engagement.id}"
+        headers_url = detail_url + "/request-headers"
+        template_path = self.app.output_root / engagement.id / "engagement_template.yaml"
+        self.assertIn("Request headers (optional)", self.get(detail_url).body)
+        self.assertIn('name="header_value"', self.get(detail_url + f"?headers=new:{asset.id}").body)
+
+        invalid = self.post(headers_url, {"action": "save", "asset_id": asset.id, "header_name": "X-Gateway"})
+        self.assertIn("Enter a header name and value", invalid.body)
+        self.assertFalse(template_path.exists())
+        saved = self.post(headers_url, {"action": "save", "asset_id": asset.id, "header_name": "X-Gateway", "header_value": "fixture-secret"})
+        self.assertIn("Request header saved", saved.body)
+        self.assertNotIn("fixture-secret", saved.body)
+        self.assertEqual(load_engagement_file(template_path)["asset_request_headers"][asset.id]["X-Gateway"], "fixture-secret")
+        self.assertNotIn("fixture-secret", self.get(detail_url + f"?headers=edit:{asset.id}:X-Gateway").body)
+        self.post(headers_url, {"action": "save", "asset_id": asset.id, "header_name": "Authorization", "header_value": "Bearer another-secret"})
+        self.assertEqual(len(load_engagement_file(template_path)["asset_request_headers"][asset.id]), 2)
+        blocked = self.post(headers_url, {"action": "save", "asset_id": asset.id, "header_name": "Bad Name", "header_value": "value"})
+        self.assertIn("valid request header name", blocked.body)
+        blocked = self.post(headers_url, {"action": "save", "asset_id": asset.id, "header_name": "X-Other", "header_value": "line\r\nInjected: yes"})
+        self.assertIn("single-line", blocked.body)
+        self.assertEqual(load_engagement_file(template_path)["asset_request_headers"][asset.id]["X-Gateway"], "fixture-secret")
+        edited = self.post(headers_url, {"action": "save", "asset_id": asset.id, "previous_name": "X-Gateway", "header_name": "X-Gateway", "header_value": "replacement"})
+        self.assertIn("Request header saved", edited.body)
+        self.assertEqual(load_engagement_file(template_path)["asset_request_headers"][asset.id]["X-Gateway"], "replacement")
+        self.assertIn("Remove X-Gateway?", self.post(headers_url, {"action": "remove", "asset_id": asset.id, "header_name": "X-Gateway"}).body)
+        self.assertIn("Request header removed", self.post(headers_url, {"action": "remove", "asset_id": asset.id, "header_name": "X-Gateway", "confirmed": "yes"}).body)
+        self.assertNotIn("X-Gateway", load_engagement_file(template_path)["asset_request_headers"][asset.id])
+        self.post(detail_url + "/assets", {"action": "remove", "asset_id": asset.id})
+        self.assertNotIn(asset.id, load_engagement_file(template_path)["asset_request_headers"])
+
+    def test_live_asset_headers_cannot_change_during_run(self) -> None:
+        from mosh.engagements import attach_asset, create_engagement
+
+        engagement = create_engagement(self.app.output_root, "Protected site")
+        asset = attach_asset(self.app.output_root, engagement.id, "https://app.example.test", asset_type="live_url").asset
+        self.app.discovery_runs[engagement.id] = DiscoveryRun(asset_ids=[asset.id], current_asset_id=asset.id)
+        response = self.post(f"/assessments/{engagement.id}/request-headers", {
+            "action": "save", "asset_id": asset.id, "header_name": "X-Gateway", "header_value": "secret",
+        })
+        self.assertIn("Wait for the current stage", response.body)
+        self.assertFalse((self.app.output_root / engagement.id / "engagement_template.yaml").exists())
 
     def test_flexible_hints_save_reload_and_feed_analysis_without_changing_permissions(self) -> None:
         from mosh.engagements import create_engagement
@@ -1820,6 +2678,16 @@ class WebScriptTests(unittest.TestCase):
             self.skipTest("Node.js is unavailable")
         result = subprocess.run(
             [node, str(Path(__file__).with_name("web_poller_test.js")), str(Path(__file__).parents[1] / "src/mosh/web.js")],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_local_tool_warning_updates_without_reloading(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is unavailable")
+        result = subprocess.run(
+            [node, str(Path(__file__).with_name("web_tool_health_test.js")), str(Path(__file__).parents[1] / "src/mosh/web.js")],
             capture_output=True, text=True, timeout=10, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)

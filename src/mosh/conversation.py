@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.engagement import engagement_context_text
 from mosh.engagements import asset_discovery_dir, engagement_dir, engagement_exists, load_engagement
 from mosh.models import utc_now
 
@@ -650,7 +651,7 @@ def build_engagement_chat_context(output_root: Path, engagement_id: str) -> dict
         },
         "engagement_template": {
             "path": str(root / "engagement_template.yaml"),
-            "content": _read_text(root / "engagement_template.yaml"),
+            "content": _truncate(engagement_context_text(root / "engagement_template.yaml"), CONTEXT_TEXT_LIMIT),
         },
         "testing": {
             "path": str(testing_dir),

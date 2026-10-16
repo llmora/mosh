@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from mosh.models import CrawledPage, CrawlResult
 from mosh.scope import ScopePolicy, normalize_url, strip_fragment
@@ -70,8 +71,10 @@ class LinkExtractor(HTMLParser):
 
 
 class Crawler:
-    def __init__(self, timeout: int = 10) -> None:
+    def __init__(self, timeout: int = 10, *, request_headers: dict[str, str] | None = None, access_origin: str | None = None) -> None:
         self.timeout = timeout
+        self.request_headers = request_headers or {}
+        self.access_origin = _origin(access_origin) if access_origin else None
 
     def crawl(self, start_url: str, max_pages: int = 200, max_depth: int = 5) -> CrawlResult:
         normalized_start = normalize_url(start_url)
@@ -116,13 +119,14 @@ class Crawler:
                 if _is_http_url(candidate) and not scope.in_scope(candidate):
                     out_of_scope.add(candidate)
 
-        return CrawlResult(
+        result = CrawlResult(
             start_url=normalized_start,
             pages=pages,
             out_of_scope=sorted(out_of_scope),
             failed=failed,
             robots=robots,
         )
+        return _redact_crawl_result(result, self.request_headers)
 
     def _fetch_page(self, url: str) -> CrawledPage:
         response = self._open(url)
@@ -183,8 +187,58 @@ class Crawler:
         return {"url": robots_url, "found": True, "rules": rules, "sitemaps": sitemaps}
 
     def _open(self, url: str):
-        request = Request(url, headers={"User-Agent": USER_AGENT})
+        headers = {"User-Agent": USER_AGENT}
+        if self.access_origin and _origin(url) == self.access_origin:
+            headers.update(self.request_headers)
+        request = Request(url, headers=headers)
+        if self.request_headers:
+            return build_opener(_SameOriginRedirects(self.access_origin)).open(request, timeout=self.timeout)
         return urlopen(request, timeout=self.timeout)
+
+
+def _origin(url: str | None) -> tuple[str, str, int | None] | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    try:
+        return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or (443 if parsed.scheme == "https" else 80))
+    except ValueError:
+        return None
+
+
+def _redact_crawl_result(result: CrawlResult, headers: dict[str, str]) -> CrawlResult:
+    secrets = [value for value in headers.values() if value]
+    if not secrets:
+        return result
+
+    def redact(value):
+        if isinstance(value, str):
+            for secret in secrets:
+                value = value.replace(secret, "[redacted]")
+        elif isinstance(value, list):
+            return [redact(item) for item in value]
+        elif isinstance(value, dict):
+            return {key: redact(item) for key, item in value.items()}
+        return value
+
+    return replace(
+        result,
+        start_url=redact(result.start_url),
+        pages=[replace(page, **{key: redact(value) for key, value in page.to_dict().items()}) for page in result.pages],
+        out_of_scope=redact(result.out_of_scope),
+        failed=redact(result.failed),
+        robots=redact(result.robots),
+    )
+
+
+class _SameOriginRedirects(HTTPRedirectHandler):
+    def __init__(self, allowed_origin: tuple[str, str, int | None] | None) -> None:
+        self.allowed_origin = allowed_origin
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if _origin(newurl) != self.allowed_origin:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _is_http_url(url: str) -> bool:

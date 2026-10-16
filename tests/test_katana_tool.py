@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from mosh.docker_tools import DockerToolResult
 from mosh.crews.discovery_live.tools import KatanaDockerCrawlerTool, parse_katana_output
@@ -17,8 +18,10 @@ class FakeDockerRunner:
         input_text: str | None = None,
         timeout: int = 60,
         tty: bool = False,
+        volumes=None,
     ) -> DockerToolResult:
-        self.calls.append({"args": args, "input_text": input_text, "timeout": timeout, "tty": tty})
+        self.calls.append({"args": args, "input_text": input_text, "timeout": timeout, "tty": tty,
+                           "volumes": volumes, "header_file": Path(volumes[0][0]).read_text() if volumes else ""})
         return self.result
 
 
@@ -71,6 +74,30 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
 
         args = runner.calls[0]["args"]
         self.assertEqual(args[args.index("-d") + 1], "3")
+
+    def test_configured_headers_are_scoped_and_redacted_from_results(self) -> None:
+        secret = "fixture-client-secret"
+        runner = FakeDockerRunner(DockerToolResult(exit_code=1, stdout="", stderr=f"error: {secret}"))
+        tool = KatanaDockerCrawlerTool(
+            "discovery-tools:test", runner=runner,
+            request_headers={"X-Gateway-Id": "fixture-client-id", "X-Gateway-Secret": secret},
+            access_origin="https://app.example.test/",
+        )
+
+        result = tool.run("https://app.example.test/private", max_pages=5, max_depth=2)
+
+        args = runner.calls[0]["args"]
+        self.assertEqual(args[args.index("-cs") + 1], r"^https://app\.example\.test(?:/|$)")
+        self.assertIn("-dr", args)
+        self.assertEqual(args[args.index("-H") + 1], "/run/secrets/mosh-katana-headers")
+        self.assertNotIn(secret, str(args))
+        self.assertIn("X-Gateway-Id: fixture-client-id", runner.calls[0]["header_file"])
+        self.assertIn(f"X-Gateway-Secret: {secret}", runner.calls[0]["header_file"])
+        self.assertEqual(runner.calls[0]["volumes"][0][2], "ro")
+        self.assertNotIn("-headless", args)
+        self.assertNotIn(secret, str(result))
+        tool.run("https://elsewhere.example.test/", max_pages=5, max_depth=2)
+        self.assertNotIn(secret, str(runner.calls[1]["args"]))
 
     def test_allows_custom_duration_and_docker_timeout(self) -> None:
         runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="", stderr=""))

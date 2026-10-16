@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -44,15 +47,20 @@ class KatanaDockerCrawlerTool:
         runner: DockerToolRunner | None = None,
         crawl_duration: str = "270s",
         docker_timeout: int = 300,
+        request_headers: dict[str, str] | None = None,
+        access_origin: str | None = None,
     ) -> None:
         self.runner = runner or DockerToolRunner(image)
         self.crawl_duration = crawl_duration
         self.docker_timeout = docker_timeout
+        self.request_headers = request_headers or {}
+        self.access_origin = urlparse(access_origin) if access_origin else None
 
     def run(self, url: str, max_pages: int, max_depth: int) -> CrawlResult:
         start_url = normalize_url(url)
-        result = self.runner.run(
-            [
+        parsed = urlparse(start_url)
+        headers = self.request_headers if self.access_origin and (parsed.scheme, parsed.netloc.lower()) == (self.access_origin.scheme, self.access_origin.netloc.lower()) else {}
+        args = [
                 "katana",
                 "-u",
                 start_url,
@@ -62,13 +70,6 @@ class KatanaDockerCrawlerTool:
                 str(max_pages),
                 "-ct",
                 self.crawl_duration,
-                "-headless",
-                "-system-chrome",
-                "-system-chrome-path",
-                "/usr/bin/chromium",
-                "-no-sandbox",
-                "-headless-options",
-                "--disable-dev-shm-usage,--disable-gpu",
                 "-xhr",
                 "-aff",
                 "-jc",
@@ -81,20 +82,43 @@ class KatanaDockerCrawlerTool:
                 "-or",
                 "-ob",
                 "-silent",
-            ],
-            timeout=self.docker_timeout,
-            tty=True,
-        )
-        crawl = parse_katana_output(start_url, result.stdout)
+            ]
+        if headers:
+            args.extend(["-cs", rf"^{re.escape(parsed.scheme + '://' + parsed.netloc)}(?:/|$)"])
+            args.append("-dr")
+            args.extend(["-H", "/run/secrets/mosh-katana-headers"])
+        else:
+            args.extend(["-headless", "-system-chrome", "-system-chrome-path", "/usr/bin/chromium", "-no-sandbox", "-headless-options", "--disable-dev-shm-usage,--disable-gpu"])
+        if headers:
+            with tempfile.TemporaryDirectory(prefix="mosh-katana-headers-", dir="/tmp") as directory:
+                header_file = Path(directory) / "headers.txt"
+                header_file.write_text("".join(f"{name}: {value}\n" for name, value in headers.items()), encoding="utf-8")
+                os.chmod(header_file, 0o600)
+                result = self.runner.run(
+                    args, timeout=self.docker_timeout, tty=True,
+                    volumes=[(str(header_file), "/run/secrets/mosh-katana-headers", "ro")],
+                )
+        else:
+            result = self.runner.run(args, timeout=self.docker_timeout, tty=True)
+        stdout = _redact_header_values(result.stdout, headers)
+        stderr = _redact_header_values(result.stderr, headers)
+        crawl = parse_katana_output(start_url, stdout)
         if result.exit_code != 0:
             return CrawlResult(
                 start_url=start_url,
                 pages=crawl.pages,
                 out_of_scope=crawl.out_of_scope,
-                failed=[*crawl.failed, {"url": start_url, "error": _katana_error(result.stderr, result.stdout)}],
+                failed=[*crawl.failed, {"url": start_url, "error": _katana_error(stderr, stdout)}],
                 robots=crawl.robots,
             )
         return crawl
+
+
+def _redact_header_values(text: str, headers: dict[str, str]) -> str:
+    for value in headers.values():
+        if value:
+            text = text.replace(value, "[redacted]")
+    return text
 
 
 class DirbDockerDiscoveryTool:

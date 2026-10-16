@@ -109,6 +109,7 @@ class FakeCrewRunner:
         max_pages: int,
         max_depth: int,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ):
         self.calls.append(
             {
@@ -117,11 +118,12 @@ class FakeCrewRunner:
                 "max_pages": max_pages,
                 "max_depth": max_depth,
                 "engagement_steer": engagement_steer,
+                "request_headers_present": bool(request_headers),
             }
         )
         from mosh.crews.discovery_live.crawler import Crawler
 
-        crawl = Crawler(timeout=3).crawl(target_url, max_pages=max_pages, max_depth=max_depth)
+        crawl = Crawler(timeout=3, request_headers=request_headers, access_origin=target_url).crawl(target_url, max_pages=max_pages, max_depth=max_depth)
         memory.record_event("crawler", "task_received", "Crawl the target and discover app surface")
         memory.add_item("robots", crawl.robots or {"found": False}, "crawler")
         for page in crawl.pages:
@@ -412,6 +414,7 @@ class FakeSecurityTestingRunner:
         engagement,
         preflight,
         executable_pending,
+        request_headers_by_origin=None,
     ) -> None:
         self.calls.append(
             {
@@ -422,6 +425,7 @@ class FakeSecurityTestingRunner:
                 "report_dir": str(report_dir),
                 "ready_pending": [item.get("id") for item in executable_pending],
                 "executable_pending": [item.get("id") for item in executable_pending],
+                "request_header_origins": len(request_headers_by_origin or {}),
             }
         )
         executed_dir = report_dir / "executed_tests"

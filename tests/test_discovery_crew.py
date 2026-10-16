@@ -84,6 +84,16 @@ class FakeTaskOutput:
 
 
 class CrewAIDiscoveryLiveCrewRunnerTests(unittest.TestCase):
+    def test_live_asset_binds_headers_to_crawlers_only(self) -> None:
+        from mosh.crews.discovery_live.agents import build_discovery_live_agents
+
+        headers = {"X-Gateway-Id": "fixture-id", "X-Gateway-Secret": "fixture-secret"}
+        agents = build_discovery_live_agents(AppConfig(), request_headers=headers, access_origin="https://app.example.test/")
+        self.assertEqual(agents.crawler.crawl_tool.crawler.request_headers, headers)
+        self.assertFalse(any(tool.definition.name == "dirb_docker_discovery" for tool in agents.crawler.additional_tools))
+        katana = next(tool for tool in agents.crawler.additional_tools if tool.definition.name == "katana_docker_crawler")
+        self.assertEqual(katana.request_headers, headers)
+
     def test_requires_openrouter_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             memory = FileMemory(Path(directory))

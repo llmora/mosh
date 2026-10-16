@@ -59,6 +59,7 @@ class DiscoveryLiveCrewRunner(Protocol):
         max_pages: int,
         max_depth: int,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ) -> DiscoveryLiveCrewResult:
         pass
 
@@ -79,6 +80,7 @@ class CrewAIDiscoveryLiveCrewRunner:
         max_pages: int,
         max_depth: int,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ) -> DiscoveryLiveCrewResult:
         missing_settings = self.config.missing_llm_settings_for_models(
             [
@@ -109,7 +111,7 @@ class CrewAIDiscoveryLiveCrewRunner:
             },
         )
 
-        discovery_agents = build_discovery_live_agents(self.config)
+        discovery_agents = build_discovery_live_agents(self.config, request_headers=request_headers, access_origin=target_url)
         crawler_agent = discovery_agents.crawler
         reporter_agent = discovery_agents.reporter
 
@@ -168,6 +170,7 @@ class DiscoveryLiveOrchestrator:
         *,
         report_dir: Path,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ) -> Path:
         max_depth = max_depth if max_depth is not None else self.config.max_depth
         agent_definitions = discovery_live_agent_definitions(self.config)
@@ -188,6 +191,7 @@ class DiscoveryLiveOrchestrator:
             max_pages=max_pages,
             max_depth=max_depth,
             engagement_steer=engagement_steer,
+            request_headers=request_headers,
         )
         memory.record_event(
             "orchestrator",

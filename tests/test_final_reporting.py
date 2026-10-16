@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,7 +24,7 @@ from mosh.crews.testing.crew import (
     render_executed_test_report,
 )
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
-from mosh.memory import FileMemory
+from mosh.memory import FileMemory, RunStopped
 
 
 class FakeCrewAI:
@@ -123,6 +124,42 @@ class FakeRuntimeCrewAI(FakeCrewAI):
 
 
 class FinalReportingTests(unittest.TestCase):
+    def test_stop_after_writer_skips_reviewer(self) -> None:
+        stop = threading.Event()
+
+        class Sink:
+            def __call__(self, event) -> None:
+                pass
+
+            def check_stop(self) -> None:
+                if stop.is_set():
+                    raise RunStopped("Stopped by you")
+
+        class Writer:
+            def __init__(self, state) -> None:
+                self.state = state
+
+            def crew(self):
+                return self
+
+            def kickoff(self, inputs):
+                stop.set()
+                (report_dir / "report.md").write_text("# Draft", encoding="utf-8")
+                self.state.report_path = report_dir / "report.md"
+
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / "final-report"
+            memory = FileMemory(report_dir, event_sink=Sink())
+            runner = CrewAIFinalReportingCrewRunner(AppConfig(deepseek_api_key="test"))
+            with patch("mosh.crews.reporting.crew._load_crewai", return_value=object()), patch(
+                "mosh.crews.reporting.crew._build_writer_crew", side_effect=lambda crewai, config, current: Writer(current)
+            ) as writer, patch("mosh.crews.reporting.crew._build_reviewer_crew") as reviewer:
+                with self.assertRaises(RunStopped):
+                    runner.run("https://app.example.test", report_dir, memory, {})
+            writer.assert_called_once()
+            reviewer.assert_not_called()
+            self.assertTrue((report_dir / "report.md").is_file())
+
     def test_final_reporting_subcrews_use_packaged_subset_yaml_with_real_crewai(self) -> None:
         crewai = _load_crewai()
         with tempfile.TemporaryDirectory() as directory:
