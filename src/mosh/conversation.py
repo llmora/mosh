@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from mosh.config import AppConfig
+from mosh.engagement import engagement_context_text
 from mosh.engagements import asset_discovery_dir, engagement_dir, engagement_exists, load_engagement
 from mosh.models import utc_now
 
@@ -650,7 +651,7 @@ def build_engagement_chat_context(output_root: Path, engagement_id: str) -> dict
         },
         "engagement_template": {
             "path": str(root / "engagement_template.yaml"),
-            "content": _read_text(root / "engagement_template.yaml"),
+            "content": _truncate(engagement_context_text(root / "engagement_template.yaml"), CONTEXT_TEXT_LIMIT),
         },
         "testing": {
             "path": str(testing_dir),
@@ -1674,7 +1675,7 @@ def _unblock_guidance(blocker: str) -> str:
         key = blocker.removeprefix("missing safe_test_data.").strip()
         return f"add a non-empty `safe_test_data.{key}` value."
     if blocker.startswith("dependency `"):
-        return "run the dependency test first and ensure its accepted execution report is current."
+        return "complete the dependency test first and ensure its result is accepted."
     return blocker
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,8 +14,10 @@ from mosh.crews.planning.reporting import write_security_test_plan
 from mosh.docker_tools import DockerToolResult
 from mosh.engagement import write_engagement_template, write_engagement_template_mapping
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement, load_asset
-from mosh.memory import FileMemory
+from mosh.memory import FileMemory, RunStopped
 from mosh.crews.testing.crew import (
+    CrewAISecurityTestingCrewRunner,
+    SecurityTestPreflightResult,
     SecurityTestExecutionState,
     SecurityTestingOrchestrator,
     collect_testing_discovery_updates,
@@ -42,6 +45,7 @@ from mosh.crews.testing.source_tools import (
     _cleanup_source_processes,
     _build_read_source_slice_tool,
     _build_request_local_http_tool,
+    _build_request_target_http_tool,
     _build_run_source_command_tool,
     _build_start_source_process_tool,
     _build_stop_source_process_tool,
@@ -50,6 +54,43 @@ from mosh.crews.testing.source_tools import (
     _run_bounded_source_search,
 )
 from tests.fakes import FakeSecurityTestingRunner
+
+
+class TestingStopBoundaryTests(unittest.TestCase):
+    def test_stop_between_tests_preserves_finished_test_and_skips_next(self) -> None:
+        stop = threading.Event()
+
+        class Sink:
+            def __call__(self, event) -> None:
+                pass
+
+            def check_stop(self) -> None:
+                if stop.is_set():
+                    raise RunStopped("Stopped by you")
+
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir, event_sink=Sink())
+            hypotheses = [dict(_plan()["test_hypotheses"][0], id=f"TEST-{number}") for number in (1, 2)]
+            plan = {**_plan(), "test_hypotheses": hypotheses}
+            calls = []
+
+            def run_one(**kwargs):
+                calls.append(kwargs["hypothesis"]["id"])
+                (report_dir / f"{calls[-1]}.md").write_text("# Saved result", encoding="utf-8")
+                stop.set()
+
+            with patch("mosh.crews.testing.crew._load_crewai", return_value=object()), patch(
+                "mosh.crews.testing.crew._run_one_security_test", side_effect=run_one,
+            ):
+                with self.assertRaises(RunStopped):
+                    CrewAISecurityTestingCrewRunner(AppConfig(deepseek_api_key="test")).run(
+                        "https://app.example.test", None, None, {}, report_dir, memory, plan, {},
+                        SecurityTestPreflightResult(ready=hypotheses, blocked=[], targets={}), hypotheses,
+                    )
+            self.assertEqual(calls, ["TEST-1"])
+            self.assertTrue((report_dir / "TEST-1.md").is_file())
+            self.assertFalse((report_dir / "TEST-2.md").exists())
 
 
 def _plan() -> dict[str, object]:
@@ -197,6 +238,41 @@ def SourceModeSecurityTestExecutionState(
 
 
 class SecurityTestingCrewTests(unittest.TestCase):
+    def test_each_test_emits_progress_boundaries_for_web_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            memory = FileMemory(report_dir)
+            hypothesis = {"id": "API-001", "title": "Check API access", "requirements": ["No credentials required."]}
+
+            def kickoff(_crew, state, *, agent_name, **_kwargs):
+                if agent_name == "executor":
+                    state.evidence = {"status": "no-finding", "summary": "Checked access", "result": "No issue found"}
+                elif agent_name == "reviewer":
+                    state.review = {"accepted": True, "summary": "Evidence accepted"}
+
+            with patch("mosh.crews.testing.crew._build_executor_crew", return_value=object()), \
+                 patch("mosh.crews.testing.crew._build_reviewer_crew", return_value=object()), \
+                 patch("mosh.crews.testing.crew._build_reporter_crew", return_value=object()), \
+                 patch("mosh.crews.testing.crew._kickoff_capturing_tool_state", side_effect=kickoff):
+                _run_one_security_test(
+                    crewai=_FakeCrewAI, config=AppConfig(), target_url="https://example.test",
+                    source=None, source_root=None, source_context={}, evidence_links={},
+                    report_dir=report_dir, memory=memory, hypothesis=hypothesis,
+                    engagement=_engagement_template("https://example.test"),
+                    targets={"web": "https://example.test"}, plan_revision_id="revision",
+                )
+
+            events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            progress = [(event["action"], event["data"].get("test_id")) for event in events if event["action"] in {
+                "test_checks_started", "test_evidence_ready", "test_review_ready", "report_written", "report_fallback_written",
+            }]
+            self.assertEqual(progress, [
+                ("test_checks_started", "API-001"),
+                ("test_evidence_ready", "API-001"),
+                ("test_review_ready", "API-001"),
+                ("report_fallback_written", "API-001"),
+            ])
+
     def test_load_security_test_plan_uses_structured_final_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             planning_dir = Path(directory)
@@ -331,6 +407,27 @@ class SecurityTestingCrewTests(unittest.TestCase):
         self.assertIn("evidence `combined`", rendered)
         self.assertNotIn("## Combined-Evidence Tests", rendered)
 
+    def test_testing_preflight_honors_plan_readiness_blocker(self) -> None:
+        reason = "Confirm the API host is in scope before running its preflight request."
+        plan = {"test_hypotheses": [{
+            "id": "CORS-001",
+            "title": "Check response headers and CORS",
+            "execution_mode": "live",
+            "execution_readiness": "preflight_blocked",
+            "readiness_blockers": [reason],
+            "requirements": ["No credentials required."],
+        }]}
+
+        result = run_testing_preflight(plan, _engagement_template(target="https://example.test"))
+
+        self.assertEqual(result.ready, [])
+        self.assertEqual(result.blocked[0]["blockers"], [reason])
+
+        plan["test_hypotheses"][0]["readiness_blockers"] = []
+        result = run_testing_preflight(plan, _engagement_template(target="https://example.test"))
+        self.assertEqual(len(result.blocked), 1)
+        self.assertIn("prerequisite review", result.blocked[0]["blockers"][0])
+
     def test_testing_preflight_blocks_unmet_dependencies(self) -> None:
         plan = {
             "title": "Dependent plan",
@@ -367,8 +464,30 @@ class SecurityTestingCrewTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in blocked_result.ready], ["AUTH-BASE"])
         self.assertEqual([item["id"] for item in blocked_result.blocked], ["AUTH-FOLLOWUP"])
-        self.assertIn("dependency `AUTH-BASE`", blocked_result.blocked[0]["blockers"][0])
+        self.assertEqual(
+            blocked_result.blocked[0]["blockers"],
+            ["Complete test AUTH-BASE first to unlock this test."],
+        )
         self.assertEqual([item["id"] for item in ready_result.ready], ["AUTH-BASE", "AUTH-FOLLOWUP"])
+
+    def test_credential_hint_does_not_satisfy_preflight_or_secret_redaction(self) -> None:
+        plan = {
+            "test_hypotheses": [{
+                "id": "AUTH-001", "title": "Test admin access", "priority": "high",
+                "surface": "admin", "execution_mode": "live",
+                "requirements": ["Admin credentials"],
+            }],
+        }
+        engagement = _engagement_template("https://example.test")
+        engagement["hints"] = [{"title": "Admin login", "text": "Use token sample-secret-123"}]
+        blocked = run_testing_preflight(plan, engagement)
+        self.assertIn("missing credential material for admin", blocked.blocked[0]["blockers"])
+        self.assertEqual(_redact_text("sample-secret-123", engagement), "sample-secret-123")
+
+        engagement["credentials"] = {"admin": {"token": "sample-secret-123"}}
+        ready = run_testing_preflight(plan, engagement)
+        self.assertEqual([item["id"] for item in ready.ready], ["AUTH-001"])
+        self.assertEqual(_redact_text("sample-secret-123", engagement), "[REDACTED]")
 
     def test_source_only_testing_executes_through_unified_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -441,6 +560,28 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(runner.calls[0]["ready_pending"], ["API-001"])
             self.assertTrue((report_dir / "executed_tests" / "API-001.md").exists())
             self.assertFalse((report_dir / "executed_tests" / "API-002.md").exists())
+
+    def test_testing_loads_headers_for_attached_live_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement, asset = _create_live_engagement(output_root, "https://app.example.test", _plan())
+            template_path = output_root / engagement.id / "engagement_template.yaml"
+            from mosh.engagement import load_engagement_file
+            template = load_engagement_file(template_path)
+            template["asset_request_headers"] = {asset.id: {"X-Gateway": "fixture-secret"}}
+            write_engagement_template_mapping(template_path.parent, template, preserve_existing=False, reject_candidate_credentials=False)
+
+            class CapturingRunner(FakeSecurityTestingRunner):
+                def run(self, *args, request_headers_by_origin=None, **kwargs):
+                    self.headers = request_headers_by_origin
+                    return super().run(*args, request_headers_by_origin=request_headers_by_origin, **kwargs)
+
+            runner = CapturingRunner()
+            SecurityTestingOrchestrator(AppConfig(), output_root=output_root, crew_runner=runner).run(
+                engagement.id, auto_refresh_feedback=False,
+            )
+
+            self.assertEqual(runner.headers, {("https", "app.example.test", 443): {"X-Gateway": "fixture-secret"}})
 
     def test_testing_skips_matching_accepted_execution_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -627,6 +768,78 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(len(planning_runner.calls), 1)
             testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
             self.assertTrue(any(event["action"] == "planning_refresh_complete" for event in testing_events))
+
+    def test_web_testing_waits_for_feedback_choice_and_replans_without_retesting(self) -> None:
+        from mosh.crews.testing.crew import has_unapplied_testing_feedback
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement, live_asset = _create_live_engagement(output_root, "https://example.test", _plan())
+            discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            planning_runner = _CountingPlanningRunner()
+            testing_runner = _DiscoveryFeedbackSecurityTestingRunner()
+            orchestrator = SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"),
+                output_root=output_root,
+                crew_runner=testing_runner,
+                planning_crew_runner=planning_runner,
+            )
+
+            report_dir = orchestrator.run(engagement.id, auto_refresh_feedback=False)
+
+            self.assertEqual(planning_runner.calls, [])
+            self.assertTrue(has_unapplied_testing_feedback(output_root, engagement.id))
+            self.assertNotIn("Security Testing Feedback", (discovery_dir / "report.md").read_text(encoding="utf-8"))
+            report_path = report_dir / "executed_tests" / "API-001.md"
+            report_path.parent.mkdir(exist_ok=True)
+            report_path.write_text("# Saved test result\n", encoding="utf-8")
+            saved_report = report_path.read_text(encoding="utf-8")
+            testing_events = json.loads((report_dir / "events.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(event["action"] == "planning_refresh_available" for event in testing_events))
+            self.assertTrue(any(event["action"] == "complete" for event in testing_events))
+
+            orchestrator.apply_feedback(engagement.id)
+
+            self.assertEqual(len(planning_runner.calls), 1)
+            self.assertFalse(has_unapplied_testing_feedback(output_root, engagement.id))
+            self.assertIn("Security Testing Feedback", (discovery_dir / "report.md").read_text(encoding="utf-8"))
+            self.assertEqual(report_path.read_text(encoding="utf-8"), saved_report)
+            orchestrator.apply_feedback(engagement.id)
+            self.assertEqual(len(planning_runner.calls), 1)
+            self.assertEqual(report_path.read_text(encoding="utf-8"), saved_report)
+
+    def test_failed_plan_refresh_can_retry_without_duplicate_discovery_feedback(self) -> None:
+        from mosh.crews.testing.crew import has_unapplied_testing_feedback
+
+        class FailingPlanningRunner:
+            def run_engagement(self, *args):
+                raise RuntimeError("Planning model unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement, live_asset = _create_live_engagement(output_root, "https://example.test", _plan())
+            discovery_dir = asset_discovery_dir(output_root, engagement.id, live_asset.id)
+            (discovery_dir / "report.md").write_text("# Discovery\n", encoding="utf-8")
+            orchestrator = SecurityTestingOrchestrator(
+                AppConfig(openrouter_api_key="test-key"), output_root=output_root,
+                crew_runner=_DiscoveryFeedbackSecurityTestingRunner(), planning_crew_runner=FailingPlanningRunner(),
+            )
+            orchestrator.run(engagement.id, auto_refresh_feedback=False)
+            with self.assertRaisesRegex(RuntimeError, "Planning model unavailable"):
+                orchestrator.apply_feedback(engagement.id)
+            self.assertTrue(has_unapplied_testing_feedback(output_root, engagement.id))
+            first_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
+            first_count = sum(item.get("kind") == "testing_discovery_feedback" for item in first_memory)
+            planner = _CountingPlanningRunner()
+            orchestrator.planning_crew_runner = planner
+
+            orchestrator.apply_feedback(engagement.id)
+
+            self.assertEqual(len(planner.calls), 1)
+            self.assertFalse(has_unapplied_testing_feedback(output_root, engagement.id))
+            retry_memory = json.loads((discovery_dir / "memory.json").read_text(encoding="utf-8"))
+            self.assertEqual(sum(item.get("kind") == "testing_discovery_feedback" for item in retry_memory), first_count)
 
     def test_duplicate_discovery_feedback_does_not_refresh_planning_again(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1233,6 +1446,50 @@ class SecurityTestingCrewTests(unittest.TestCase):
             self.assertEqual(result["headers"]["Authorization"], "Bearer [REDACTED]")
             self.assertIn("[REDACTED]", result["stdout"])
 
+    def test_request_target_http_applies_saved_headers_only_to_matching_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory)
+            secret = "gateway-secret-123"
+            state = SecurityTestExecutionState(
+                target_url="https://app.example.test",
+                report_dir=report_dir,
+                workspace_dir=report_dir / "workspace",
+                memory=FileMemory(report_dir),
+                hypothesis={"id": "API-001"},
+                engagement={"asset_request_headers": {"asset_live_1": {"X-Gateway": secret}}},
+                targets={"app": "https://app.example.test"},
+                executed_report_path=report_dir / "API-001.md",
+                request_headers_by_origin={("https", "app.example.test", 443): {"X-Gateway": secret}},
+            )
+
+            class CapturingRunner(_FakeDockerRunner):
+                def run(self, args, **kwargs):
+                    for source, target, *_ in kwargs.get("volumes") or []:
+                        if target == "/run/secrets/mosh-request-headers":
+                            self.header_file_text = Path(source).read_text(encoding="utf-8")
+                    return super().run(args, **kwargs)
+
+            runner = CapturingRunner(DockerToolResult(0, f"HTTP/1.1 200 OK\n\n{secret}", ""))
+            with patch("mosh.crews.testing.source_tools.DockerToolRunner", return_value=runner):
+                tool = _build_request_target_http_tool(_FakeCrewAI, AppConfig(), state)
+                result = json.loads(tool._run("https://app.example.test/api", "check access", headers={"x-gateway": "model-override"}))
+                opt_out = json.loads(tool._run("https://app.example.test/api", "check anonymous access", include_asset_headers=False))
+                other_origin = json.loads(tool._run("http://app.example.test/api", "check HTTP endpoint"))
+                blocked = json.loads(tool._run("https://elsewhere.example.test/api", "out of scope"))
+                file_url = json.loads(tool._run("file:///etc/passwd", "invalid scheme"))
+
+            self.assertEqual(runner.header_file_text, f"X-Gateway: {secret}\n")
+            self.assertIn("-H @/run/secrets/mosh-request-headers", runner.calls[0]["args"][-1])
+            self.assertNotIn(secret, str(runner.calls))
+            self.assertNotIn("model-override", str(runner.calls))
+            self.assertEqual(result["headers"]["X-Gateway"], "[configured]")
+            self.assertEqual(result["stdout"], "HTTP/1.1 200 OK\n\n[REDACTED]")
+            self.assertNotIn("/run/secrets/mosh-request-headers", runner.calls[1]["args"][-1])
+            self.assertNotIn("/run/secrets/mosh-request-headers", runner.calls[2]["args"][-1])
+            self.assertTrue(blocked["blocked"])
+            self.assertTrue(file_url["blocked"])
+            self.assertEqual(len(runner.calls), 3)
+
     def test_stop_source_process_tool_only_stops_known_containers_and_captures_logs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source_root = Path(directory) / "source"
@@ -1477,6 +1734,8 @@ class SecurityTestingCrewTests(unittest.TestCase):
                 self.assertEqual(len(crew.agents), 1)
                 self.assertEqual(len(crew.tasks), 1)
                 self.assertEqual(len(crew.event_listeners), 1)
+                if builder is _build_executor_crew:
+                    self.assertIn("request_target_http", [tool.name for tool in crew.agents[0].tools])
 
             self.assertFalse((report_dir / ".crew_config").exists())
 
@@ -2095,6 +2354,7 @@ class _DiscoveryFeedbackSecurityTestingRunner:
         engagement,
         preflight,
         executable_pending,
+        request_headers_by_origin=None,
     ) -> None:
         test_id = str((executable_pending[0] or {}).get("id") if executable_pending else "API-001")
         if test_id == "SRC-API-001":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import TypeAlias
@@ -46,6 +47,7 @@ class DockerToolRunner:
                 capture_output=True,
                 timeout=timeout,
                 check=False,
+                env=docker_cli_env(),
             )
         except subprocess.TimeoutExpired as exc:
             return DockerToolResult(
@@ -58,6 +60,11 @@ class DockerToolRunner:
             stdout=completed.stdout,
             stderr=completed.stderr,
         )
+
+
+def docker_cli_env() -> dict[str, str]:
+    """Let Docker use each local image's architecture on mixed-platform hosts."""
+    return {key: value for key, value in os.environ.items() if key != "DOCKER_DEFAULT_PLATFORM"}
 
 
 def _decode_timeout_output(output: str | bytes | None) -> str:

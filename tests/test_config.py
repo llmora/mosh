@@ -6,10 +6,40 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from mosh.config import AppConfig
+from mosh.config import AppConfig, write_model_assignments
 
 
 class AppConfigTests(unittest.TestCase):
+    def test_model_assignment_writer_preserves_other_groups_and_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mosh.yaml"
+            path.write_text(
+                "# selected by the user\nmodels:\n  planning:\n"
+                "    planner: deepseek/old # keep this note\n"
+                "  testing:\n    executor: openrouter/example/test\n",
+                encoding="utf-8",
+            )
+            write_model_assignments(path, {
+                "planning": {"planner": "custom/local-planner", "reviewer": "custom/local-planner"},
+                "chat": {"assistant": "deepseek/deepseek-v4-flash"},
+            })
+
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("# selected by the user", content)
+            self.assertIn("planner: custom/local-planner  # keep this note", content)
+            self.assertIn("executor: openrouter/example/test", content)
+            self.assertEqual(AppConfig.from_env(path, Path(directory) / ".env").models.planning.reviewer, "custom/local-planner")
+            self.assertEqual(AppConfig.from_env(path, Path(directory) / ".env").models.chat.assistant, "deepseek/deepseek-v4-flash")
+
+    def test_model_assignment_writer_rejects_invalid_values_without_editing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mosh.yaml"
+            path.write_text("models:\n  planning:\n    planner: deepseek/old\n", encoding="utf-8")
+            original = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Invalid model assignment"):
+                write_model_assignments(path, {"planning": {"planner": "custom/bad # comment"}})
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def _missing_dotenv_path(self) -> Path:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -251,7 +281,9 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.llm_provider_for_model("deepseek/deepseek-v4-flash"), "deepseek")
         self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
         self.assertIsNone(config.llm_base_url_for_model("deepseek/deepseek-v4-flash"))
-        self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
+        self.assertFalse(config.uses_direct_deepseek("openrouter/deepseek/deepseek-v4-flash"))
+        self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
+        self.assertEqual(config.llm_base_url_for_model("openrouter/deepseek/deepseek-v4-flash"), config.openrouter_base_url)
 
     def test_deepseek_models_fall_back_to_openrouter_without_deepseek_key(self) -> None:
         config = AppConfig(openrouter_api_key="openrouter-key")
@@ -274,7 +306,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.llm_model_name("openrouter/openai/gpt-5.2"), "openai/gpt-5.2")
         self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-flash"), "deepseek/deepseek-v4-flash")
 
-    def test_custom_llm_endpoint_routes_models_through_openai_compatible_backend(self) -> None:
+    def test_existing_custom_only_setup_keeps_route_all_behavior(self) -> None:
         config = AppConfig(
             openrouter_api_key="openrouter-key",
             deepseek_api_key="deepseek-key",
@@ -291,7 +323,50 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.llm_base_url_for_model("deepseek/deepseek-v4-flash"), "http://localhost:11434/v1")
         self.assertEqual(config.llm_model_name("custom/llama3.1"), "llama3.1")
 
-    def test_custom_model_prefix_requires_custom_llm_settings(self) -> None:
+    def test_explicit_custom_assignment_routes_each_model_to_its_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "mosh.yaml").write_text(
+                "models:\n"
+                "  planning:\n"
+                "    planner: custom/local-planner\n"
+                "    reviewer: openrouter/deepseek/deepseek-v4-pro\n",
+                encoding="utf-8",
+            )
+            (root / ".env").write_text(
+                "MOSH_LLM_BASE_URL=http://localhost:11434/v1\n"
+                "MOSH_LLM_API_KEY=custom-key\n"
+                "DEEPSEEK_API_KEY=deepseek-key\n"
+                "OPENROUTER_API_KEY=router-key\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(root / "mosh.yaml", root / ".env")
+
+        self.assertTrue(config.has_explicit_custom_models())
+        self.assertEqual(config.llm_model_name("custom/local-planner"), "local-planner")
+        self.assertEqual(config.llm_base_url_for_model("custom/local-planner"), "http://localhost:11434/v1")
+        self.assertEqual(config.llm_api_key_for_model("custom/local-planner"), "custom-key")
+        self.assertEqual(config.llm_model_name("deepseek/deepseek-v4-flash"), "deepseek-v4-flash")
+        self.assertIsNone(config.llm_base_url_for_model("deepseek/deepseek-v4-flash"))
+        self.assertEqual(config.llm_api_key_for_model("deepseek/deepseek-v4-flash"), "deepseek-key")
+        self.assertEqual(config.llm_model_name("openrouter/deepseek/deepseek-v4-pro"), "deepseek/deepseek-v4-pro")
+        self.assertEqual(config.llm_base_url_for_model("openrouter/deepseek/deepseek-v4-pro"), config.openrouter_base_url)
+        self.assertEqual(config.llm_api_key_for_model("openrouter/deepseek/deepseek-v4-pro"), "router-key")
+        self.assertEqual(config.missing_llm_settings_for_models(list(config.model_ids())), [])
+
+    def test_explicit_custom_assignment_does_not_cover_other_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "mosh.yaml").write_text("models:\n  planning:\n    planner: custom/local-planner\n", encoding="utf-8")
+            (root / ".env").write_text("MOSH_LLM_BASE_URL=http://localhost:11434/v1\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True):
+                config = AppConfig.from_env(root / "mosh.yaml", root / ".env")
+
+        self.assertEqual(config.missing_llm_settings_for_models(list(config.model_ids())), ["OPENROUTER_API_KEY"])
+        self.assertFalse(config.uses_custom_llm("deepseek/deepseek-v4-flash"))
+
+    def test_custom_model_prefix_requires_custom_base_url(self) -> None:
         config = AppConfig(openrouter_api_key="openrouter-key")
 
         self.assertTrue(config.uses_custom_llm("custom/llama3.1"))
@@ -299,8 +374,13 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.llm_api_key_for_model("custom/llama3.1"), None)
         self.assertEqual(
             config.missing_llm_settings_for_models(["custom/llama3.1"]),
-            ["MOSH_LLM_API_KEY", "MOSH_LLM_BASE_URL"],
+            ["MOSH_LLM_BASE_URL"],
         )
+
+    def test_custom_endpoint_does_not_require_an_api_key(self) -> None:
+        config = AppConfig(custom_llm_base_url="http://localhost:11434/v1")
+        self.assertEqual(config.missing_llm_settings_for_models(["custom/llama3.1"]), [])
+        self.assertEqual(config.llm_api_key_for_model("custom/llama3.1"), None)
 
     def test_deepseek_api_key_is_loaded_from_env(self) -> None:
         with patch.dict(

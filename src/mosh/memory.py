@@ -14,16 +14,32 @@ from mosh.models import Event, MemoryItem
 EventSink = Callable[[Event], None]
 
 
+class RunStopped(Exception):
+    """The user asked a stage to stop at a safe boundary."""
+
+
+def check_stop(event_sink: EventSink | None) -> None:
+    check = getattr(event_sink, "check_stop", None)
+    if callable(check):
+        check()
+
+
 class FileMemory:
-    def __init__(self, report_dir: Path, event_sink: EventSink | None = None) -> None:
+    def __init__(self, report_dir: Path, event_sink: EventSink | None = None, *, reset: bool = True) -> None:
         self.report_dir = report_dir
         self.event_sink = event_sink
         self.events_path = report_dir / "events.json"
         self.memory_path = report_dir / "memory.json"
         self._lock = threading.RLock()
         self.report_dir.mkdir(parents=True, exist_ok=True)
-        self._write_json(self.events_path, [])
-        self._write_json(self.memory_path, [])
+        if reset:
+            self._write_json(self.events_path, [])
+            self._write_json(self.memory_path, [])
+        elif not self.events_path.is_file() or not self.memory_path.is_file():
+            raise FileNotFoundError(f"Existing stage memory not found: {report_dir}")
+
+    def check_stop(self) -> None:
+        check_stop(self.event_sink)
 
     def record_event(
         self,

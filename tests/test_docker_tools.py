@@ -4,7 +4,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from mosh.docker_tools import DockerToolRunner
+from mosh.docker_tools import DockerToolRunner, docker_cli_env
 
 
 class DockerToolRunnerTests(unittest.TestCase):
@@ -25,6 +25,7 @@ class DockerToolRunnerTests(unittest.TestCase):
             capture_output=True,
             timeout=30,
             check=False,
+            env=docker_cli_env(),
         )
         self.assertEqual(result.stdout, "ok")
 
@@ -45,6 +46,7 @@ class DockerToolRunnerTests(unittest.TestCase):
             capture_output=True,
             timeout=30,
             check=False,
+            env=docker_cli_env(),
         )
         self.assertEqual(result.stdout, "ok")
 
@@ -83,6 +85,7 @@ class DockerToolRunnerTests(unittest.TestCase):
             capture_output=True,
             timeout=30,
             check=False,
+            env=docker_cli_env(),
         )
         self.assertEqual(result.stdout, "ok")
 
@@ -123,6 +126,7 @@ class DockerToolRunnerTests(unittest.TestCase):
             capture_output=True,
             timeout=30,
             check=False,
+            env=docker_cli_env(),
         )
         self.assertEqual(result.stdout, "ok")
 
@@ -160,8 +164,29 @@ class DockerToolRunnerTests(unittest.TestCase):
             capture_output=True,
             timeout=30,
             check=False,
+            env=docker_cli_env(),
         )
         self.assertEqual(result.stdout, "ok")
+
+    def test_tool_run_ignores_global_platform_override(self) -> None:
+        runner = DockerToolRunner("image:test")
+        with patch.dict("os.environ", {"DOCKER_DEFAULT_PLATFORM": "linux/amd64"}), patch("mosh.docker_tools.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "ok"
+            run.return_value.stderr = ""
+            runner.run(["true"])
+        self.assertNotIn("DOCKER_DEFAULT_PLATFORM", run.call_args.kwargs["env"])
+
+    def test_security_source_container_ignores_global_platform_override(self) -> None:
+        from mosh.crews.testing.source_tools import _run_docker_cli
+
+        with patch.dict("os.environ", {"DOCKER_DEFAULT_PLATFORM": "linux/amd64"}), patch("mosh.crews.testing.source_tools.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "ok"
+            run.return_value.stderr = ""
+            result = _run_docker_cli(["docker", "run", "image:test", "true"], timeout=5)
+        self.assertEqual(result.exit_code, 0)
+        self.assertNotIn("DOCKER_DEFAULT_PLATFORM", run.call_args.kwargs["env"])
 
     def test_returns_timeout_result_instead_of_raising(self) -> None:
         runner = DockerToolRunner("image:test")

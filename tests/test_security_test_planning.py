@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import tempfile
 import unittest
 from importlib import resources
@@ -18,7 +19,7 @@ from mosh.engagement import (
     write_engagement_template_mapping,
 )
 from mosh.engagements import attach_asset, asset_discovery_dir, create_engagement
-from mosh.memory import FileMemory
+from mosh.memory import FileMemory, RunStopped
 from mosh.crews.planning.crew import (
     CrewAISecurityTestPlanningCrewRunner,
     SecurityTestPlanningOrchestrator,
@@ -248,6 +249,37 @@ def _write_discovery_source(discovery_dir: Path) -> None:
 
 
 class SecurityTestPlanningTests(unittest.TestCase):
+    def test_stop_after_planner_skips_critic_and_reporter(self) -> None:
+        stop = threading.Event()
+
+        class Sink:
+            def __call__(self, event) -> None:
+                pass
+
+            def check_stop(self) -> None:
+                if stop.is_set():
+                    raise RunStopped("Stopped by you")
+
+        class Planner:
+            def crew(self):
+                return self
+
+            def kickoff(self, inputs):
+                state.current_plan = {}
+                stop.set()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            memory = FileMemory(root / "plan", event_sink=Sink())
+            state = SecurityTestPlanningState("https://app.example.test", root, root / "plan", memory, {})
+            runner = CrewAISecurityTestPlanningCrewRunner(AppConfig(planning_max_revisions=0))
+            with patch("mosh.crews.planning.crew._build_planning_planner_crew", return_value=Planner()), patch(
+                "mosh.crews.planning.crew._build_planning_critic_crew"
+            ) as critic:
+                with self.assertRaises(RunStopped):
+                    runner._run_with_state(object(), state)
+            critic.assert_not_called()
+
     def test_render_security_test_plan_includes_requirements_and_tools(self) -> None:
         review = {"accepted": True, "summary": "Accepted.", "blocking_findings": [], "non_blocking_suggestions": []}
 

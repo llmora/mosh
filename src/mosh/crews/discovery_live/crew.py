@@ -59,6 +59,7 @@ class DiscoveryLiveCrewRunner(Protocol):
         max_pages: int,
         max_depth: int,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ) -> DiscoveryLiveCrewResult:
         pass
 
@@ -79,6 +80,7 @@ class CrewAIDiscoveryLiveCrewRunner:
         max_pages: int,
         max_depth: int,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ) -> DiscoveryLiveCrewResult:
         missing_settings = self.config.missing_llm_settings_for_models(
             [
@@ -109,7 +111,7 @@ class CrewAIDiscoveryLiveCrewRunner:
             },
         )
 
-        discovery_agents = build_discovery_live_agents(self.config)
+        discovery_agents = build_discovery_live_agents(self.config, request_headers=request_headers, access_origin=target_url)
         crawler_agent = discovery_agents.crawler
         reporter_agent = discovery_agents.reporter
 
@@ -168,6 +170,7 @@ class DiscoveryLiveOrchestrator:
         *,
         report_dir: Path,
         engagement_steer: str = "",
+        request_headers: dict[str, str] | None = None,
     ) -> Path:
         max_depth = max_depth if max_depth is not None else self.config.max_depth
         agent_definitions = discovery_live_agent_definitions(self.config)
@@ -188,6 +191,7 @@ class DiscoveryLiveOrchestrator:
             max_pages=max_pages,
             max_depth=max_depth,
             engagement_steer=engagement_steer,
+            request_headers=request_headers,
         )
         memory.record_event(
             "orchestrator",
@@ -229,12 +233,14 @@ def _load_crewai():
 
 
 def _llm(crewai: Any, config: AppConfig, model: str, *, max_tokens: int | None = None):
-    api_key = config.llm_api_key_for_model(model)
-    if not api_key:
-        raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
     base_url = config.llm_base_url_for_model(model)
     if config.uses_custom_llm(model) and not base_url:
         raise CrewAIUnavailable("MOSH_LLM_BASE_URL is not set.")
+    api_key = config.llm_api_key_for_model(model)
+    if config.uses_custom_llm(model) and not api_key:
+        api_key = "not-required"
+    if not api_key:
+        raise CrewAIUnavailable(f"{config.llm_api_key_name_for_model(model)} is not set.")
     kwargs = {
         "model": config.llm_model_name(model),
         "provider": config.llm_provider_for_model(model),

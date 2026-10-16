@@ -98,6 +98,7 @@ class FinalReportingOrchestrator:
             bundle,
             engagement_steer=steer,
         )
+        memory.check_stop()
         memory.record_event(
             "orchestrator",
             "complete",
@@ -131,6 +132,7 @@ class CrewAIFinalReportingCrewRunner:
         crewai = _load_crewai()
         state = FinalReportState(target_url=target_url, report_dir=report_dir, memory=memory, bundle=bundle)
         steer = engagement_steer_prompt_value(engagement_steer)
+        memory.check_stop()
         writer_crew = _build_writer_crew(crewai, self.config, state)
         writer_crew.crew().kickoff(
             inputs={
@@ -142,6 +144,7 @@ class CrewAIFinalReportingCrewRunner:
         if not state.report_path or not state.report_path.exists():
             raise RuntimeError("Final report writer did not write report.md.")
 
+        memory.check_stop()
         reviewer_crew = _build_reviewer_crew(crewai, self.config, state)
         reviewer_crew.crew().kickoff(
             inputs={
@@ -158,6 +161,7 @@ class CrewAIFinalReportingCrewRunner:
                 ),
             }
         )
+        memory.check_stop()
         if not state.review:
             raise RuntimeError("Final report reviewer did not submit a review.")
         if not bool(state.review.get("accepted")):

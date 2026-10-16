@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from mosh.config import AppConfig
+from mosh.crews.discovery_live.crawler import Crawler
 from mosh.crews.definitions import AgentDefinition
 from mosh.memory import FileMemory
 from mosh.models import CrawledPage, CrawlResult, DiscoveryCandidate
@@ -643,21 +644,29 @@ class DiscoveryLiveReporterAgent:
         return summary
 
 
-def build_discovery_live_agents(config: AppConfig | None = None) -> DiscoveryLiveAgents:
+def build_discovery_live_agents(
+    config: AppConfig | None = None,
+    *,
+    request_headers: dict[str, str] | None = None,
+    access_origin: str | None = None,
+) -> DiscoveryLiveAgents:
     config = config or AppConfig()
     return DiscoveryLiveAgents(
         crawler=CrawlerAgent(
+            crawl_tool=CrawlApplicationTool(Crawler(request_headers=request_headers, access_origin=access_origin)),
             additional_tools=[
                 KatanaDockerCrawlerTool(
                     config.tool_image,
                     crawl_duration=config.katana_crawl_duration,
                     docker_timeout=config.katana_docker_timeout,
+                    request_headers=request_headers,
+                    access_origin=access_origin,
                 ),
-                DirbDockerDiscoveryTool(
+                *([] if request_headers else [DirbDockerDiscoveryTool(
                     config.tool_image,
                     wordlist=config.dirb_wordlist,
                     docker_timeout=config.dirb_docker_timeout,
-                ),
+                )]),
                 ExternalOsintDiscoveryTool(
                     build_default_osint_providers(
                         shodan_api_key=config.shodan_api_key,

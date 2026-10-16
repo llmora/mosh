@@ -17,8 +17,10 @@ class FakeDockerRunner:
         input_text: str | None = None,
         timeout: int = 60,
         tty: bool = False,
+        volumes=None,
     ) -> DockerToolResult:
-        self.calls.append({"args": args, "input_text": input_text, "timeout": timeout, "tty": tty})
+        self.calls.append({"args": args, "input_text": input_text, "timeout": timeout, "tty": tty,
+                           "volumes": volumes})
         return self.result
 
 
@@ -71,6 +73,31 @@ class KatanaDockerCrawlerToolTests(unittest.TestCase):
 
         args = runner.calls[0]["args"]
         self.assertEqual(args[args.index("-d") + 1], "3")
+
+    def test_configured_headers_are_scoped_and_redacted_from_results(self) -> None:
+        secret = "fixture-client-secret"
+        runner = FakeDockerRunner(DockerToolResult(exit_code=1, stdout="", stderr=f"error: {secret}"))
+        tool = KatanaDockerCrawlerTool(
+            "discovery-tools:test", runner=runner,
+            request_headers={"X-Gateway-Id": "fixture-client-id", "X-Gateway-Secret": secret},
+            access_origin="https://app.example.test/",
+        )
+
+        result = tool.run("https://app.example.test/private", max_pages=5, max_depth=2)
+
+        args = runner.calls[0]["args"]
+        self.assertEqual(args[args.index("-cs") + 1], r"^https://app\.example\.test(?:/|$)")
+        self.assertIn("-dr", args)
+        self.assertEqual(args[args.index("-H") + 1], "/dev/stdin")
+        self.assertNotIn(secret, str(args))
+        self.assertIn("X-Gateway-Id: fixture-client-id", runner.calls[0]["input_text"])
+        self.assertIn(f"X-Gateway-Secret: {secret}", runner.calls[0]["input_text"])
+        self.assertIsNone(runner.calls[0]["volumes"])
+        self.assertFalse(runner.calls[0]["tty"])
+        self.assertNotIn("-headless", args)
+        self.assertNotIn(secret, str(result))
+        tool.run("https://elsewhere.example.test/", max_pages=5, max_depth=2)
+        self.assertNotIn(secret, str(runner.calls[1]["args"]))
 
     def test_allows_custom_duration_and_docker_timeout(self) -> None:
         runner = FakeDockerRunner(DockerToolResult(exit_code=0, stdout="", stderr=""))

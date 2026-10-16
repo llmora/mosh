@@ -10,6 +10,7 @@ from mosh.engagements import (
     attach_asset,
     asset_dir,
     create_engagement,
+    detach_asset,
     infer_asset_type,
     load_asset,
     load_engagement,
@@ -95,6 +96,26 @@ class EngagementTests(unittest.TestCase):
             self.assertFalse(second.created)
             self.assertEqual(first.asset.id, second.asset.id)
             self.assertEqual(len(load_engagement(output_root, engagement.id).assets), 1)
+
+    def test_detach_asset_keeps_old_artifacts_and_does_not_reuse_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory) / "report"
+            engagement = create_engagement(output_root)
+            first = attach_asset(output_root, engagement.id, "https://first.example.test").asset
+            old_dir = asset_dir(output_root, engagement.id, first.id)
+            (old_dir / "discovery").mkdir()
+            (old_dir / "discovery" / "report.md").write_text("Old result", encoding="utf-8")
+
+            detached = detach_asset(output_root, engagement.id, first.id)
+
+            self.assertEqual(detached.assets, [])
+            self.assertEqual(load_engagement(output_root, engagement.id).assets, [])
+            self.assertEqual((old_dir / "discovery" / "report.md").read_text(encoding="utf-8"), "Old result")
+            with self.assertRaisesRegex(ValueError, "Unknown asset id"):
+                detach_asset(output_root, engagement.id, first.id)
+            second = attach_asset(output_root, engagement.id, "https://second.example.test").asset
+            self.assertEqual(second.id, "asset_live_2")
+            self.assertEqual(load_asset(output_root, engagement.id, first.id).locator, first.locator)
 
     def test_embedded_asset_manifest_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

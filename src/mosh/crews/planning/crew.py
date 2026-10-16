@@ -24,6 +24,7 @@ from mosh.engagement import (
     engagement_steer_prompt_value,
     load_engagement_file,
     load_engagement_steer,
+    without_asset_request_headers,
     write_engagement_template_mapping,
 )
 from mosh.engagements import (
@@ -224,6 +225,7 @@ class CrewAISecurityTestPlanningCrewRunner:
         previous_plan: dict[str, Any] | None = None
         previous_review: dict[str, Any] | None = None
         for iteration in range(1, max_attempts + 1):
+            memory.check_stop()
             state.current_plan = None
             state.current_review = None
             state.iterations = iteration
@@ -242,6 +244,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             if state.current_plan is None:
                 raise RuntimeError("Security test planner did not submit a plan.")
 
+            memory.check_stop()
             critic_crew = _build_planning_critic_crew(crewai, self.config, state)
             critic_crew.crew().kickoff(
                 inputs={
@@ -261,6 +264,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             if state.accepted:
                 break
 
+        memory.check_stop()
         if state.current_plan is None:
             raise RuntimeError("Security test planner did not produce a plan.")
 
@@ -287,6 +291,7 @@ class CrewAISecurityTestPlanningCrewRunner:
             }
         )
 
+        memory.check_stop()
         if self.config.refine_engagement_template_with_llm:
             try:
                 refinement_crew = _build_engagement_template_refinement_crew(
@@ -299,7 +304,7 @@ class CrewAISecurityTestPlanningCrewRunner:
                     inputs={
                         "target_url": target_url,
                         "security_test_plan": json.dumps(state.current_plan, sort_keys=True),
-                        "engagement_template": json.dumps(current_engagement_template, sort_keys=True),
+                        "engagement_template": json.dumps(without_asset_request_headers(current_engagement_template), sort_keys=True),
                         "engagement_steer": steer,
                     }
                 )
@@ -396,6 +401,7 @@ class SecurityTestPlanningOrchestrator:
             },
         )
         result = self.crew_runner.run_engagement(self.output_root, engagement.id, report_dir, memory)
+        memory.check_stop()
         engagement_path = engagement_root / "engagement_template.yaml"
         if not engagement_path.exists():
             target_url, source = _engagement_primary_targets(self.output_root, engagement)
@@ -417,6 +423,7 @@ class SecurityTestPlanningOrchestrator:
             },
             "orchestrator",
         )
+        memory.check_stop()
         memory.add_item(
             "plan_run",
             {

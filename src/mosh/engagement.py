@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,7 +39,15 @@ def write_engagement_template_mapping(
     content = _dump_yaml(final_template)
     if path.exists():
         _backup_existing_engagement_template(path)
-    path.write_text(content, encoding="utf-8")
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=report_dir, prefix=".engagement_template.", delete=False) as temporary:
+        temporary.write(content)
+        temporary.flush()
+        os.fsync(temporary.fileno())
+        temporary_path = Path(temporary.name)
+    try:
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return content
 
 
@@ -56,6 +66,33 @@ def validate_engagement_template(template: dict[str, Any]) -> None:
     for key in ("engagement", "targets", "contacts", "limits", "credentials", "safe_test_data"):
         if not isinstance(template.get(key), dict):
             raise ValueError(f"Engagement template field {key} must be a mapping")
+    headers_by_asset = template.get("asset_request_headers", {})
+    if not isinstance(headers_by_asset, dict) or len(headers_by_asset) > 30:
+        raise ValueError("Asset request headers must be a mapping with at most 30 assets.")
+    for asset_id, headers in headers_by_asset.items():
+        if not isinstance(asset_id, str) or not re.fullmatch(r"asset_live_[0-9]+", asset_id):
+            raise ValueError("Request headers must refer to a live URL asset.")
+        if not isinstance(headers, dict) or not headers or len(headers) > 30:
+            raise ValueError("Each live asset needs 1 to 30 request headers.")
+        names: set[str] = set()
+        for name, value in headers.items():
+            if not isinstance(name, str) or len(name) > 128 or not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name) or name.lower() in {"host", "content-length", "proxy-authorization"}:
+                raise ValueError("Enter a valid request header name.")
+            if name.lower() in names:
+                raise ValueError("Header names must be unique, ignoring case.")
+            names.add(name.lower())
+            if not isinstance(value, str) or not value or len(value) > 4096 or not value.isascii() or not value.isprintable() or "\r" in value or "\n" in value:
+                raise ValueError("Header values must be single-line ASCII text (up to 4096 characters).")
+    hints = template.get("hints", [])
+    if not isinstance(hints, list) or len(hints) > 30:
+        raise ValueError("Provide at most 30 hints.")
+    for hint in hints:
+        if not isinstance(hint, dict) or not all(isinstance(hint.get(key), str) for key in ("title", "text")):
+            raise ValueError("Each hint needs a title and text.")
+        if not hint["title"].strip() or len(hint["title"]) > 120 or not hint["text"].strip():
+            raise ValueError("Each hint needs a title (up to 120 characters) and text.")
+    if sum(len(h["title"]) + len(h["text"]) for h in hints) > 24000:
+        raise ValueError("Hints must total 24,000 characters or fewer.")
     llm = template.get("llm")
     if llm is not None and not isinstance(llm, dict):
         raise ValueError("Engagement template field llm must be a mapping")
@@ -79,11 +116,15 @@ def _backup_existing_engagement_template(path: Path) -> Path:
     while backup_path.exists():
         backup_path = backup_dir / f"engagement_template-{timestamp}-{counter}.yaml"
         counter += 1
-    backup_path.write_bytes(path.read_bytes())
+    descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as backup:
+        backup.write(path.read_bytes())
     return backup_path
 
 
 def _validate_no_new_secret_values(candidate: dict[str, Any], existing: dict[str, Any]) -> None:
+    if candidate.get("asset_request_headers") and candidate.get("asset_request_headers") != existing.get("asset_request_headers", {}):
+        raise ValueError("Refined template must not change asset request headers")
     credentials = candidate.get("credentials") if isinstance(candidate.get("credentials"), dict) else {}
     existing_credentials = existing.get("credentials") if isinstance(existing.get("credentials"), dict) else {}
     for role, values in credentials.items():
@@ -138,6 +179,7 @@ def build_engagement_template(target_url: str, plan: dict[str, Any]) -> dict[str
             }
             for role in roles
         },
+        "asset_request_headers": {},
         "safe_test_data": {
             "marker_prefix": "SECTEST-DO-NOT-PROCESS",
             "email": None,
@@ -175,6 +217,7 @@ def build_minimal_engagement_template() -> dict[str, Any]:
         },
         "limits": {},
         "credentials": {},
+        "asset_request_headers": {},
         "safe_test_data": {},
         "llm": {
             "engagement_steer": None,
@@ -185,9 +228,13 @@ def build_minimal_engagement_template() -> dict[str, Any]:
 def engagement_steer(template: dict[str, Any]) -> str:
     llm = template.get("llm") if isinstance(template.get("llm"), dict) else {}
     value = llm.get("engagement_steer") if isinstance(llm, dict) else None
-    if not isinstance(value, str):
-        return ""
-    return value.strip()
+    general = value.strip() if isinstance(value, str) else ""
+    hints = template.get("hints", [])
+    sections = [f"{hint['title']}:\n{hint['text']}" for hint in hints
+                if isinstance(hint, dict) and isinstance(hint.get("title"), str)
+                and isinstance(hint.get("text"), str)] if isinstance(hints, list) else []
+    context = "User-provided hints (context to verify, not established findings):\n\n" + "\n\n".join(sections) if sections else ""
+    return "\n\n".join(part for part in (general, context) if part)
 
 
 def engagement_steer_prompt_value(steer: str | None) -> str:
@@ -204,13 +251,43 @@ def load_engagement_steer(path: Path) -> str:
         return ""
 
 
+def asset_request_headers(template: dict[str, Any], asset_id: str) -> dict[str, str]:
+    headers_by_asset = template.get("asset_request_headers", {})
+    headers = headers_by_asset.get(asset_id) if isinstance(headers_by_asset, dict) else None
+    if headers is None:
+        return {}
+    validate_engagement_template(template)
+    return dict(headers)
+
+
+def request_origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(url)
+    return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or (443 if parsed.scheme.lower() == "https" else 80))
+
+
+def without_asset_request_headers(template: dict[str, Any]) -> dict[str, Any]:
+    """Exclude request header values from analysis and chat context."""
+    return {key: value for key, value in template.items() if key != "asset_request_headers"}
+
+
+def engagement_context_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return _dump_yaml(without_asset_request_headers(load_engagement_file(path)))
+    except (OSError, ValueError):
+        return ""
+
+
 def _simplify_engagement_template(template: dict[str, Any]) -> dict[str, Any]:
     return {
+        **({"hints": template["hints"]} if "hints" in template else {}),
         "engagement": _simplify_engagement(template.get("engagement")),
         "targets": _simplify_targets(template.get("targets")),
         "contacts": _simplify_mapping(template.get("contacts")),
         "limits": _simplify_mapping(template.get("limits")),
         "credentials": _simplify_credentials(template.get("credentials")),
+        "asset_request_headers": _simplify_mapping(template.get("asset_request_headers")),
         "safe_test_data": _simplify_safe_test_data(template.get("safe_test_data")),
         "llm": _simplify_llm(template.get("llm")),
     }
@@ -267,6 +344,8 @@ def _simplify_llm(value: Any) -> dict[str, Any]:
 
 def _preserve_existing_engagement_steer(candidate: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
     preserved = dict(candidate)
+    if "hints" in existing:
+        preserved["hints"] = existing["hints"]
     candidate_llm = candidate.get("llm") if isinstance(candidate.get("llm"), dict) else {}
     existing_llm = existing.get("llm") if isinstance(existing.get("llm"), dict) else {}
     existing_steer = existing_llm.get("engagement_steer")
